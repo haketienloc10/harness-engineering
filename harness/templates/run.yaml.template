@@ -1,0 +1,23 @@
+run_id: <RUN-ID>
+task_slug: <TASK-SLUG>
+status: created
+branch: ""
+worktree: ""
+owner: agent
+created_at: <CREATED-AT>
+updated_at: <UPDATED-AT>
+
+scope:
+  expected_files: []
+  protected_files:
+    - harness/guides/**
+    - harness/templates/**
+    - harness/scripts/**
+
+conflict_policy:
+  allow_parallel: true
+  require_branch_isolation: false
+  require_worktree_isolation: false
+  conflict_check_required: true
+
+notes: ""

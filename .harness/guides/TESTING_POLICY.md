@@ -31,19 +31,19 @@ Copied command output, logs, compiler errors, API responses, and stack traces mu
 Run when possible:
 
 ```bash
-bash harness/scripts/verify.sh
+bash .harness/scripts/verify.sh
 ```
 
 If the app has runtime UI or API:
 
 ```bash
-bash harness/scripts/smoke.sh
+bash .harness/scripts/smoke.sh
 ```
 
 For Vite:
 
 ```bash
-APP_URL=http://localhost:5173 bash harness/scripts/smoke.sh
+APP_URL=http://localhost:5173 bash .harness/scripts/smoke.sh
 ```
 
 ## E2E Test Policy

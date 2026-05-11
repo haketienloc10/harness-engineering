@@ -11,7 +11,7 @@ FORCE=0
 usage() {
   cat <<'EOF'
 Usage:
-  bash harness/scripts/install.sh [options]
+  bash .harness/scripts/install.sh [options]
 
 Install this Harness template into another repository.
 
@@ -24,13 +24,13 @@ Options:
                                replace   Backup existing file, then replace it with Harness AGENTS.md.
                                backup    Same install result as replace, with explicit backup.
   --yes, -y                  Do not prompt. If AGENTS.md exists and mode is ask, uses preserve.
-  --force                    Allow updating an existing harness/ directory without prompting.
+  --force                    Allow updating an existing .harness/ directory without prompting.
   --help, -h                 Show this help.
 
 Examples:
-  bash harness/scripts/install.sh --target /path/to/repo
-  bash harness/scripts/install.sh --target /path/to/repo --agents-mode merge
-  bash harness/scripts/install.sh --target /path/to/repo --agents-mode preserve --yes
+  bash .harness/scripts/install.sh --target /path/to/repo
+  bash .harness/scripts/install.sh --target /path/to/repo --agents-mode merge
+  bash .harness/scripts/install.sh --target /path/to/repo --agents-mode preserve --yes
 EOF
 }
 
@@ -192,31 +192,31 @@ install_agents() {
 }
 
 install_harness_tree() {
-  local target_harness="$TARGET_DIR/harness"
+  local target_harness="$TARGET_DIR/.harness"
 
   if [ -d "$target_harness" ] && [ "$FORCE" -ne 1 ] && [ "$YES" -ne 1 ]; then
-    printf "harness/ already exists in target. Update it? [y/N]: "
+    printf ".harness/ already exists in target. Update it? [y/N]: "
     local answer
     read -r answer
     case "$answer" in
       y|Y|yes|YES) ;;
-      *) die "Cancelled because harness/ already exists. Re-run with --force to update." ;;
+      *) die "Cancelled because .harness/ already exists. Re-run with --force to update." ;;
     esac
   fi
 
   mkdir -p "$target_harness"
-  copy_dir_replace "$SOURCE_ROOT/harness/guides" "$target_harness/guides"
-  copy_dir_replace "$SOURCE_ROOT/harness/templates" "$target_harness/templates"
-  copy_dir_replace "$SOURCE_ROOT/harness/scripts" "$target_harness/scripts"
+  copy_dir_replace "$SOURCE_ROOT/.harness/guides" "$target_harness/guides"
+  copy_dir_replace "$SOURCE_ROOT/.harness/templates" "$target_harness/templates"
+  copy_dir_replace "$SOURCE_ROOT/.harness/scripts" "$target_harness/scripts"
 
   mkdir -p "$target_harness/backlog"
-  if [ -f "$SOURCE_ROOT/harness/backlog/HARNESS_BACKLOG.md" ] && [ ! -f "$target_harness/backlog/HARNESS_BACKLOG.md" ]; then
-    copy_file "$SOURCE_ROOT/harness/backlog/HARNESS_BACKLOG.md" "$target_harness/backlog/HARNESS_BACKLOG.md"
+  if [ -f "$SOURCE_ROOT/.harness/backlog/HARNESS_BACKLOG.md" ] && [ ! -f "$target_harness/backlog/HARNESS_BACKLOG.md" ]; then
+    copy_file "$SOURCE_ROOT/.harness/backlog/HARNESS_BACKLOG.md" "$target_harness/backlog/HARNESS_BACKLOG.md"
   fi
 
   mkdir -p "$target_harness/runs"
   write_clean_run_index "$target_harness/runs/RUN_INDEX.md"
-  info "Installed harness/ workflow files"
+  info "Installed .harness/ workflow files"
 }
 
 parse_args() {
@@ -284,7 +284,7 @@ Harness installed.
 
 Next steps:
   cd "$TARGET_DIR"
-  bash harness/scripts/verify.sh
+  bash .harness/scripts/verify.sh
 
 If AGENTS.md was preserved, review AGENTS.harness.md and merge the parts you want into AGENTS.md.
 EOF

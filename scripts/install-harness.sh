@@ -13,7 +13,7 @@ Usage:
     | bash -s -- [installer options]
 
 This bootstrap script downloads the Harness template tarball, then forwards all
-arguments to harness/scripts/install.sh.
+arguments to .harness/scripts/install.sh.
 
 Common installer options:
   --target PATH
@@ -74,8 +74,8 @@ main() {
   info "Extracting Harness template"
   tar -xzf "$archive" -C "$BOOTSTRAP_TMPDIR"
 
-  installer="$(find "$BOOTSTRAP_TMPDIR" -path "*/harness/scripts/install.sh" -type f | head -n 1 || true)"
-  [ -n "$installer" ] || die "Could not find harness/scripts/install.sh in downloaded archive"
+  installer="$(find "$BOOTSTRAP_TMPDIR" -path "*/.harness/scripts/install.sh" -type f | head -n 1 || true)"
+  [ -n "$installer" ] || die "Could not find .harness/scripts/install.sh in downloaded archive"
 
   info "Running Harness installer"
   bash "$installer" "$@"

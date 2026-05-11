@@ -10,9 +10,9 @@ updated_at: <UPDATED-AT>
 scope:
   expected_files: []
   protected_files:
-    - harness/guides/**
-    - harness/templates/**
-    - harness/scripts/**
+    - .harness/guides/**
+    - .harness/templates/**
+    - .harness/scripts/**
 
 conflict_policy:
   allow_parallel: true

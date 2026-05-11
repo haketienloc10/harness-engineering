@@ -21,19 +21,19 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 Sau khi cài, chạy:
 
 ```bash
-bash harness/scripts/verify.sh
+bash .harness/scripts/verify.sh
 ```
 
 ## Cài từ checkout
 
 ```bash
-bash harness/scripts/install.sh --target /path/to/your-repo --agents-mode merge
+bash .harness/scripts/install.sh --target /path/to/your-repo --agents-mode merge
 ```
 
 Không hỏi lại:
 
 ```bash
-bash harness/scripts/install.sh --target /path/to/your-repo --agents-mode preserve --yes
+bash .harness/scripts/install.sh --target /path/to/your-repo --agents-mode preserve --yes
 ```
 
 ## Mode cho AGENTS.md
@@ -50,10 +50,10 @@ Nếu dùng `--yes` mà không truyền `--agents-mode`, khi target đã có `AG
 ## Nội dung được cài
 
 - `AGENTS.md` hoặc `AGENTS.harness.md`, tùy mode.
-- `harness/guides/`
-- `harness/templates/`
-- `harness/scripts/`
-- `harness/backlog/HARNESS_BACKLOG.md` nếu target chưa có file này.
-- `harness/runs/RUN_INDEX.md` sạch cho repo đích.
+- `.harness/guides/`
+- `.harness/templates/`
+- `.harness/scripts/`
+- `.harness/backlog/HARNESS_BACKLOG.md` nếu target chưa có file này.
+- `.harness/runs/RUN_INDEX.md` sạch cho repo đích.
 
-Installer không copy các run lịch sử dạng `harness/runs/RUN-*` từ template repo sang repo đích.
+Installer không copy các run lịch sử dạng `.harness/runs/RUN-*` từ template repo sang repo đích.

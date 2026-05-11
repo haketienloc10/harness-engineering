@@ -13,7 +13,7 @@ For every non-trivial implementation task, run the full Harness lifecycle unless
 Create a new run folder:
 
 ```txt
-harness/runs/RUN-YYYYMMDD-NNN-task-slug/
+.harness/runs/RUN-YYYYMMDD-NNN-task-slug/
 ```
 
 Use the next available `NNN` for the date.
@@ -21,10 +21,10 @@ Use the next available `NNN` for the date.
 Copy relevant templates from:
 
 ```txt
-harness/templates/
+.harness/templates/
 ```
 
-Create/update `run.yaml` and `harness/runs/RUN_INDEX.md`.
+Create/update `run.yaml` and `.harness/runs/RUN_INDEX.md`.
 
 ## Required Artifacts
 

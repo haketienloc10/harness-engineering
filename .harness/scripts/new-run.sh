@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-HARNESS_DIR="$ROOT_DIR/harness"
+HARNESS_DIR="$ROOT_DIR/.harness"
 RUNS_DIR="$HARNESS_DIR/runs"
 TEMPLATES_DIR="$HARNESS_DIR/templates"
 RUN_INDEX="$RUNS_DIR/RUN_INDEX.md"
@@ -68,5 +68,5 @@ fi
 
 printf "| %s | %s | created |  |  | agent | %s | %s |\n" "$RUN_ID" "$slug" "$NOW" "$NOW" >> "$RUN_INDEX"
 
-echo "Created harness run:"
+echo "Created Harness run:"
 echo "$RUN_DIR"

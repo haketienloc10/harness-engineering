@@ -1,0 +1,8 @@
+id: RUN-20260511-001-migrate-harness-dotdir
+task: "Migration workflow directory sang .harness/"
+status: completed
+branch: main
+worktree: null
+owner: haketienloc10
+started_at: "2026-05-11"
+last_updated: "2026-05-11"

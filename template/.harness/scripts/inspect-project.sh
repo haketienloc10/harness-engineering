@@ -62,7 +62,6 @@ update_generated_section() {
   local tmp
 
   mkdir -p "$(dirname "$file")"
-  tmp="$(mktemp)"
 
   if [ ! -f "$file" ]; then
     {
@@ -80,6 +79,7 @@ update_generated_section() {
   fi
 
   if grep -Fq "$START_MARKER" "$file" && grep -Fq "$END_MARKER" "$file"; then
+    tmp="$(mktemp)"
     awk -v start="$START_MARKER" -v end="$END_MARKER" -v generated="$generated" '
       $0 == start {
         print
@@ -96,6 +96,7 @@ update_generated_section() {
     ' "$file" > "$tmp"
     mv "$tmp" "$file"
   else
+    tmp="$(mktemp)"
     {
       cat "$file"
       printf "\n## Generated Discovery\n\n"

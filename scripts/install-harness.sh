@@ -12,12 +12,13 @@ Usage:
   curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/scripts/install-harness.sh?$(date +%s)" \
     | bash -s -- [installer options]
 
-This bootstrap script downloads the Harness template tarball, then forwards all
-arguments to .harness/scripts/install.sh.
+This bootstrap script downloads the Harness seed repository tarball, then forwards
+all arguments to template/.harness/scripts/install.sh.
 
 Common installer options:
   --target PATH
   --agents-mode ask|merge|preserve|replace|backup
+  --dry-run
   --yes
   --force
 
@@ -68,14 +69,14 @@ main() {
   }
   trap cleanup EXIT INT TERM
 
-  info "Downloading Harness from $url"
+  info "Downloading Harness seed from $url"
   curl -fsSL "$url" -o "$archive"
 
-  info "Extracting Harness template"
+  info "Extracting Harness seed"
   tar -xzf "$archive" -C "$BOOTSTRAP_TMPDIR"
 
-  installer="$(find "$BOOTSTRAP_TMPDIR" -path "*/.harness/scripts/install.sh" -type f | head -n 1 || true)"
-  [ -n "$installer" ] || die "Could not find .harness/scripts/install.sh in downloaded archive"
+  installer="$(find "$BOOTSTRAP_TMPDIR" -path "*/template/.harness/scripts/install.sh" -type f | head -n 1 || true)"
+  [ -n "$installer" ] || die "Could not find template/.harness/scripts/install.sh in downloaded archive"
 
   info "Running Harness installer"
   bash "$installer" "$@"

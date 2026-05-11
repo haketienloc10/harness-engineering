@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/.harness"
 RUNS_DIR="$HARNESS_DIR/runs"
+GITIGNORE="$ROOT_DIR/.gitignore"
 TEMPLATES_DIR="$HARNESS_DIR/templates"
 RUN_INDEX="$RUNS_DIR/RUN_INDEX.md"
 
@@ -21,6 +22,13 @@ TODAY="$(date +%Y%m%d)"
 NOW="$(date -Iseconds)"
 
 mkdir -p "$RUNS_DIR"
+touch "$GITIGNORE"
+if ! grep -Fxq ".harness/runs/" "$GITIGNORE"; then
+  if [ -s "$GITIGNORE" ] && [ "$(tail -c 1 "$GITIGNORE")" != "" ]; then
+    printf "\n" >> "$GITIGNORE"
+  fi
+  printf ".harness/runs/\n" >> "$GITIGNORE"
+fi
 
 N=1
 while true; do

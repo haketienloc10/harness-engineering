@@ -10,21 +10,19 @@ For every non-trivial implementation task, run the full Harness lifecycle unless
 
 ## Run Creation
 
-Create a new run folder:
+When creating a Harness run, agents MUST use the provided script instead of creating `.harness/runs/` folders manually:
+
+```bash
+.harness/scripts/new-run.sh "task slug"
+```
+
+The script creates the next run folder using this format:
 
 ```txt
 .harness/runs/RUN-YYYYMMDD-NNN-task-slug/
 ```
 
-Use the next available `NNN` for the date.
-
-Copy relevant templates from:
-
-```txt
-.harness/templates/
-```
-
-Create/update `run.yaml` and `.harness/runs/RUN_INDEX.md`.
+The script also copies relevant templates from `.harness/templates/`, creates/updates `run.yaml`, updates `.harness/runs/RUN_INDEX.md`, and ensures `.harness/runs/` is ignored by git.
 
 ## Required Artifacts
 

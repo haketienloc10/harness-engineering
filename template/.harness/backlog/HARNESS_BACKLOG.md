@@ -2,6 +2,8 @@
 
 Harness Backlog là nơi ghi các đề xuất cải tiến harness sau khi quan sát agent làm việc.
 
+File này thuộc target repository sau khi install. Target repository có quyền chỉnh sửa file này. Installer không overwrite `.harness/backlog/HARNESS_BACKLOG.md` nếu file đã tồn tại.
+
 Một proposal tốt phải dẫn tới ít nhất một trong hai loại thay đổi:
 
 1. Guide mới hoặc guide được sửa.

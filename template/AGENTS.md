@@ -1,26 +1,26 @@
 # AGENTS.md
 
-## Purpose
+## Mục đích
 
-This repository uses **Harness** to make AI-assisted development auditable, repeatable, and verifiable.
+Repository này đã cài **Harness** để làm việc với AI theo cách có kế hoạch, có contract, có log, và có bằng chứng kiểm chứng.
 
-This root file is a bootstrap instruction for the target repository. Keep it small. Detailed workflow procedures live in `.harness/guides/*` and should be loaded only when relevant.
+File này là bootstrap instruction của target repository. Giữ file này ngắn; quy trình chi tiết nằm trong `.harness/guides/*` và chỉ đọc khi liên quan đến task hiện tại.
 
-The user should be able to give a normal development request. The agent must orchestrate Planner, Generator, and Evaluator internally.
-
----
-
-## Repository Boundary
-
-The `.harness/` tree contains workflow guides, templates, scripts, run records, project adapter files, and backlog items for AI-assisted development.
-
-It is not the application source tree. Agents must treat `.harness/` as workflow infrastructure and inspect the host project separately for application code, tests, runtime behaviour, and architecture.
+Người dùng vẫn có thể đưa một yêu cầu phát triển bình thường. Agent phải tự điều phối các vai trò Planner, Generator, và Evaluator thông qua artifact trong `.harness/runs/*`.
 
 ---
 
-## Project Adapter
+## Ranh giới repository
 
-Before planning a non-trivial implementation task, inspect these files when present:
+`.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, và backlog cho AI-assisted development.
+
+`.harness/` không phải application source tree. Khi làm task, agent phải inspect source code, tests, runtime behaviour, và architecture thực tế của target repository bên ngoài `.harness/`.
+
+---
+
+## Project adapter
+
+Trước khi lập kế hoạch cho task implementation không tầm thường, đọc các file này nếu có:
 
 ```txt
 .harness/project/PROJECT_MAP.md
@@ -31,40 +31,40 @@ Before planning a non-trivial implementation task, inspect these files when pres
 .harness/project/LOCAL_DECISIONS.md
 ```
 
-If these files are missing or stale, run:
+Nếu các file này thiếu hoặc có vẻ cũ, chạy:
 
 ```bash
 bash .harness/scripts/inspect-project.sh
 ```
 
-Treat discovery output as observed evidence until the engineer or a successful run confirms it.
+Discovery output chỉ là observed facts, không phải absolute truth. Ưu tiên manual notes và quyết định local của target repository khi có xung đột.
 
 ---
 
-## Priority Order
+## Priority order
 
-When instructions conflict, follow this order:
+Khi instruction xung đột, theo thứ tự:
 
-1. The current user request.
+1. Current user request.
 2. Root `AGENTS.md`.
-3. Project adapter files in `.harness/project/*`.
-4. Relevant files in `.harness/guides/*`.
-5. Templates in `.harness/templates/*`.
-6. Agent defaults or assumptions.
+3. Project adapter files trong `.harness/project/*`.
+4. Relevant files trong `.harness/guides/*`.
+5. Templates trong `.harness/templates/*`.
+6. Agent defaults hoặc assumptions.
 
-Generated Harness artifacts should be written in the user's preferred language unless the content is a technical identifier, command, path, code, config key, log, error message, API field, schema key, package name, or copied tool output.
+Generated Harness artifacts nên dùng ngôn ngữ người dùng đang dùng, trừ technical identifier, command, path, code, config key, log, error message, API field, schema key, package name, hoặc copied tool output.
 
 ---
 
-## Mandatory Harness Lifecycle
+## Mandatory Harness lifecycle
 
-For every non-trivial implementation task, create one run under:
+Với mọi implementation task không tầm thường, tạo một run dưới:
 
 ```txt
 .harness/runs/RUN-YYYYMMDD-NNN-task-slug/
 ```
 
-A valid run must contain and maintain:
+Một run hợp lệ phải có và duy trì:
 
 ```txt
 run.yaml
@@ -77,73 +77,69 @@ run.yaml
 07-final-summary.md
 ```
 
-If evaluation fails and fixes are needed, also write:
+Nếu evaluation fail và cần fix, viết thêm:
 
 ```txt
 06-fix-report.md
 ```
 
-Always update:
+Luôn update:
 
 ```txt
 .harness/runs/RUN_INDEX.md
 ```
 
-Do not modify application code until `03-evaluator-contract-review.md` approves `02-implementation-contract.md`.
+Không sửa application code trước khi `03-evaluator-contract-review.md` approve `02-implementation-contract.md`.
 
 ---
 
-## Required Role Separation
+## Role separation
 
-The agent may perform Planner, Generator, and Evaluator in one conversation turn, but their artifacts must remain separate.
+Agent có thể đóng Planner, Generator, và Evaluator trong cùng một conversation turn, nhưng artifacts phải tách biệt.
 
-- Planner defines goal, scope, non-scope, acceptance criteria, likely impacted areas, risks, and unknowns.
-- Generator implements only the approved contract.
-- Evaluator verifies against the original input, planner brief, contract, acceptance criteria, and real evidence.
+- Planner định nghĩa goal, scope, non-scope, acceptance criteria, impacted areas, risks, và unknowns.
+- Generator chỉ implement approved contract.
+- Evaluator kiểm chứng bằng original input, planner brief, contract, acceptance criteria, và evidence thực tế.
 
-Evaluator must not approve by code inspection alone.
+Evaluator không được approve chỉ bằng code inspection.
 
 ---
 
-## Verification Requirements
+## Verification
 
-Run real verification whenever possible.
-
-Default:
+Chạy verification thật khi có thể:
 
 ```bash
 bash .harness/scripts/verify.sh
 ```
 
-If the app has runtime UI or API behaviour, also run smoke/runtime checks:
+Nếu app có runtime UI hoặc API behaviour, chạy thêm:
 
 ```bash
 bash .harness/scripts/smoke.sh
 ```
 
-For Vite apps:
+Với Vite app:
 
 ```bash
 APP_URL=http://localhost:5173 bash .harness/scripts/smoke.sh
 ```
 
-For UI tasks, build success, static checks, or curl smoke are not enough. Evaluator must provide behaviour-level evidence for each required UI behaviour such as validation, create/update/delete, filtering, navigation, state transition, persistence, error state, and empty state.
-
-If required behaviour evidence is missing, the run must be marked `Fail`, `Needs Fix`, or `Blocked`, not `Pass`.
+Với UI task, build success, static checks, hoặc curl smoke chưa đủ. Evaluator phải có behaviour-level evidence cho từng UI behaviour bắt buộc.
 
 ---
 
-## Code Change Rules
+## Code change rules
 
-Before editing files:
+Trước khi edit files:
 
-- read the target file first
-- inspect nearby code
-- search usages before changing existing functions/classes
-- avoid unrelated refactors
-- keep changes within the approved contract
+- đọc target file trước;
+- inspect nearby code;
+- search usages trước khi đổi existing functions/classes;
+- tránh unrelated refactors;
+- giữ thay đổi trong approved contract.
 
-Do not edit Harness guides, templates, or scripts unless the user explicitly asks. If a run reveals a reusable Harness improvement, add a concrete proposal to:
+Không sửa Harness guides, templates, hoặc scripts trừ khi user yêu cầu. Nếu một run phát hiện cải tiến Harness tái sử dụng được, thêm proposal cụ thể vào:
 
 ```txt
 .harness/backlog/HARNESS_BACKLOG.md
@@ -151,29 +147,17 @@ Do not edit Harness guides, templates, or scripts unless the user explicitly ask
 
 ---
 
-## Parallel Work
+## Parallel work
 
-If the user gives multiple unrelated tasks, create one run per task.
+Nếu user đưa nhiều task không liên quan, tạo một run cho mỗi task.
 
-Before implementation, check active runs for file conflicts. If runs may modify the same file, record the conflict and prefer separate branches or worktrees. Do not proceed silently.
-
-Recommended branch:
-
-```txt
-feat/RUN-YYYYMMDD-NNN-task-slug
-```
-
-Recommended worktree:
-
-```txt
-../worktrees/RUN-YYYYMMDD-NNN-task-slug
-```
+Trước implementation, kiểm tra active runs để phát hiện file conflicts. Nếu các run có thể modify cùng file, ghi conflict và ưu tiên separate branch hoặc worktree.
 
 ---
 
-## When To Read Detailed Guides
+## Khi cần đọc guides
 
-Load only the guide needed for the task:
+Chỉ load guide liên quan:
 
 ```txt
 .harness/guides/HARNESS_PRINCIPLES.md
@@ -186,4 +170,4 @@ Load only the guide needed for the task:
 .harness/guides/BACKLOG_POLICY.md
 ```
 
-Do not load every guide by default.
+Không load toàn bộ guides theo mặc định.

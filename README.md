@@ -70,6 +70,7 @@ bash template/.harness/scripts/install.sh --target /path/to/your-repo --agents-m
 
 Installer không ghi đè `AGENTS.md` im lặng. Chọn một mode:
 
+- `ask`: hỏi tương tác khi target đã có `AGENTS.md`.
 - `merge`: backup file cũ, rồi tạo `AGENTS.md` hợp nhất. Đây là mode khuyến nghị để Harness được agent đọc tự động.
 - `preserve`: giữ nguyên `AGENTS.md`, ghi Harness vào `AGENTS.harness.md`.
 - `replace`: backup `AGENTS.md` hiện có, rồi thay bằng Harness `AGENTS.md`.
@@ -121,6 +122,7 @@ template/
   AGENTS.md
   .harness/
     README.md
+    INSTALLATION.md
     guides/
       HARNESS_PRINCIPLES.md
       AGENT_WORKFLOW.md

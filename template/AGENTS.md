@@ -10,6 +10,36 @@ Người dùng vẫn có thể đưa một yêu cầu phát triển bình thư�
 
 ---
 
+## Harness Skill Discovery
+
+This project uses project-local Harness Workflow Skills.
+
+Before non-trivial work, read:
+
+```txt
+.harness/HARNESS_SKILLS.md
+```
+
+Use it as the skill registry.
+
+Select the relevant skill by name, description, and trigger conditions.
+
+Load only the selected skill file.
+
+Do not load every skill file by default.
+
+---
+
+## Project Context Requirement
+
+Before any run or epic, check whether `.harness/project/*` exists and appears current.
+
+If project context is missing, stale, contradictory, or low-confidence, use the `project-sync` Harness workflow skill from `.harness/HARNESS_SKILLS.md`.
+
+The user may request this skill at any time to refresh project context.
+
+---
+
 ## Ranh giới repository
 
 `.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, và backlog cho AI-assisted development.
@@ -23,21 +53,18 @@ Người dùng vẫn có thể đưa một yêu cầu phát triển bình thư�
 Trước khi lập kế hoạch cho task implementation không tầm thường, đọc các file này nếu có:
 
 ```txt
-.harness/project/PROJECT_MAP.md
-.harness/project/SOURCE_OF_TRUTH.md
-.harness/project/STACK_PROFILE.md
-.harness/project/VALIDATION_PROFILE.md
-.harness/project/MODULE_MAP.md
-.harness/project/LOCAL_DECISIONS.md
+.harness/project/PROJECT_PROFILE.md
+.harness/project/PROJECT_CONTEXT.md
+.harness/project/PROJECT_RULES.md
+.harness/project/PROJECT_VERIFICATION.md
+.harness/project/PROJECT_ARCHITECTURE.md
+.harness/project/PROJECT_GLOSSARY.md
+.harness/project/PROJECT_OPEN_QUESTIONS.md
 ```
 
-Nếu các file này thiếu hoặc có vẻ cũ, chạy:
+Nếu các file này thiếu hoặc có vẻ cũ, đọc `.harness/HARNESS_SKILLS.md` và chạy Harness workflow skill `project-sync`.
 
-```bash
-bash .harness/scripts/inspect-project.sh
-```
-
-Discovery output chỉ là observed facts, không phải absolute truth. Ưu tiên manual notes và quyết định local của target repository khi có xung đột.
+Project context chỉ đáng tin khi có evidence hiện tại. Ưu tiên manual notes và quyết định local của target repository khi có xung đột, nhưng ghi rõ uncertainty nếu evidence chưa đủ.
 
 ---
 

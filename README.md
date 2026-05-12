@@ -91,7 +91,9 @@ target-repo/
   .harness/
     README.md
     INSTALLATION.md
+    HARNESS_SKILLS.md
     guides/
+    skills/
     templates/
     project-templates/
     project/
@@ -108,13 +110,17 @@ Các vùng ownership-safe:
 - `.harness/epics/*` không bị reset khi update. Installer không copy epic history từ seed.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
 - `.harness/guides/*`, `.harness/templates/*`, `.harness/scripts/*`, `.harness/project-templates/*` là kernel/template layer có thể được update có chủ đích.
+- `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*` là Harness workflow skill layer được cài vào target repo; installer không xóa skill file local khác.
 
 ## Sau khi cài
 
-```bash
-bash .harness/scripts/inspect-project.sh
-bash .harness/scripts/verify.sh
+After installation, ask your agent:
+
+```txt
+Read `.harness/HARNESS_SKILLS.md` and run the `project-sync` Harness workflow skill.
 ```
+
+Không cần cài native-agent skills.
 
 Nếu app có runtime UI hoặc API:
 
@@ -130,6 +136,7 @@ template/
   .harness/
     README.md
     INSTALLATION.md
+    HARNESS_SKILLS.md
     guides/
       HARNESS_PRINCIPLES.md
       AGENT_WORKFLOW.md
@@ -140,6 +147,8 @@ template/
       BACKLOG_POLICY.md
       LANGUAGE_POLICY.md
       LONG_TASK_POLICY.md
+    skills/
+      project-sync.md
     templates/
       00-input.template.md
       01-planner-brief.template.md

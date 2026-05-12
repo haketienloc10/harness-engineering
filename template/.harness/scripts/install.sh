@@ -181,13 +181,17 @@ This target repository owns its installed \`.harness/\` tree.
   - \`.harness/templates/\`
   - \`.harness/project-templates/\`
   - \`.harness/scripts/\`
+- Seeded Harness workflow skill files are copied into \`.harness/skills/\` without deleting other local skill files.
 
 ## Recommended Next Steps
 
-\`\`\`bash
-bash .harness/scripts/inspect-project.sh
-bash .harness/scripts/verify.sh
+Ask your agent:
+
+\`\`\`txt
+Read \`.harness/HARNESS_SKILLS.md\` and run the \`project-sync\` Harness workflow skill.
 \`\`\`
+
+No native-agent skill installation is required.
 EOF
 }
 
@@ -323,12 +327,15 @@ install_harness_tree() {
 
   run_mkdir "$target_harness"
   run_cp "$SOURCE_HARNESS_DIR/README.md" "$target_harness/README.md"
+  run_cp "$SOURCE_HARNESS_DIR/HARNESS_SKILLS.md" "$target_harness/HARNESS_SKILLS.md"
   write_installation_note "$target_harness/INSTALLATION.md"
 
   copy_dir_replace "$SOURCE_HARNESS_DIR/guides" "$target_harness/guides"
   copy_dir_replace "$SOURCE_HARNESS_DIR/templates" "$target_harness/templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/project-templates" "$target_harness/project-templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/scripts" "$target_harness/scripts"
+  run_mkdir "$target_harness/skills"
+  run_cp "$SOURCE_HARNESS_DIR/skills/project-sync.md" "$target_harness/skills/project-sync.md"
 
   if [ "$DRY_RUN" -eq 0 ]; then
     chmod +x "$target_harness/scripts"/*.sh 2>/dev/null || true
@@ -456,8 +463,9 @@ Harness installed.
 
 Next steps:
   cd "$TARGET_DIR"
-  bash .harness/scripts/inspect-project.sh
-  bash .harness/scripts/verify.sh
+  Ask your agent:
+    Read .harness/HARNESS_SKILLS.md and run the project-sync Harness workflow skill.
+  No native-agent skill installation is required.
 
 If AGENTS.md was preserved, review AGENTS.harness.md and merge the parts you want into AGENTS.md.
 EOF

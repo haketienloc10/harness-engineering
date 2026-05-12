@@ -9,7 +9,9 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 ```txt
 .harness/
   INSTALLATION.md
+  HARNESS_SKILLS.md
   guides/
+  skills/
   templates/
   project/
   project-templates/
@@ -19,7 +21,9 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
   runs/
 ```
 
+- `HARNESS_SKILLS.md`: registry ngắn để agent chọn Harness workflow skill cần load.
 - `guides/`: quy trình và policy cho agent.
+- `skills/`: workflow skill file được load theo registry, không load toàn bộ theo mặc định.
 - `templates/`: template artifact cho mỗi run.
 - `project/`: project adapter của target repo. Installer chỉ tạo file thiếu, không overwrite file đã có.
 - `project-templates/`: template trung lập dùng khi tạo project adapter mới.
@@ -30,11 +34,13 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 
 ## Sau khi install
 
-Chạy discovery:
+Ask your agent:
 
-```bash
-bash .harness/scripts/inspect-project.sh
+```txt
+Read `.harness/HARNESS_SKILLS.md` and run the `project-sync` Harness workflow skill.
 ```
+
+Không cần cài native-agent skills.
 
 Chạy verification mặc định:
 

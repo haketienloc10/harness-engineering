@@ -161,11 +161,20 @@ enforce_run_classification() {
 
 replace_placeholders() {
   local file="$1"
+  local task_value="$raw_slug"
+
+  task_value="${task_value//\\/\\\\}"
+  task_value="${task_value//\"/\\\"}"
 
   if command -v perl >/dev/null 2>&1; then
-    perl -pi -e "s/<RUN-ID>/$RUN_ID/g; s/<TASK-SLUG>/$slug/g; s/<CREATED-AT>/$NOW/g; s/<UPDATED-AT>/$NOW/g" "$file"
+    RUN_ID_VALUE="$RUN_ID" \
+      TASK_VALUE="$task_value" \
+      SLUG_VALUE="$slug" \
+      PARENT_EPIC_VALUE="${EPIC_ID:-null}" \
+      NOW_VALUE="$NOW" \
+      perl -pi -e 's/<RUN-ID>/$ENV{RUN_ID_VALUE}/g; s/<TASK>/$ENV{TASK_VALUE}/g; s/<TASK-SLUG>/$ENV{SLUG_VALUE}/g; s/<PARENT-EPIC>/$ENV{PARENT_EPIC_VALUE}/g; s/<CREATED-AT>/$ENV{NOW_VALUE}/g; s/<UPDATED-AT>/$ENV{NOW_VALUE}/g' "$file"
   else
-    sed -i "s/<RUN-ID>/$RUN_ID/g; s/<TASK-SLUG>/$slug/g; s/<CREATED-AT>/$NOW/g; s/<UPDATED-AT>/$NOW/g" "$file"
+    sed -i "s/<RUN-ID>/$RUN_ID/g; s/<TASK>/$slug/g; s/<TASK-SLUG>/$slug/g; s/<PARENT-EPIC>/${EPIC_ID:-null}/g; s/<CREATED-AT>/$NOW/g; s/<UPDATED-AT>/$NOW/g" "$file"
   fi
 }
 
@@ -180,16 +189,18 @@ write_run_index_if_missing() {
 ## Status Values
 
 - active
-- created
-- planning
-- contracting
-- contract_review
-- implementing
-- evaluating
-- fixing
-- completed
-- blocked
-- cancelled
+- CREATED
+- PLANNING
+- CONTRACTING
+- CONTRACT_REVIEW
+- APPROVED_FOR_IMPLEMENTATION
+- GENERATING
+- EVALUATING
+- COMPLETED
+- REJECTED_FOR_REPLAN
+- BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
+- FAILED_VERIFICATION
+- CANCELLED
 EOF
   fi
 }
@@ -395,11 +406,10 @@ for f in "$RUN_DIR"/*; do
 done
 
 if [ -n "$EPIC_ID" ]; then
-  set_yaml_field "$RUN_DIR/run.yaml" "epic_id" "$EPIC_ID"
-  set_yaml_field "$RUN_DIR/run.yaml" "classification" "epic_child_run"
-  append_run_index_row "| child-run | $EPIC_ID | $RUN_ID | $slug | created |  |  | agent | $NOW | $NOW |"
+  set_yaml_field "$RUN_DIR/run.yaml" "parent_epic" "$EPIC_ID"
+  append_run_index_row "| child-run | $EPIC_ID | $RUN_ID | $slug | CREATED |  |  | agent | $NOW | $NOW |"
 else
-  append_run_index_row "| run |  | $RUN_ID | $slug | created |  |  | agent | $NOW | $NOW |"
+  append_run_index_row "| run |  | $RUN_ID | $slug | CREATED |  |  | agent | $NOW | $NOW |"
 fi
 
 

@@ -32,6 +32,14 @@ Update = optional, explicit, ownership-safe merge
 - Không coi `.harness/` trong target repo là application source code.
 - Không reset run history, backlog local, project adapter, hoặc codebase knowledge base khi update.
 
+Harness có ba lớp:
+
+1. **Artifact Protocol**: templates, run folders, evidence files, and `RUN_INDEX.md`.
+2. **Role Policy**: Planner, Contract Reviewer, Generator, and Evaluator responsibilities.
+3. **Lifecycle Orchestrator**: `run.yaml` state machine, gates, next-role detection, handoff, and validation.
+
+Subagents là executor cho từng role lifecycle, không phải workflow tự thân. Khi subagents không có sẵn hoặc không thể bảo đảm independence, Harness phải tạo `HANDOFF.md` để user mở session mới thay vì kết thúc bằng “Suggested Next Steps” chung chung.
+
 Harness dùng một execution namespace:
 
 - `.harness/runs/RUN-*`: normal runs cho từng implementation unit.
@@ -147,6 +155,8 @@ template/
       AGENT_WORKFLOW.md
       RUN_CLASSIFICATION.md
       PROJECT_DISCOVERY.md
+      LIFECYCLE_ORCHESTRATION.md
+      SUBAGENT_EXECUTION.md
       PLANNING_AND_CONTRACTS.md
       TESTING_POLICY.md
       PARALLEL_WORK.md
@@ -173,6 +183,7 @@ template/
       05-evaluator-report.template.md
       06-fix-report.template.md
       07-final-summary.template.md
+      HANDOFF.template.md
       00-epic-overview.template.md
       01-epic-roadmap.template.md
       02-epic-acceptance-matrix.template.md
@@ -196,6 +207,8 @@ template/
       list-epics.sh
       list-runs.sh
       link-run-to-epic.sh
+      next-role.sh
+      validate-run.sh
       check-conflicts.sh
       verify.sh
       smoke.sh

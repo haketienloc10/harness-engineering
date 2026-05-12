@@ -47,16 +47,18 @@ write_run_index_if_missing() {
 ## Status Values
 
 - active
-- created
-- planning
-- contracting
-- contract_review
-- implementing
-- evaluating
-- fixing
-- completed
-- blocked
-- cancelled
+- CREATED
+- PLANNING
+- CONTRACTING
+- CONTRACT_REVIEW
+- APPROVED_FOR_IMPLEMENTATION
+- GENERATING
+- EVALUATING
+- COMPLETED
+- REJECTED_FOR_REPLAN
+- BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
+- FAILED_VERIFICATION
+- CANCELLED
 EOF
   fi
 }

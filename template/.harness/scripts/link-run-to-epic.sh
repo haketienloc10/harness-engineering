@@ -4,14 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/.harness"
 RUNS_DIR="$HARNESS_DIR/runs"
-LEGACY_EPICS_DIR="$HARNESS_DIR/epics"
 
 usage() {
   cat <<'EOF'
 Usage:
   bash .harness/scripts/link-run-to-epic.sh EPIC-YYYYMMDD-NNN-task RUN-ID
 
-Link an existing Harness run to an existing Harness Epic.
+Refresh the child run index for an existing Harness child run.
 EOF
 }
 
@@ -61,13 +60,18 @@ ensure_epic_run_index() {
 
 ## Run Status Values
 
-- planned
-- created
-- implementing
-- evaluating
-- completed
-- blocked
-- cancelled
+- CREATED
+- PLANNING
+- CONTRACTING
+- CONTRACT_REVIEW
+- APPROVED_FOR_IMPLEMENTATION
+- GENERATING
+- EVALUATING
+- COMPLETED
+- REJECTED_FOR_REPLAN
+- BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
+- FAILED_VERIFICATION
+- CANCELLED
 EOF
   fi
 }
@@ -121,23 +125,7 @@ append_or_update_run_index() {
 }
 
 update_global_epic_index() {
-  local file="$LEGACY_EPICS_DIR/EPIC_INDEX.md"
-  local tmp
-
-  if [ ! -f "$file" ] || ! grep -qF "| $EPIC_ID |" "$file"; then
-    return
-  fi
-
-  tmp="${file}.tmp.$$"
-  awk -v id="$EPIC_ID" -v run="$RUN_ID" -v now="$NOW" '
-    BEGIN { FS = OFS = "|" }
-    $0 ~ "^\\| " id " \\|" {
-      $7 = " " now " "
-      $8 = " " run " "
-    }
-    { print }
-  ' "$file" > "$tmp"
-  mv "$tmp" "$file"
+  :
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -151,18 +139,14 @@ EPIC_ID="$1"
 RUN_ID="$2"
 if [ -d "$RUNS_DIR/$EPIC_ID" ]; then
   EPIC_DIR="$RUNS_DIR/$EPIC_ID"
-elif [ -d "$LEGACY_EPICS_DIR/$EPIC_ID" ]; then
-  EPIC_DIR="$LEGACY_EPICS_DIR/$EPIC_ID"
 else
   die "Epic directory not found: $RUNS_DIR/$EPIC_ID"
 fi
 
 if [ -d "$EPIC_DIR/runs/$RUN_ID" ]; then
   RUN_DIR="$EPIC_DIR/runs/$RUN_ID"
-elif [ -d "$RUNS_DIR/$RUN_ID" ]; then
-  RUN_DIR="$RUNS_DIR/$RUN_ID"
 else
-  die "Run directory not found: $RUN_ID"
+  die "Child run directory not found: $EPIC_DIR/runs/$RUN_ID"
 fi
 RUN_YAML="$RUN_DIR/run.yaml"
 EPIC_YAML="$EPIC_DIR/epic.yaml"
@@ -173,15 +157,15 @@ NOW="$(date -Iseconds)"
 [ -d "$RUN_DIR" ] || die "Run directory not found: $RUN_DIR"
 [ -f "$RUN_YAML" ] || die "Run YAML not found: $RUN_YAML"
 
-TASK="$(sed -n 's/^task_slug:[[:space:]]*//p' "$RUN_YAML" | head -n 1)"
-STATUS="$(sed -n 's/^status:[[:space:]]*//p' "$RUN_YAML" | head -n 1)"
+TASK="$(sed -n 's/^task:[[:space:]]*//p' "$RUN_YAML" | head -n 1 | sed -E 's/^"//; s/"$//')"
+STATUS="$(sed -n 's/^state:[[:space:]]*//p' "$RUN_YAML" | head -n 1)"
 BRANCH="$(sed -n 's/^branch:[[:space:]]*//p' "$RUN_YAML" | head -n 1 | tr -d '"')"
 
 TASK="${TASK:-}"
-STATUS="${STATUS:-created}"
+STATUS="${STATUS:-CREATED}"
 BRANCH="${BRANCH:-}"
 
-set_yaml_field "$RUN_YAML" "epic_id" "$EPIC_ID"
+set_yaml_field "$RUN_YAML" "parent_epic" "$EPIC_ID"
 
 if [ -f "$EPIC_YAML" ]; then
   set_nested_active_run_id "$EPIC_YAML" "$RUN_ID"

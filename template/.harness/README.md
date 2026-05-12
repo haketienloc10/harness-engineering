@@ -34,7 +34,13 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 
 Trước khi tạo run, agent phải classify request bằng `guides/RUN_CLASSIFICATION.md`. Multi-phase, broad, long, MVP, full feature, core loop, hoặc task không verify gọn trong một run phải thành Epic.
 
-Production workflow dùng các session/agent riêng cho Planner, Contract Reviewer, Generator, và Evaluator. Single-session simulation chỉ là lower-trust fallback cho local experimentation, low-risk documentation-only tasks, learning/demo workflows, hoặc task được user đánh dấu fallback-allowed; fallback bị cấm cho production implementation, Epic, và child runs.
+Harness có ba lớp:
+
+1. Artifact Protocol: run folders, templates, and evidence files.
+2. Role Policy: Planner, Contract Reviewer, Generator, and Evaluator boundaries.
+3. Lifecycle Orchestrator: `run.yaml`, state transitions, gates, `next-role.sh`, `HANDOFF.md`, and `validate-run.sh`.
+
+Production workflow dùng các session/agent riêng cho Planner, Contract Reviewer, Generator, và Evaluator. Subagents là executor cho từng role, không thay thế lifecycle state machine. Nếu subagents hoặc session độc lập không có sẵn, tạo `HANDOFF.md` và dừng ở role boundary thay vì ghi “Suggested Next Steps” chung chung.
 
 ## Sau khi install
 

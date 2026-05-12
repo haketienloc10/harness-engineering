@@ -88,24 +88,26 @@ Outputs:
 - Summary of source areas, entrypoints, flows, and impact risks updated
 - Stale or uncertain source areas if evidence is insufficient
 
-## runtime-role-separation
+## lifecycle-orchestration
 
 Description:
-Use the Runtime Role Separation guide before non-trivial implementation to enforce separate Planner, Contract Reviewer, Generator, and Evaluator sessions and prevent production-grade self-approval/self-evaluation.
+Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, role executors, independent review/evaluation, and handoff fallback.
 
 Use when:
 - Starting any non-trivial implementation run.
 - Reviewing or approving an implementation contract.
 - Handing work from planning to implementation or from implementation to evaluation.
 - A task might otherwise be handled by one agent/session playing multiple roles.
-- Recording fallback single-session mode and degraded independence.
 - Independent sessions are unavailable and a role-boundary handoff is required.
 
 Load:
-`.harness/guides/RUNTIME_ROLE_SEPARATION.md`
+`.harness/guides/LIFECYCLE_ORCHESTRATION.md`
+
+If Codex subagents are available, also load:
+`.harness/guides/SUBAGENT_EXECUTION.md`
 
 Outputs:
-- Correct runtime role metadata in run artifacts
-- Clear handoff note between roles
-- Explicit `independence: independent` or `independence: degraded`
+- Correct `run.yaml` lifecycle state
+- Required role artifact for the current state
+- `HANDOFF.md` when the next independent executor cannot run
 - `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF` when production work cannot continue in the same session

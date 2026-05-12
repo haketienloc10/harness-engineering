@@ -25,7 +25,7 @@ Single-agent simulation chỉ được dùng như degraded fallback cho local ex
 4. Nếu Epic required, tạo Epic và child-run plan. Không tạo normal run cho task broad/multi-phase.
 5. Chỉ tạo normal run nếu bounded và verify được như một đơn vị.
 6. Tạo normal run bằng `bash .harness/scripts/new-run.sh <task-slug>` hoặc child run bằng `bash .harness/scripts/new-run.sh --within <EPIC-ID> <task-slug>`.
-7. Enforce role separation cho mọi normal run và mọi child run bằng `.harness/guides/RUNTIME_ROLE_SEPARATION.md`.
+7. Enforce lifecycle state và role separation bằng `.harness/guides/LIFECYCLE_ORCHESTRATION.md`; nếu có Codex subagents, dùng `.harness/guides/SUBAGENT_EXECUTION.md`.
 
 ## Planner Phase
 

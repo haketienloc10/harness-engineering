@@ -1,24 +1,24 @@
-run_id: <RUN-ID>
-task_slug: <TASK-SLUG>
-epic_id: ""
-status: created
-classification: normal_run
-branch: ""
-worktree: ""
-owner: agent
+id: <RUN-ID>
+parent_epic: <PARENT-EPIC>
+task: "<TASK>"
+state: CREATED
+current_role: orchestrator
 created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
+approved_for_implementation: false
+generator_allowed: false
+evaluator_required: true
+last_artifact: 00-input.md
+next_required_artifact: 01-planner-brief.md
 
-runtime:
-  mode: production_multi_session
-  independence: independent
-  required_roles:
-    - Planner
-    - ContractReviewer
-    - Generator
-    - Evaluator
+role_executors:
+  planner:
+  contract_reviewer:
+  generator:
+  evaluator:
 
 scope:
+  task_slug: <TASK-SLUG>
   expected_files: []
   bounded_unit_required: true
   oversized_normal_run_status: ""

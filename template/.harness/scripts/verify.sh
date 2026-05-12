@@ -3,6 +3,13 @@ set -euo pipefail
 
 echo "== Harness Verify =="
 
+if [ "$#" -gt 0 ]; then
+  for run_dir in "$@"; do
+    echo "== Validate Harness run: $run_dir =="
+    bash "$(dirname "${BASH_SOURCE[0]}")/validate-run.sh" "$run_dir"
+  done
+fi
+
 if [ -f "package.json" ]; then
   echo "== Node project detected =="
 

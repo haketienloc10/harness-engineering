@@ -6,6 +6,7 @@ Ownership rules sau install:
 
 - Target repository sở hữu `.harness/` của chính nó.
 - `.harness/project/*` là project adapter local và không bị installer overwrite nếu đã tồn tại.
+- `.harness/codebase/*` là source-navigation và change-impact cache local và không bị installer overwrite nếu đã tồn tại.
 - `.harness/runs/RUN_INDEX.md`, normal runs, Epic containers, và child runs không bị reset.
 - Legacy `.harness/epics/*`, nếu có từ Harness cũ, thuộc target repository và không bị installer xóa.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị overwrite nếu target đã có.

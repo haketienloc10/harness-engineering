@@ -68,6 +68,24 @@ Project context chỉ đáng tin khi có evidence hiện tại. Ưu tiên manual
 
 ---
 
+## Codebase Knowledge Base
+
+`.harness/codebase/*` là source-navigation và change-impact cache thuộc target repository. Nó không thay thế `.harness/project/*` và không được duplicate project-level facts.
+
+Trước coding run không tầm thường:
+
+1. Đọc `.harness/project/*` để lấy project-level context.
+2. Đọc `.harness/codebase/CODEBASE_INDEX.md` nếu có.
+3. Chỉ đọc các `.harness/codebase/*` docs liên quan đến task.
+4. Dùng codebase docs để xác định source files, modules, technical flows, và impact areas cần inspect.
+5. Sau đó inspect actual source files trước khi edit.
+6. Search usages trước khi đổi existing functions/classes/routes/commands/exported APIs.
+7. Nếu source evidence mâu thuẫn codebase docs, update `.harness/codebase/*` hoặc mark stale context.
+
+Nếu `.harness/codebase/*` thiếu, stale, contradictory, hoặc low-confidence, đọc `.harness/HARNESS_SKILLS.md` và chạy Harness workflow skill `codebase-sync`.
+
+---
+
 ## Priority order
 
 Khi instruction xung đột, theo thứ tự:
@@ -75,9 +93,10 @@ Khi instruction xung đột, theo thứ tự:
 1. Current user request.
 2. Root `AGENTS.md`.
 3. Project adapter files trong `.harness/project/*`.
-4. Relevant files trong `.harness/guides/*`.
-5. Templates trong `.harness/templates/*`.
-6. Agent defaults hoặc assumptions.
+4. Source-navigation files liên quan trong `.harness/codebase/*`.
+5. Relevant files trong `.harness/guides/*`.
+6. Templates trong `.harness/templates/*`.
+7. Agent defaults hoặc assumptions.
 
 Generated Harness artifacts nên dùng ngôn ngữ người dùng đang dùng, trừ technical identifier, command, path, code, config key, log, error message, API field, schema key, package name, hoặc copied tool output.
 

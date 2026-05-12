@@ -28,6 +28,31 @@ Outputs:
 - Summary of facts updated
 - Open questions if evidence is insufficient
 
+## codebase-sync
+
+Description:
+Create or update `.harness/codebase/*` as a lightweight source-navigation and change-impact map for future coding runs.
+
+Use when:
+- `.harness/codebase/*` is missing, stale, contradictory, or low-confidence.
+- Before a non-trivial coding run when source areas, entrypoints, flows, or impact risks are unclear.
+- After a run discovers durable source-navigation or change-impact facts.
+- Source files, routes, commands, jobs, tests, or module boundaries moved.
+
+Hard boundary:
+- Do not duplicate `.harness/project/*`.
+- Reference `.harness/project/PROJECT_PROFILE.md` for stack/runtime/package manager.
+- Reference `.harness/project/PROJECT_VERIFICATION.md` for general verification.
+- Keep `.harness/codebase/*` limited to source-navigation, concrete entrypoints, technical flows, source areas, change impact, source evidence, and freshness metadata.
+
+Load:
+`.harness/skills/codebase-sync.md`
+
+Outputs:
+- Updated `.harness/codebase/*`
+- Summary of source areas, entrypoints, flows, and impact risks updated
+- Stale or uncertain source areas if evidence is insufficient
+
 ## runtime-role-separation
 
 Description:

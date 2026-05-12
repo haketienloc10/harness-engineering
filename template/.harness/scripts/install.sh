@@ -29,6 +29,7 @@ Options:
 
 Ownership-safe rules:
   - Do not overwrite .harness/project/* if it already exists.
+  - Do not overwrite .harness/codebase/* if it already exists.
   - Do not reset .harness/runs/RUN_INDEX.md if it already exists.
   - Do not copy run history from the template.
   - Do not delete legacy .harness/epics/ if it already exists.
@@ -161,6 +162,7 @@ This target repository owns its installed \`.harness/\` tree.
 ## Ownership Rules
 
 - \`.harness/project/*\` belongs to this target repository. The installer creates missing files only and does not overwrite existing project adapter files.
+- \`.harness/codebase/*\` belongs to this target repository. The installer creates missing files only and does not overwrite existing source-navigation or change-impact files.
 - \`.harness/runs/RUN_INDEX.md\`, root runs, Epic containers, and child runs belong to this target repository. The installer does not reset existing run history.
 - Legacy \`.harness/epics/*\`, if present from older Harness installs, belongs to this target repository and is never deleted by the installer.
 - \`.harness/backlog/HARNESS_BACKLOG.md\` belongs to this target repository. The installer does not overwrite it if it already exists.
@@ -177,6 +179,7 @@ Ask your agent:
 
 \`\`\`txt
 Read \`.harness/HARNESS_SKILLS.md\` and run the \`project-sync\` Harness workflow skill.
+Then run \`codebase-sync\` if source-navigation or change-impact docs are missing or stale.
 \`\`\`
 
 No native-agent skill installation is required.
@@ -300,6 +303,26 @@ install_project_adapters() {
   done
 }
 
+install_codebase_docs() {
+  local source_dir="$SOURCE_HARNESS_DIR/codebase"
+  local target_codebase="$TARGET_DIR/.harness/codebase"
+  local source_file base dest
+
+  run_mkdir "$target_codebase"
+
+  for source_file in "$source_dir"/*.md; do
+    [ -f "$source_file" ] || continue
+    base="$(basename "$source_file")"
+    dest="$target_codebase/$base"
+    if [ -e "$dest" ]; then
+      info "Preserved existing codebase doc: $dest"
+    else
+      run_cp "$source_file" "$dest"
+      info "Created codebase doc: $dest"
+    fi
+  done
+}
+
 install_harness_tree() {
   local target_harness="$TARGET_DIR/.harness"
 
@@ -324,12 +347,14 @@ install_harness_tree() {
   copy_dir_replace "$SOURCE_HARNESS_DIR/scripts" "$target_harness/scripts"
   run_mkdir "$target_harness/skills"
   run_cp "$SOURCE_HARNESS_DIR/skills/project-sync.md" "$target_harness/skills/project-sync.md"
+  run_cp "$SOURCE_HARNESS_DIR/skills/codebase-sync.md" "$target_harness/skills/codebase-sync.md"
 
   if [ "$DRY_RUN" -eq 0 ]; then
     chmod +x "$target_harness/scripts"/*.sh 2>/dev/null || true
   fi
 
   install_project_adapters
+  install_codebase_docs
 
   run_mkdir "$target_harness/backlog"
   if [ -f "$target_harness/backlog/HARNESS_BACKLOG.md" ]; then
@@ -413,6 +438,7 @@ main() {
   esac
 
   [ -d "$SOURCE_HARNESS_DIR/guides" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/guides"
+  [ -d "$SOURCE_HARNESS_DIR/codebase" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/codebase"
   [ -f "$SOURCE_TEMPLATE_DIR/AGENTS.md" ] || die "Invalid template: missing $SOURCE_TEMPLATE_DIR/AGENTS.md"
 
   if [ "$DRY_RUN" -eq 0 ]; then
@@ -443,6 +469,7 @@ Next steps:
   cd "$TARGET_DIR"
   Ask your agent:
     Read .harness/HARNESS_SKILLS.md and run the project-sync Harness workflow skill.
+    Then run codebase-sync if source-navigation or change-impact docs are missing or stale.
   No native-agent skill installation is required.
 
 If AGENTS.md was preserved, review AGENTS.harness.md and merge the parts you want into AGENTS.md.

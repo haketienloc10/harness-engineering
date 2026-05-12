@@ -14,6 +14,7 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
   skills/
   templates/
   project/
+  codebase/
   project-templates/
   scripts/
   backlog/
@@ -25,6 +26,7 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 - `skills/`: workflow skill file được load theo registry, không load toàn bộ theo mặc định.
 - `templates/`: template artifact cho mỗi run.
 - `project/`: project adapter của target repo. Installer chỉ tạo file thiếu, không overwrite file đã có.
+- `codebase/`: source-navigation và change-impact cache của target repo. Installer chỉ tạo file thiếu, không overwrite file đã có. Layer này không thay thế hoặc duplicate `project/`.
 - `project-templates/`: template trung lập dùng khi tạo project adapter mới.
 - `scripts/`: helper scripts như `new-run.sh`, `inspect-project.sh`, `verify.sh`.
 - `backlog/`: proposal cải tiến Harness local.
@@ -38,6 +40,7 @@ Ask your agent:
 
 ```txt
 Read `.harness/HARNESS_SKILLS.md` and run the `project-sync` Harness workflow skill.
+Then run `codebase-sync` if `.harness/codebase/*` is missing or stale.
 ```
 
 Không cần cài native-agent skills.

@@ -30,7 +30,7 @@ Update = optional, explicit, ownership-safe merge
 - `target-repo/.harness/` là harness đã cài, thuộc quyền sở hữu của target repo.
 - Không tự động đồng bộ ngược từ target repo về repo này.
 - Không coi `.harness/` trong target repo là application source code.
-- Không reset run history, backlog local, hoặc project adapter khi update.
+- Không reset run history, backlog local, project adapter, hoặc codebase knowledge base khi update.
 
 Harness dùng một execution namespace:
 
@@ -98,6 +98,7 @@ target-repo/
     templates/
     project-templates/
     project/
+    codebase/
     scripts/
     backlog/
     runs/
@@ -106,6 +107,7 @@ target-repo/
 Các vùng ownership-safe:
 
 - `.harness/project/*` chỉ được tạo nếu chưa có. Đây là project adapter của repo đích.
+- `.harness/codebase/*` chỉ được tạo nếu chưa có. Đây là source-navigation và change-impact cache do repo đích sở hữu; nó không thay thế hoặc duplicate `.harness/project/*`.
 - `.harness/runs/*` không bị reset khi update. Thư mục này chứa normal runs, Epic containers, và child runs.
 - Legacy `.harness/epics/*`, nếu có từ Harness cũ, không bị xóa khi update.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
@@ -118,6 +120,7 @@ After installation, ask your agent:
 
 ```txt
 Read `.harness/HARNESS_SKILLS.md` and run the `project-sync` Harness workflow skill.
+Then run `codebase-sync` if `.harness/codebase/*` is missing or stale.
 ```
 
 Không cần cài native-agent skills.
@@ -149,6 +152,15 @@ template/
       LONG_TASK_POLICY.md
     skills/
       project-sync.md
+      codebase-sync.md
+    codebase/
+      CODEBASE_INDEX.md
+      CODEBASE_AREAS.md
+      CODEBASE_ENTRYPOINTS.md
+      CODEBASE_FLOWS.md
+      CODEBASE_CHANGE_IMPACT.md
+      CODEBASE_SOURCE_EVIDENCE.md
+      CODEBASE_FRESHNESS.md
     templates/
       00-input.template.md
       01-planner-brief.template.md
@@ -194,6 +206,7 @@ template/
 Repo này chỉ cung cấp seed architecture. Khi một project đã được cài Harness, project đó có quyền:
 
 - chỉnh `.harness/project/*` theo thực tế project;
+- chỉnh `.harness/codebase/*` theo source tree, entrypoints, flows, và change-impact thực tế;
 - thêm rule local;
 - thêm validation command;
 - thêm backlog proposal;

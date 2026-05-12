@@ -8,6 +8,14 @@ Load only the selected skill file.
 
 Do not load all skill files by default.
 
+## Mandatory Order
+
+For non-trivial work, select skills in this order:
+
+```txt
+run-classification -> project-sync/codebase-sync if needed -> epic-workflow if large -> lifecycle-orchestration
+```
+
 ## run-classification
 
 Description:

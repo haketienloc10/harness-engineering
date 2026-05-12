@@ -1,6 +1,6 @@
 # Contract Reviewer Report
 
-## Runtime Metadata
+## Executor Metadata
 
 ```yaml
 role: ContractReviewer
@@ -9,7 +9,9 @@ executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/contract-reviewer.md
+template_source: .harness/subagents/contract-reviewer.md
+started_at: <required>
+completed_at: <required>
 independence: independent
 contract_author_executor_id: <required>
 ```

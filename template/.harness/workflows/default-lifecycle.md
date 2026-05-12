@@ -23,6 +23,24 @@ There is no degraded single-session fallback.
 13. Evaluator writes `05-evaluator-report.md`.
 14. Run completes only if Evaluator result is `pass`.
 
+## Created Manifest State
+
+New runs start before executor availability has been checked:
+
+```md
+- mode: template_subagents_required
+- fallback_allowed: false
+- subagent_runtime_available: unknown
+- run_status: created_pending_executor_check
+```
+
+After a successful runtime check, update it before dispatching Planner:
+
+```md
+- subagent_runtime_available: true
+- run_status: ready_for_planner_dispatch
+```
+
 ## Block Rule
 
 If subagent runtime is unavailable, create or update `run-manifest.md`:

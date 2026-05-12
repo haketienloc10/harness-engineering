@@ -89,6 +89,75 @@ require_file() {
   [ -f "$RUN_DIR/$file" ] || die "Required artifact missing for state $STATE: $file"
 }
 
+manifest_field_get() {
+  local field="$1"
+  sed -n -E "s/^- ${field}:[[:space:]]*//p" "$RUN_DIR/run-manifest.md" | head -n 1 | sed -E 's/^"//; s/"$//'
+}
+
+artifact_metadata_field_get() {
+  local file="$1"
+  local field="$2"
+
+  awk -v field="$field" '
+    /^```yaml[[:space:]]*$/ {
+      in_yaml = 1
+      next
+    }
+    in_yaml == 1 && /^```[[:space:]]*$/ {
+      exit
+    }
+    in_yaml == 1 {
+      pattern = "^" field ":[[:space:]]*"
+      if ($0 ~ pattern) {
+        sub(pattern, "", $0)
+        gsub(/^"|"$/, "", $0)
+        print $0
+        exit
+      }
+    }
+  ' "$RUN_DIR/$file"
+}
+
+require_artifact_metadata_field() {
+  local file="$1"
+  local field="$2"
+  local value
+
+  value="$(artifact_metadata_field_get "$file" "$field")"
+  [ -n "$value" ] || die "$file missing runtime metadata field: $field"
+  [ "$value" != "<required>" ] || die "$file has unresolved runtime metadata field: $field"
+}
+
+require_role_artifact_metadata() {
+  local file="$1"
+  local role="$2"
+  local template_source="$3"
+  local executor_type
+  local executor_id
+  local actual_template_source
+
+  require_artifact_metadata_field "$file" role
+  require_artifact_metadata_field "$file" executor_type
+  require_artifact_metadata_field "$file" executor_id
+  require_artifact_metadata_field "$file" template_source
+  require_artifact_metadata_field "$file" started_at
+  require_artifact_metadata_field "$file" completed_at
+
+  executor_type="$(artifact_metadata_field_get "$file" executor_type)"
+  executor_id="$(artifact_metadata_field_get "$file" executor_id)"
+  actual_template_source="$(artifact_metadata_field_get "$file" template_source)"
+
+  [ "$(artifact_metadata_field_get "$file" role)" = "$role" ] || die "$file must set role: $role"
+  [ "$executor_type" = "subagent" ] || die "$file must set executor_type: subagent"
+  [ -n "$executor_id" ] || die "$file requires executor_id"
+  [ "$actual_template_source" = "$template_source" ] || die "$file must set template_source: $template_source"
+}
+
+require_contract_review_approved() {
+  require_completed_artifact "03-contract-review.md"
+  grep -qE '^- Status:[[:space:]]*approved[[:space:]]*$' "$RUN_DIR/03-contract-review.md" || die "generator_allowed: true requires 03-contract-review.md Status: approved"
+}
+
 require_manifest() {
   require_file "run-manifest.md"
   grep -qF -- "- mode: template_subagents_required" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set mode: template_subagents_required"
@@ -97,6 +166,19 @@ require_manifest() {
   grep -qF "contract_reviewer_template: .harness/subagents/contract-reviewer.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer template source"
   grep -qF "generator_template: .harness/subagents/generator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator template source"
   grep -qF "evaluator_template: .harness/subagents/evaluator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing evaluator template source"
+
+  if [ "$STATE" != "CREATED" ] && [ "$STATE" != "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ] && [ "$STATE" != "CANCELLED" ]; then
+    case "$(manifest_field_get subagent_runtime_available)" in
+      true)
+        ;;
+      unknown|false|"")
+        die "run-manifest.md cannot have subagent_runtime_available: unknown/false after CREATED"
+        ;;
+      *)
+        die "run-manifest.md has invalid subagent_runtime_available value"
+        ;;
+    esac
+  fi
 }
 
 require_completed_artifact() {
@@ -111,6 +193,15 @@ require_completed_artifact() {
   grep -qE 'Pass/Fail|Yes/No|Continue / Sequence / Worktree / Block|Low/Medium/High|Manual/E2E/API/Unit/Build' "$RUN_DIR/$file" && die "Required artifact still contains unresolved option placeholder: $file"
 }
 
+require_completed_role_artifact() {
+  local file="$1"
+  local role="$2"
+  local template_source="$3"
+
+  require_completed_artifact "$file"
+  require_role_artifact_metadata "$file" "$role" "$template_source"
+}
+
 require_artifacts_for_state() {
   case "$STATE" in
     CREATED)
@@ -121,40 +212,40 @@ require_artifacts_for_state() {
       ;;
     CONTRACTING)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
       require_role_spawned "planner"
       ;;
     CONTRACT_REVIEW)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
-      require_completed_artifact "02-implementation-contract.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "02-implementation-contract.md" "Planner" ".harness/subagents/planner.md"
       require_role_spawned "planner"
       ;;
     APPROVED_FOR_IMPLEMENTATION|GENERATING)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
-      require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-contract-review.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "02-implementation-contract.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "03-contract-review.md" "ContractReviewer" ".harness/subagents/contract-reviewer.md"
       require_role_spawned "planner"
       require_role_spawned "contract_reviewer"
       ;;
     EVALUATING)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
-      require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-contract-review.md"
-      require_completed_artifact "04-implementation-report.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "02-implementation-contract.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "03-contract-review.md" "ContractReviewer" ".harness/subagents/contract-reviewer.md"
+      require_completed_role_artifact "04-implementation-report.md" "Generator" ".harness/subagents/generator.md"
       require_role_spawned "planner"
       require_role_spawned "contract_reviewer"
       require_role_spawned "generator"
       ;;
     COMPLETED)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
-      require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-contract-review.md"
-      require_completed_artifact "04-implementation-report.md"
-      require_completed_artifact "05-evaluator-report.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "02-implementation-contract.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "03-contract-review.md" "ContractReviewer" ".harness/subagents/contract-reviewer.md"
+      require_completed_role_artifact "04-implementation-report.md" "Generator" ".harness/subagents/generator.md"
+      require_completed_role_artifact "05-evaluator-report.md" "Evaluator" ".harness/subagents/evaluator.md"
       require_completed_artifact "07-final-summary.md"
       require_role_spawned "planner"
       require_role_spawned "contract_reviewer"
@@ -163,8 +254,8 @@ require_artifacts_for_state() {
       ;;
     REJECTED_FOR_REPLAN)
       require_file "00-input.md"
-      require_completed_artifact "01-planner-brief.md"
-      require_completed_artifact "02-implementation-contract.md"
+      require_completed_role_artifact "01-planner-brief.md" "Planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "02-implementation-contract.md" "Planner" ".harness/subagents/planner.md"
       ;;
     BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
       [ -n "$(yaml_get blocked_reason)" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires blocked_reason"
@@ -172,7 +263,7 @@ require_artifacts_for_state() {
       grep -qF -- "- subagent_runtime_available: false" "$RUN_DIR/run-manifest.md" || die "Blocked run requires subagent_runtime_available: false"
       ;;
     FAILED_VERIFICATION)
-      require_completed_artifact "05-evaluator-report.md"
+      require_completed_role_artifact "05-evaluator-report.md" "Evaluator" ".harness/subagents/evaluator.md"
       ;;
     CANCELLED)
       require_file "00-input.md"
@@ -210,10 +301,15 @@ validate_path_shape() {
 
 validate_evaluator_report() {
   local report="$RUN_DIR/05-evaluator-report.md"
+  local generator_report_executor_id
+  local evaluator_report_generator_executor_id
+  local evaluator_report_executor_id
+  local same_executor_as_generator
 
   [ -f "$report" ] || die "COMPLETED requires 05-evaluator-report.md"
   grep -qE '^## Commands Executed' "$report" || die "Evaluator report must include a Commands Executed section"
   grep -qE '^## Evidence' "$report" || die "Evaluator report must include an Evidence section"
+  grep -qE '^- Status:[[:space:]]*pass[[:space:]]*$' "$report" || die "COMPLETED requires 05-evaluator-report.md Decision Status: pass"
 
   if grep -q '<command>' "$report"; then
     die "Evaluator report still contains placeholder command evidence"
@@ -222,6 +318,18 @@ validate_evaluator_report() {
   if awk '/^## Evidence/ { in_evidence = 1; next } /^## / && in_evidence == 1 { in_evidence = 0 } in_evidence == 1 { print }' "$report" | grep -q '^\.\.\.$'; then
     die "Evaluator report Evidence section still contains placeholder content"
   fi
+
+  generator_report_executor_id="$(artifact_metadata_field_get "04-implementation-report.md" executor_id)"
+  evaluator_report_generator_executor_id="$(artifact_metadata_field_get "05-evaluator-report.md" generator_executor_id)"
+  evaluator_report_executor_id="$(artifact_metadata_field_get "05-evaluator-report.md" evaluator_executor_id)"
+  same_executor_as_generator="$(artifact_metadata_field_get "05-evaluator-report.md" same_executor_as_generator)"
+
+  [ -n "$evaluator_report_generator_executor_id" ] || die "05-evaluator-report.md missing generator_executor_id"
+  [ -n "$evaluator_report_executor_id" ] || die "05-evaluator-report.md missing evaluator_executor_id"
+  [ "$same_executor_as_generator" = "false" ] || die "05-evaluator-report.md must set same_executor_as_generator: false"
+  [ "$evaluator_report_generator_executor_id" = "$generator_report_executor_id" ] || die "05-evaluator-report.md generator_executor_id must match 04-implementation-report.md executor_id"
+  [ "$evaluator_report_executor_id" = "$(artifact_metadata_field_get "05-evaluator-report.md" executor_id)" ] || die "05-evaluator-report.md evaluator_executor_id must match executor_id"
+  [ "$evaluator_report_executor_id" != "$evaluator_report_generator_executor_id" ] || die "Evaluator cannot be the same executor_id as Generator"
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -254,6 +362,10 @@ require_artifacts_for_state
 if [ "$STATE" = "GENERATING" ]; then
   [ "$APPROVED_FOR_IMPLEMENTATION" = "true" ] || die "GENERATING is invalid unless approved_for_implementation: true"
   [ "$GENERATOR_ALLOWED" = "true" ] || die "GENERATING is invalid unless generator_allowed: true"
+fi
+
+if [ "$GENERATOR_ALLOWED" = "true" ]; then
+  require_contract_review_approved
 fi
 
 if [ "$STATE" = "COMPLETED" ]; then

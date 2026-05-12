@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/.harness"
 RUNS_DIR="$HARNESS_DIR/runs"
+RUN_INDEX="$RUNS_DIR/RUN_INDEX.md"
 
 usage() {
   cat <<'EOF'
@@ -125,7 +126,77 @@ append_or_update_run_index() {
 }
 
 update_global_epic_index() {
-  :
+  local row
+
+  row="| child-run | $EPIC_ID | $RUN_ID | $TASK | $STATUS | $BRANCH |  | agent | $NOW | $NOW |"
+
+  if [ ! -f "$RUN_INDEX" ]; then
+    cat > "$RUN_INDEX" <<'EOF'
+# Harness Run Index
+
+| Type | Parent | ID | Task | Status | Branch | Worktree | Owner | Started At | Last Updated |
+|---|---|---|---|---|---|---|---|---|---|
+
+## Status Values
+
+- active
+- CREATED
+- PLANNING
+- CONTRACTING
+- CONTRACT_REVIEW
+- APPROVED_FOR_IMPLEMENTATION
+- GENERATING
+- EVALUATING
+- COMPLETED
+- REJECTED_FOR_REPLAN
+- BLOCKED_FOR_EXECUTOR_UNAVAILABLE
+- FAILED_VERIFICATION
+- CANCELLED
+EOF
+  fi
+
+  if grep -qF "| child-run | $EPIC_ID | $RUN_ID |" "$RUN_INDEX"; then
+    if command -v perl >/dev/null 2>&1; then
+      ROW="$row" EPIC_ID="$EPIC_ID" RUN_ID="$RUN_ID" perl -pi -e 's/^\| child-run \| \Q$ENV{EPIC_ID}\E \| \Q$ENV{RUN_ID}\E \|.*$/$ENV{ROW}/' "$RUN_INDEX"
+    else
+      sed -i "/^| child-run | $EPIC_ID | $RUN_ID |/c\\$row" "$RUN_INDEX"
+    fi
+  elif grep -qE '^## Status Values' "$RUN_INDEX"; then
+    local tmp
+    tmp="${RUN_INDEX}.tmp.$$"
+    awk -v row="$row" '
+      BEGIN { inserted = 0; has_prev = 0; prev = "" }
+      /^## Status Values/ && inserted == 0 {
+        if (has_prev == 1 && prev != "") {
+          print prev
+        }
+        print row
+        print ""
+        print
+        inserted = 1
+        has_prev = 0
+        next
+      }
+      {
+        if (has_prev == 1) {
+          print prev
+        }
+        prev = $0
+        has_prev = 1
+      }
+      END {
+        if (has_prev == 1) {
+          print prev
+        }
+        if (inserted == 0) {
+          print row
+        }
+      }
+    ' "$RUN_INDEX" > "$tmp"
+    mv "$tmp" "$RUN_INDEX"
+  else
+    printf "%s\n" "$row" >> "$RUN_INDEX"
+  fi
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then

@@ -1,6 +1,6 @@
 # Planner Brief
 
-## Runtime Metadata
+## Executor Metadata
 
 ```yaml
 role: Planner
@@ -9,7 +9,9 @@ executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/planner.md
+template_source: .harness/subagents/planner.md
+started_at: <required>
+completed_at: <required>
 independence: independent
 ```
 

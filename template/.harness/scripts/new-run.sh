@@ -18,8 +18,10 @@ Usage:
 
 Create a new Harness run. Use --within for a child run inside an Epic container.
 --epic remains as a backward-compatible alias for --within.
-Oversized task signals are blocked by default. --force-normal-run is explicit
-bounded override and is not valid for broad or multi-phase work.
+Oversized task signals are blocked by default. --force-normal-run is allowed
+only when the task is explicitly bounded and has no Epic signal. It must not
+be used for phase, full feature, MVP, core loop, complete playable,
+multi-module, or end-to-end work.
 EOF
 }
 
@@ -122,7 +124,7 @@ oversized_signal_reason() {
     return 0
   fi
 
-  for match in full complete mvp large long multi workflow module milestone; do
+  for match in full complete mvp large long multi workflow module milestone toan-bo hoan-thien day-du nhieu-phan-he nhieu-luong tu-dau-toi-cuoi; do
     if printf "%s\n" "$s" | grep -Eq "(^|-)$match($|-)"; then
       printf "contains oversized task signal: %s" "$match"
       return 0
@@ -132,16 +134,71 @@ oversized_signal_reason() {
   return 1
 }
 
+hard_epic_signal_reason() {
+  local s="$1"
+  local match
+
+  match="$(printf "%s\n" "$s" | sed -n -E 's/.*(^|-)phase-([0-9]+-[0-9]+)($|-).*/phase-\2/p' | head -n 1)"
+  if [ -n "$match" ]; then
+    printf "contains non-overridable Epic signal: %s" "$match"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)phase($|-)'; then
+    printf "contains non-overridable Epic signal: phase"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)core-loop($|-)'; then
+    printf "contains non-overridable Epic signal: core-loop"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)end-to-end($|-)'; then
+    printf "contains non-overridable Epic signal: end-to-end"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)multi-module($|-)'; then
+    printf "contains non-overridable Epic signal: multi-module"
+    return 0
+  fi
+
+  for match in full complete mvp; do
+    if printf "%s\n" "$s" | grep -Eq "(^|-)$match($|-)"; then
+      printf "contains non-overridable Epic signal: %s" "$match"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 enforce_run_classification() {
   local reason
+  local hard_reason
   local epic_slug
+
+  if hard_reason="$(hard_epic_signal_reason "$slug")"; then
+    echo "ERROR: Task has a strong Epic signal and cannot be forced into a normal run." >&2
+    echo "Reason: $hard_reason" >&2
+    if [ -n "$EPIC_ID" ]; then
+      echo "This child run appears too broad. Create smaller independently verifiable child runs under: $EPIC_ID" >&2
+    else
+      epic_slug="$(printf "%s\n" "$slug" | sed -E 's/(^|-)phase-[0-9]+-[0-9]+($|-)/-/g; s/(^|-)part-[0-9]+-[0-9]+($|-)/-/g; s/(^|-)phase($|-)/-/g; s/(^|-)part($|-)/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+      [ -n "$epic_slug" ] || epic_slug="$slug"
+      echo "Use: bash .harness/scripts/new-epic.sh \"${epic_slug}\"" >&2
+    fi
+    echo "--force-normal-run is allowed only for explicitly bounded tasks with no Epic signal." >&2
+    exit 1
+  fi
 
   if reason="$(oversized_signal_reason "$slug")"; then
     if [ "$FORCE_NORMAL_RUN" -eq 1 ]; then
       echo "WARNING: Task appears too large for a normal run." >&2
       echo "Reason: $reason" >&2
       echo "Continuing only because --force-normal-run was provided." >&2
-      echo "This is not valid for broad, multi-phase, Epic, or child-run work." >&2
+      echo "This is allowed only when the task is explicitly bounded and has no Epic signal." >&2
       return
     fi
 
@@ -154,7 +211,7 @@ enforce_run_classification() {
       [ -n "$epic_slug" ] || epic_slug="$slug"
       echo "Use: bash .harness/scripts/new-epic.sh \"${epic_slug}\"" >&2
     fi
-    echo "Override only for an explicitly bounded, non-production exception with: --force-normal-run" >&2
+    echo "Override only when explicitly bounded and no Epic signal is present: --force-normal-run" >&2
     exit 1
   fi
 }

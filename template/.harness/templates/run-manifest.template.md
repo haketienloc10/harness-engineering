@@ -4,8 +4,8 @@
 
 - mode: template_subagents_required
 - fallback_allowed: false
-- subagent_runtime_available: false
-- run_status: running
+- subagent_runtime_available: unknown
+- run_status: created_pending_executor_check
 
 ## Required Role Instances
 

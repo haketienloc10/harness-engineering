@@ -21,7 +21,7 @@ Epic signals include:
 - multiple user flows;
 - multiple modules;
 - uncertain or expanding scope;
-- task text such as `phase`, `phase 1-4`, `part 1-4`, `core loop`, `full feature`, `complete playable`, `end-to-end`, `MVP`, `large task`, `long task`, or equivalent wording;
+- task text such as `phase`, `phase 1-4`, `part 1-4`, `core loop`, `full feature`, `complete playable`, `end-to-end`, `MVP`, `large task`, `long task`, `toan-bo`, `hoan-thien`, `day-du`, `nhieu-phan-he`, `nhieu-luong`, `tu-dau-toi-cuoi`, or equivalent wording;
 - cannot produce a clean verification result in one run;
 - implementation would require several independently verifiable checkpoints.
 

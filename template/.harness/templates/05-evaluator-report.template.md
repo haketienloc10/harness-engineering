@@ -1,6 +1,6 @@
 # Evaluator Report
 
-## Runtime Metadata
+## Executor Metadata
 
 ```yaml
 role: Evaluator
@@ -9,9 +9,13 @@ executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/evaluator.md
+template_source: .harness/subagents/evaluator.md
+started_at: <required>
+completed_at: <required>
 independence: independent
 generator_executor_id: <required>
+evaluator_executor_id: <required>
+same_executor_as_generator: false
 ```
 
 ## Independence Check

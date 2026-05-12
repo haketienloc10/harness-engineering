@@ -38,7 +38,7 @@ Epic container:
 
 ## Khi Nào Tạo Epic
 
-Epic là bắt buộc khi task có bất kỳ tín hiệu long-task hoặc multi-phase nào. Một task tên hoặc request có dạng `phase 1-4`, `part 1-4`, `core loop`, `complete playable`, `full feature`, `end-to-end`, `MVP`, `large task`, hoặc `long task` không được tạo thành một normal run.
+Epic là bắt buộc khi task có bất kỳ tín hiệu long-task hoặc multi-phase nào. Một task tên hoặc request có dạng `phase 1-4`, `part 1-4`, `core loop`, `complete playable`, `full feature`, `end-to-end`, `MVP`, `large task`, `long task`, `toan-bo`, `hoan-thien`, `day-du`, `nhieu-phan-he`, `nhieu-luong`, hoặc `tu-dau-toi-cuoi` không được tạo thành một normal run.
 
 Tạo Epic khi task thật sự cần nhiều run độc lập, ví dụ:
 

@@ -50,10 +50,14 @@ executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/<role>.md
+template_source: .harness/subagents/<role>.md
+started_at: <required>
+completed_at: <required>
 independence: independent
 role: Planner | ContractReviewer | Generator | Evaluator | Coordinator
 ```
+
+New role artifacts must use `template_source` for validator checks. `role_template` may exist only as legacy context.
 
 Existing old runs may not have this metadata. New runs should include it. Old runs should not be rewritten unless explicitly requested.
 

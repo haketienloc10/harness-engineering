@@ -27,6 +27,8 @@ Required dispatch:
 
 If the runtime cannot spawn subagents, the run must enter `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` before Planner execution. There is no degraded single-session fallback.
 
+The same Planner subagent instance may continue from `PLANNING` into `CONTRACTING` when it is the same bounded run and the executor id is recorded for both phase outputs. If a new Planner instance is spawned for `CONTRACTING`, record the new executor id explicitly in the contract artifact and `run.yaml`.
+
 Required blocked message:
 
 ```text

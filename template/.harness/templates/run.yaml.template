@@ -5,7 +5,7 @@ task: "<TASK>"
 runtime:
   mode: template_subagents_required
   agent_runtime: ""
-  subagent_runtime_available: false
+  subagent_runtime_available: unknown
   fallback_allowed: false
 
 state: CREATED

@@ -1,6 +1,6 @@
 # Implementation Report
 
-## Runtime Metadata
+## Executor Metadata
 
 ```yaml
 role: Generator
@@ -9,7 +9,9 @@ executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/generator.md
+template_source: .harness/subagents/generator.md
+started_at: <required>
+completed_at: <required>
 independence: independent
 contract_reviewer_executor_id: <required>
 ```

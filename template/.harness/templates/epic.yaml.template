@@ -1,5 +1,6 @@
 epic_id: <EPIC-ID>
 task_slug: <TASK-SLUG>
+container_type: epic
 status: active
 owner: agent
 created_at: <CREATED-AT>
@@ -16,7 +17,8 @@ scope:
 
 decomposition:
   strategy: milestone
-  run_count_estimate: unknown
+  minimum_required_child_runs: 2
+  run_count_estimate: "2+"
   active_run_id: ""
 
 acceptance:

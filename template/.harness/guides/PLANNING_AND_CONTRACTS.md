@@ -2,7 +2,7 @@
 
 ## Epic Check
 
-Trước khi tạo một run, quyết định task có thuộc Epic không. Nếu task có nhiều milestone, nhiều user flow, nhiều module, scope chưa chắc, hoặc không thể verify gọn trong một run, dùng `.harness/guides/LONG_TASK_POLICY.md` và chia thành nhiều run nhỏ.
+Trước khi tạo một run, quyết định task có thuộc Epic container không. Nếu task có nhiều milestone, nhiều user flow, nhiều module, scope chưa chắc, hoặc không thể verify gọn trong một run, dùng `.harness/guides/LONG_TASK_POLICY.md` và chia thành nhiều child runs nhỏ. Chỉ tạo Epic khi planner xác định được ít nhất hai child runs có thể verify độc lập; nếu chỉ biết một run, tạo normal run và ghi follow-up proposal/backlog.
 
 ## Planner Brief
 

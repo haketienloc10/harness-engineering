@@ -13,5 +13,13 @@ else
 fi
 
 echo
-echo "== Run folders =="
+echo "== Root run folders =="
 find "$RUNS_DIR" -maxdepth 1 -type d -name 'RUN-*' -printf '%f\n' 2>/dev/null | sort || true
+
+echo
+echo "== Epic containers =="
+find "$RUNS_DIR" -maxdepth 1 -type d -name 'EPIC-*' -printf '%f\n' 2>/dev/null | sort || true
+
+echo
+echo "== Child run folders =="
+find "$RUNS_DIR" -mindepth 3 -maxdepth 3 -type d -path "$RUNS_DIR/EPIC-*/runs/RUN-*" -printf '%P\n' 2>/dev/null | sort || true

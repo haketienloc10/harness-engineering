@@ -2,57 +2,90 @@
 
 ## Mục đích
 
-Harness dùng hai tầng để xử lý task dài hơi:
+Harness dùng một execution namespace:
+
+```txt
+.harness/runs/
+```
 
 - `Run`: đơn vị thực thi nhỏ, có contract và verification riêng.
-- `Epic`: đơn vị điều phối dài hơi, giữ mục tiêu tổng, milestone, dependency, decision log, acceptance matrix, và run index.
+- `Epic`: run container để điều phối task dài hơi, giữ mục tiêu tổng, roadmap, decision log, acceptance matrix, và index của các child runs.
 
-Không ép một task lớn vào một run khổng lồ. Long task phải được chia thành nhiều run nhỏ có thể verify độc lập.
+Epic không phải implementation run và không phải metadata folder độc lập. Chỉ child runs trong `EPIC-.../runs/` mới chứa implementation contract, generator worklog, evaluator report, fix report, và final summary.
 
-## Khi Nào Phải Tạo Epic
+## Layout
 
-Agent phải tạo Epic trước khi tạo run nếu task có một trong các dấu hiệu:
+Normal run:
 
-- cần nhiều hơn 1 milestone;
-- có nhiều user flow;
-- liên quan nhiều module;
-- cần nhiều vòng implement/review;
-- scope chưa thể đóng trong một run;
+```txt
+.harness/runs/RUN-YYYYMMDD-NNN-task-slug/
+```
+
+Epic container:
+
+```txt
+.harness/runs/EPIC-YYYYMMDD-NNN-task-slug/
+  epic.yaml
+  00-epic-overview.md
+  01-roadmap.md
+  02-acceptance-matrix.md
+  03-decision-log.md
+  04-run-index.md
+  runs/
+    RUN-001-child-task/
+```
+
+## Khi Nào Tạo Epic
+
+Tạo Epic khi task thật sự cần nhiều run độc lập, ví dụ:
+
+- nhiều milestone có thể verify riêng;
+- nhiều user flow hoặc module tách biệt;
+- cần nhiều vòng implementation/review;
+- scope chưa thể đóng sạch trong một run;
 - dài hơn một phiên làm việc;
-- cần dependency giữa các bước;
-- có acceptance criteria cấp cao và acceptance criteria cấp run;
-- không thể verify trong một lần hợp lý.
+- có dependency giữa các bước;
+- có acceptance criteria cấp Epic và acceptance criteria cấp run.
 
-Rule bắt buộc: nếu task có nhiều milestone, nhiều feature, nhiều màn hình, nhiều module, hoặc không thể verify trong một lần hợp lý, agent không được tạo một run khổng lồ. Agent phải tạo Epic trước, sau đó chia thành nhiều run nhỏ.
+Rule bắt buộc: agent không được tạo Epic nếu chỉ xác định được một concrete run. Nếu task đủ lớn để tạo Epic, planner phải định nghĩa ít nhất hai child runs có thể verify độc lập trước khi implementation bắt đầu.
 
-## Khi Nào Chỉ Cần Run Đơn
+## Khi Chỉ Tạo Normal Run
 
-Dùng một run đơn nếu:
+Dùng normal run nếu:
 
-- scope nhỏ;
+- chỉ biết một run cụ thể;
+- scope nhỏ hoặc có thể verify trong một lần hợp lý;
 - impacted files ít;
 - acceptance criteria rõ;
-- verification có thể hoàn thành ngay;
-- không cần roadmap hoặc milestone;
-- không có dependency đáng kể giữa nhiều bước.
+- không cần roadmap hoặc dependency đáng kể.
 
-## Cách Chia Epic Thành Run Nhỏ
+Nếu chỉ biết một run nhưng nghi có follow-up, tạo normal run và ghi follow-up proposal/backlog thay vì tạo Epic rỗng hoặc Epic chỉ có một run.
 
-Mỗi run trong Epic phải có mục tiêu hẹp và evidence rõ:
+## Cách Chia Epic Thành Child Runs
+
+Mỗi child run phải có mục tiêu hẹp và evidence rõ:
 
 - một milestone nhỏ;
 - một user flow;
-- một module hoặc một lát thay đổi kỹ thuật;
+- một module hoặc lát thay đổi kỹ thuật;
 - một migration hoặc adapter riêng;
 - một vòng fix/evaluation tách biệt nếu rủi ro cao.
 
-Mỗi run vẫn giữ lifecycle bình thường:
+Tạo child run bằng:
+
+```bash
+bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child task"
+```
+
+`--epic` có thể tồn tại như alias tương thích, nhưng docs và workflow mới phải dùng `--within`.
+
+Mỗi child run vẫn giữ lifecycle bình thường:
 
 ```txt
 Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary
 ```
 
-Mỗi run phải có acceptance criteria cấp run. Acceptance criteria cấp Epic được track trong `02-acceptance-matrix.md`.
+Acceptance criteria cấp Epic được track trong `02-acceptance-matrix.md`; evidence phải trỏ tới child runs.
 
 ## Quy Tắc Không Tạo Run Khổng Lồ
 
@@ -64,17 +97,18 @@ Không tạo run có contract quá rộng, ví dụ:
 - verification phải chờ toàn bộ project hoàn tất;
 - worklog/final summary dự kiến quá dài để resume an toàn.
 
-Nếu contract bắt đầu phình to, dừng lại và chuyển task sang Epic hoặc tách run tiếp theo trong Epic hiện có.
+Nếu contract bắt đầu phình to, dừng lại và chuyển task sang Epic chỉ khi xác định được ít nhất hai child runs. Nếu chưa xác định được, đóng phạm vi run hiện tại và ghi follow-up.
 
 ## Quy Tắc Resume Long Task
 
 Khi resume task dài hơi:
 
-1. Kiểm tra `.harness/epics/EPIC_INDEX.md`.
-2. Đọc Epic active liên quan: `epic.yaml`, `00-epic-overview.md`, `01-roadmap.md`, `02-acceptance-matrix.md`, `03-decision-log.md`, `04-run-index.md`.
-3. Xác định run gần nhất và trạng thái verification.
-4. Chỉ tạo run mới khi biết rõ milestone tiếp theo và dependency đã đủ.
-5. Không sửa artifact cũ để che failure; tạo fix report hoặc run mới tùy phạm vi.
+1. Kiểm tra `.harness/runs/RUN_INDEX.md`.
+2. Tìm Epic container liên quan dưới `.harness/runs/EPIC-*`.
+3. Đọc `epic.yaml`, `00-epic-overview.md`, `01-roadmap.md`, `02-acceptance-matrix.md`, `03-decision-log.md`, và `04-run-index.md`.
+4. Xác định child run gần nhất và trạng thái verification.
+5. Chỉ tạo child run mới khi biết rõ milestone tiếp theo và dependency đã đủ.
+6. Không sửa artifact cũ để che failure; tạo fix report hoặc child run mới tùy phạm vi.
 
 Nếu user tiếp tục cùng một mục tiêu lớn, agent phải ưu tiên dùng Epic active hiện có thay vì tạo Epic trùng lặp.
 
@@ -85,11 +119,11 @@ Evaluator ở cấp run kiểm chứng acceptance criteria của run.
 Evaluator ở cấp Epic kiểm tra:
 
 - các required Epic acceptance criteria đã Pass;
-- mỗi criteria có evidence từ run liên quan;
-- các run liên quan có evaluator report;
+- mỗi criteria có evidence từ child run liên quan;
+- các child runs liên quan có evaluator report;
 - decision log phản ánh quyết định lớn;
 - không còn blocker mở;
-- roadmap và run index khớp thực tế.
+- roadmap và `04-run-index.md` khớp thực tế.
 
 Evaluator không được đóng Epic chỉ vì run cuối pass nếu acceptance matrix cấp Epic chưa đủ evidence.
 
@@ -98,10 +132,11 @@ Evaluator không được đóng Epic chỉ vì run cuối pass nếu acceptance
 Chỉ đóng Epic khi:
 
 - tất cả required acceptance criteria trong `02-acceptance-matrix.md` đã Pass;
-- các run liên quan đã có evaluator report;
+- mọi required acceptance row có evidence từ child runs;
+- các child runs liên quan đã có evaluator report;
 - không còn blocker mở;
 - decision log đã được cập nhật;
 - final epic summary đã được viết hoặc `00-epic-overview.md` đã cập nhật trạng thái cuối;
-- `epic.yaml` và `EPIC_INDEX.md` được cập nhật status.
+- `epic.yaml`, `04-run-index.md`, và `.harness/runs/RUN_INDEX.md` được cập nhật status.
 
-Nếu scope thay đổi lớn, ghi quyết định vào `03-decision-log.md` trước khi tạo run tiếp theo.
+Legacy `.harness/epics/` từ Harness cũ không bị xóa khi update, nhưng workflow mới không được tạo Epic mới ở đó.

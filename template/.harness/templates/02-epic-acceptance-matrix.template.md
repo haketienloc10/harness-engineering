@@ -17,7 +17,8 @@
 Epic chỉ được đóng khi:
 
 - [ ] Tất cả required acceptance criteria đã Pass
-- [ ] Các run liên quan đã có evaluator report
+- [ ] Mỗi required row có evidence từ child runs
+- [ ] Các child runs liên quan đã có evaluator report
 - [ ] Không còn blocker mở
 - [ ] Decision log đã được cập nhật
 - [ ] Final epic summary đã được viết hoặc overview đã được cập nhật

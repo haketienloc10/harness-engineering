@@ -91,6 +91,12 @@ Với mọi implementation task không tầm thường, tạo một run dưới:
 .harness/runs/RUN-YYYYMMDD-NNN-task-slug/
 ```
 
+Nếu implementation task là một phần của Epic, tạo child run dưới:
+
+```txt
+.harness/runs/EPIC-YYYYMMDD-NNN-task-slug/runs/RUN-NNN-child-task-slug/
+```
+
 Một run hợp lệ phải có và duy trì:
 
 ```txt
@@ -124,15 +130,31 @@ Không sửa application code trước khi `03-evaluator-contract-review.md` app
 
 For long-running tasks, do not create a single giant run.
 
-Create an Epic when the task has multiple milestones, multiple user flows, multiple modules, uncertain scope, or cannot be verified cleanly in one run.
+Epic is a planning and coordination run container, not a standalone metadata folder and not a normal implementation run.
+
+Create an Epic only when the task has multiple milestones, multiple user flows, multiple modules, uncertain scope, or cannot be verified cleanly in one run, and the planner can identify at least two independently verifiable child runs before implementation.
+
+If only one concrete run is known, create a normal run and add follow-up proposal/backlog instead of creating an Epic.
 
 Epic artifacts live under:
 
 ```txt
-.harness/epics/EPIC-YYYYMMDD-NNN-task-slug/
+.harness/runs/EPIC-YYYYMMDD-NNN-task-slug/
 ```
 
-Each Epic must be decomposed into smaller runs. Each run keeps the normal Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary lifecycle.
+Child runs live under:
+
+```txt
+.harness/runs/EPIC-YYYYMMDD-NNN-task-slug/runs/RUN-NNN-child-task-slug/
+```
+
+Create child runs with:
+
+```bash
+bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child task"
+```
+
+Each Epic must be decomposed into smaller child runs. Each child run keeps the normal Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary lifecycle.
 
 Before creating a run for a long task, check whether an active Epic should own the run.
 

@@ -32,10 +32,11 @@ Update = optional, explicit, ownership-safe merge
 - Không coi `.harness/` trong target repo là application source code.
 - Không reset run history, backlog local, hoặc project adapter khi update.
 
-Harness hỗ trợ 2 tầng làm việc:
+Harness dùng một execution namespace:
 
-- Epic / Workstream layer: dùng cho long-running tasks, giữ roadmap, acceptance matrix, decision log, và run index.
-- Run layer: dùng cho từng implementation unit, giữ planner, contract, evaluator, worklog, và final summary.
+- `.harness/runs/RUN-*`: normal runs cho từng implementation unit.
+- `.harness/runs/EPIC-*`: Epic containers cho long-running tasks, giữ roadmap, acceptance matrix, decision log, và child run index.
+- `.harness/runs/EPIC-*/runs/RUN-*`: child runs, là nơi chứa implementation contract, evaluator report, worklog, và final summary.
 
 ## Cài nhanh bằng curl
 
@@ -99,15 +100,14 @@ target-repo/
     project/
     scripts/
     backlog/
-    epics/
     runs/
 ```
 
 Các vùng ownership-safe:
 
 - `.harness/project/*` chỉ được tạo nếu chưa có. Đây là project adapter của repo đích.
-- `.harness/runs/*` không bị reset khi update.
-- `.harness/epics/*` không bị reset khi update. Installer không copy epic history từ seed.
+- `.harness/runs/*` không bị reset khi update. Thư mục này chứa normal runs, Epic containers, và child runs.
+- Legacy `.harness/epics/*`, nếu có từ Harness cũ, không bị xóa khi update.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
 - `.harness/guides/*`, `.harness/templates/*`, `.harness/scripts/*`, `.harness/project-templates/*` là kernel/template layer có thể được update có chủ đích.
 - `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*` là Harness workflow skill layer được cài vào target repo; installer không xóa skill file local khác.
@@ -185,8 +185,6 @@ template/
       smoke.sh
     backlog/
       HARNESS_BACKLOG.md
-    epics/
-      .gitkeep
     runs/
       .gitkeep
 ```

@@ -31,7 +31,7 @@ If a file is missing, record that as evidence. Do not treat missing files as an 
 From the current Harness state, identify:
 
 - Existing project facts and manual notes.
-- Active or recent runs/epics that may reveal project context.
+- Active or recent root runs, Epic containers, and child runs that may reveal project context.
 - Backlog items that mention local workflow or project constraints.
 - Local instructions that affect context, verification, or source boundaries.
 - Contradictions, stale assumptions, and low-confidence claims.

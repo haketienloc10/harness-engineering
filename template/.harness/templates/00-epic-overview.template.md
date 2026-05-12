@@ -14,7 +14,7 @@
 
 ## Why This Is An Epic
 
-<Ghi rõ vì sao không nên là một run đơn>
+<Ghi rõ vì sao không nên là một run đơn và liệt kê ít nhất hai child runs có thể verify độc lập>
 
 ## Scope
 

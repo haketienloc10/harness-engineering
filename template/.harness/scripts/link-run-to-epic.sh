@@ -3,13 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HARNESS_DIR="$ROOT_DIR/.harness"
-EPICS_DIR="$HARNESS_DIR/epics"
 RUNS_DIR="$HARNESS_DIR/runs"
+LEGACY_EPICS_DIR="$HARNESS_DIR/epics"
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash .harness/scripts/link-run-to-epic.sh EPIC-YYYYMMDD-NNN-task RUN-YYYYMMDD-NNN-task
+  bash .harness/scripts/link-run-to-epic.sh EPIC-YYYYMMDD-NNN-task RUN-ID
 
 Link an existing Harness run to an existing Harness Epic.
 EOF
@@ -82,13 +82,46 @@ append_or_update_run_index() {
     else
       sed -i "/^| $RUN_ID |/c\\$row" "$file"
     fi
+  elif grep -qE '^## Run Status Values' "$file"; then
+    local tmp
+    tmp="${file}.tmp.$$"
+    awk -v row="$row" '
+      BEGIN { inserted = 0; has_prev = 0; prev = "" }
+      /^## Run Status Values/ && inserted == 0 {
+        if (has_prev == 1 && prev != "") {
+          print prev
+        }
+        print row
+        print ""
+        print
+        inserted = 1
+        has_prev = 0
+        next
+      }
+      {
+        if (has_prev == 1) {
+          print prev
+        }
+        prev = $0
+        has_prev = 1
+      }
+      END {
+        if (has_prev == 1) {
+          print prev
+        }
+        if (inserted == 0) {
+          print row
+        }
+      }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
   else
     printf "%s\n" "$row" >> "$file"
   fi
 }
 
 update_global_epic_index() {
-  local file="$EPICS_DIR/EPIC_INDEX.md"
+  local file="$LEGACY_EPICS_DIR/EPIC_INDEX.md"
   local tmp
 
   if [ ! -f "$file" ] || ! grep -qF "| $EPIC_ID |" "$file"; then
@@ -116,8 +149,21 @@ fi
 
 EPIC_ID="$1"
 RUN_ID="$2"
-EPIC_DIR="$EPICS_DIR/$EPIC_ID"
-RUN_DIR="$RUNS_DIR/$RUN_ID"
+if [ -d "$RUNS_DIR/$EPIC_ID" ]; then
+  EPIC_DIR="$RUNS_DIR/$EPIC_ID"
+elif [ -d "$LEGACY_EPICS_DIR/$EPIC_ID" ]; then
+  EPIC_DIR="$LEGACY_EPICS_DIR/$EPIC_ID"
+else
+  die "Epic directory not found: $RUNS_DIR/$EPIC_ID"
+fi
+
+if [ -d "$EPIC_DIR/runs/$RUN_ID" ]; then
+  RUN_DIR="$EPIC_DIR/runs/$RUN_ID"
+elif [ -d "$RUNS_DIR/$RUN_ID" ]; then
+  RUN_DIR="$RUNS_DIR/$RUN_ID"
+else
+  die "Run directory not found: $RUN_ID"
+fi
 RUN_YAML="$RUN_DIR/run.yaml"
 EPIC_YAML="$EPIC_DIR/epic.yaml"
 EPIC_RUN_INDEX="$EPIC_DIR/04-run-index.md"

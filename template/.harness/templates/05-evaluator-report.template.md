@@ -4,11 +4,12 @@
 
 ```yaml
 role: Evaluator
-runtime_mode: production_multi_executor
-executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
+runtime_mode: template_subagents_required
+executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
+role_template: .harness/subagents/evaluator.md
 independence: independent
 generator_executor_id: <required>
 ```
@@ -16,15 +17,14 @@ generator_executor_id: <required>
 ## Independence Check
 
 - Evaluator executor is separate from Generator executor: yes | no
-- If no, is fallback explicitly allowed for this task: yes | no
-- Decision if not independent and fallback not allowed: FAIL
+- Evaluator was spawned from `.harness/subagents/evaluator.md`: yes | no
+- Decision if not independent or not template-based: fail
 
 ## Evaluation Decision
 
-- [ ] Pass
-- [ ] Fail
-- [ ] Pass with Notes
-- [ ] Blocked
+- [ ] pass
+- [ ] fail
+- [ ] blocked_insufficient_evidence
 
 ## What Was Evaluated
 
@@ -95,7 +95,7 @@ Include exact commands, outputs, logs, screenshots descriptions, browser/API evi
 
 ## Decision
 
-- Status: PASS | FAIL
+- Status: pass | fail | blocked_insufficient_evidence
 - Reason:
 
 ## Notes for Generator

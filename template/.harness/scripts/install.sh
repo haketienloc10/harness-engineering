@@ -36,6 +36,8 @@ Ownership-safe rules:
   - Do not overwrite .harness/backlog/HARNESS_BACKLOG.md if it already exists.
   - Kernel folders may be replaced on update:
     .harness/guides/
+    .harness/subagents/
+    .harness/workflows/
     .harness/templates/
     .harness/project-templates/
     .harness/scripts/
@@ -170,6 +172,8 @@ This target repository owns its installed \`.harness/\` tree.
 - \`.harness/backlog/HARNESS_BACKLOG.md\` belongs to this target repository. The installer does not overwrite it if it already exists.
 - Kernel folders may be replaced during an explicit update:
   - \`.harness/guides/\`
+  - \`.harness/subagents/\`
+  - \`.harness/workflows/\`
   - \`.harness/templates/\`
   - \`.harness/project-templates/\`
   - \`.harness/scripts/\`
@@ -344,6 +348,8 @@ install_harness_tree() {
   write_installation_note "$target_harness/INSTALLATION.md"
 
   copy_dir_replace "$SOURCE_HARNESS_DIR/guides" "$target_harness/guides"
+  copy_dir_replace "$SOURCE_HARNESS_DIR/subagents" "$target_harness/subagents"
+  copy_dir_replace "$SOURCE_HARNESS_DIR/workflows" "$target_harness/workflows"
   copy_dir_replace "$SOURCE_HARNESS_DIR/templates" "$target_harness/templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/project-templates" "$target_harness/project-templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/scripts" "$target_harness/scripts"
@@ -440,6 +446,8 @@ main() {
   esac
 
   [ -d "$SOURCE_HARNESS_DIR/guides" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/guides"
+  [ -d "$SOURCE_HARNESS_DIR/subagents" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/subagents"
+  [ -d "$SOURCE_HARNESS_DIR/workflows" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/workflows"
   [ -d "$SOURCE_HARNESS_DIR/codebase" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/codebase"
   [ -f "$SOURCE_TEMPLATE_DIR/AGENTS.md" ] || die "Invalid template: missing $SOURCE_TEMPLATE_DIR/AGENTS.md"
 

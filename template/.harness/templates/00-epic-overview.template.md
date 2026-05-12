@@ -6,11 +6,12 @@ This artifact records the Epic input and Epic planner brief. Implementation must
 
 ```yaml
 role: Planner
-runtime_mode: production_multi_executor
-executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
+runtime_mode: template_subagents_required
+executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
+role_template: .harness/subagents/planner.md
 independence: independent
 ```
 
@@ -33,7 +34,7 @@ independence: independent
 ## Epic Planner Brief
 
 - Primary objective:
-- Production role separation required: yes
+- Template-based subagent orchestration required: yes
 - Normal run would be oversized because:
 
 ## Scope

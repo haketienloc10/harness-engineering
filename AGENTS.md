@@ -25,6 +25,7 @@ Sau khi install, target repository sở hữu `.harness/` của chính nó và c
 - `template/.harness/` là installed harness template.
 - `template/AGENTS.md` là root agent instruction được cài vào target repo.
 - Root repo không được có `.harness/` cạnh tranh với `template/.harness/` như install source.
+- Template-based subagent orchestration policy lives in `template/AGENTS.md`, `template/.harness/subagents/`, and `template/.harness/workflows/`.
 
 ## Change Rules
 
@@ -41,7 +42,8 @@ Khi chỉnh installer/template:
 - không làm installer overwrite `.harness/project/*` trong target repo;
 - không reset `.harness/runs/RUN_INDEX.md` trong target repo;
 - không overwrite `.harness/backlog/HARNESS_BACKLOG.md` nếu target đã có;
-- chỉ replace kernel folders khi update: `.harness/guides/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
+- chỉ replace kernel folders khi update: `.harness/guides/`, `.harness/subagents/`, `.harness/workflows/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
+- khi thêm Harness kernel folder mới, installer và README phải liệt kê rõ folder đó.
 
 ## Verification
 

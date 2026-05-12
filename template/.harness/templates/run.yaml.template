@@ -3,10 +3,10 @@ parent_epic: <PARENT-EPIC>
 task: "<TASK>"
 
 runtime:
-  mode: production_multi_executor
+  mode: template_subagents_required
   agent_runtime: ""
-  independent_executors_required: true
-  fallback_single_session_allowed: false
+  subagent_runtime_available: false
+  fallback_allowed: false
 
 state: CREATED
 current_role: Orchestrator
@@ -23,23 +23,27 @@ last_artifact: 00-input.md
 
 role_executors:
   orchestrator:
-    executor_type:
+    executor_type: coordinator
     executor_id:
   planner:
-    executor_type:
+    executor_type: subagent
     executor_id:
+    template: .harness/subagents/planner.md
     artifact:
   contract_reviewer:
-    executor_type:
+    executor_type: subagent
     executor_id:
+    template: .harness/subagents/contract-reviewer.md
     artifact:
   generator:
-    executor_type:
+    executor_type: subagent
     executor_id:
+    template: .harness/subagents/generator.md
     artifact:
   evaluator:
-    executor_type:
+    executor_type: subagent
     executor_id:
+    template: .harness/subagents/evaluator.md
     artifact:
 
 allowed_states:
@@ -58,10 +62,6 @@ allowed_states:
 
 allowed_executor_types:
   - subagent
-  - task_tool
-  - external_agent_session
-  - isolated_process
-  - fallback_single_session
 
 blocked_reason: ""
 
@@ -72,6 +72,8 @@ scope:
   oversized_normal_run_status: ""
   protected_files:
     - .harness/guides/**
+    - .harness/subagents/**
+    - .harness/workflows/**
     - .harness/templates/**
     - .harness/project-templates/**
     - .harness/scripts/**

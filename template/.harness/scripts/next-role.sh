@@ -41,6 +41,37 @@ runtime_get() {
   ' "$RUN_YAML"
 }
 
+write_blocked_manifest() {
+  cat > "$RUN_DIR/run-manifest.md" <<'EOF'
+# Run Manifest
+
+## Execution Mode
+
+- mode: template_subagents_required
+- fallback_allowed: false
+- subagent_runtime_available: false
+- run_status: blocked
+
+## Block Reason
+
+Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.
+
+## Required Role Instances
+
+- planner: blocked
+- contract_reviewer: blocked
+- generator: blocked
+- evaluator: blocked
+
+## Role Template Sources
+
+- planner_template: .harness/subagents/planner.md
+- contract_reviewer_template: .harness/subagents/contract-reviewer.md
+- generator_template: .harness/subagents/generator.md
+- evaluator_template: .harness/subagents/evaluator.md
+EOF
+}
+
 set_yaml_field() {
   local key="$1"
   local value="$2"
@@ -103,10 +134,10 @@ artifact_to_role() {
     01-planner-brief.md|02-implementation-contract.md)
       printf "planner"
       ;;
-    03-evaluator-contract-review.md)
+    03-contract-review.md)
       printf "contract_reviewer"
       ;;
-    04-generator-worklog.md|06-fix-report.md)
+    04-implementation-report.md|06-fix-report.md)
       printf "generator"
       ;;
     05-evaluator-report.md)
@@ -150,10 +181,10 @@ state_required_artifact() {
       printf "02-implementation-contract.md"
       ;;
     CONTRACT_REVIEW)
-      printf "03-evaluator-contract-review.md"
+      printf "03-contract-review.md"
       ;;
     APPROVED_FOR_IMPLEMENTATION|GENERATING)
-      printf "04-generator-worklog.md"
+      printf "04-implementation-report.md"
       ;;
     EVALUATING)
       printf "05-evaluator-report.md"
@@ -192,7 +223,8 @@ role_key_to_executor() {
 
 block_for_executor_unavailable() {
   set_yaml_field "state" "BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
-  set_yaml_field "blocked_reason" "\"No independent role executor is available and fallback_single_session_allowed is false.\""
+  set_yaml_field "blocked_reason" "\"Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.\""
+  write_blocked_manifest
   STATE="BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
 }
 
@@ -213,7 +245,7 @@ STATE="$(yaml_get state)"
 CURRENT_ROLE="$(yaml_get current_role)"
 PARENT_EPIC="$(yaml_get parent_epic)"
 NEXT_REQUIRED_ARTIFACT="$(yaml_get next_required_artifact)"
-FALLBACK_SINGLE_SESSION_ALLOWED="$(runtime_get fallback_single_session_allowed)"
+SUBAGENT_RUNTIME_AVAILABLE="$(runtime_get subagent_runtime_available)"
 APPROVED_FOR_IMPLEMENTATION="$(yaml_get approved_for_implementation)"
 GENERATOR_ALLOWED="$(yaml_get generator_allowed)"
 
@@ -234,15 +266,12 @@ if [ "$NEXT_ROLE" != "none" ]; then
   EXECUTOR_VALUE="$(role_executor_get "$NEXT_ROLE")"
   if [ "$STATE" = "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ]; then
     BLOCKED="true"
-  elif [ "$FALLBACK_SINGLE_SESSION_ALLOWED" != "true" ]; then
-    case "$EXECUTOR_VALUE" in
-      subagent|task_tool|external_agent_session|isolated_process)
-        ;;
-      *)
-        block_for_executor_unavailable
-        BLOCKED="true"
-        ;;
-    esac
+  elif [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
+    block_for_executor_unavailable
+    BLOCKED="true"
+  elif [ "$EXECUTOR_VALUE" != "subagent" ]; then
+    block_for_executor_unavailable
+    BLOCKED="true"
   fi
 fi
 
@@ -252,3 +281,11 @@ printf "NEXT_ROLE=%s\n" "$NEXT_ROLE"
 printf "NEXT_EXECUTOR=%s\n" "$NEXT_EXECUTOR"
 printf "REQUIRED_ARTIFACT=%s\n" "$REQUIRED_ARTIFACT"
 printf "BLOCKED=%s\n" "$BLOCKED"
+if [ "$BLOCKED" = "true" ]; then
+  cat <<'EOF'
+Subagent runtime unavailable.
+Harness lifecycle requires template-based subagent orchestration.
+This run is blocked.
+No lifecycle role may be executed in this session.
+EOF
+fi

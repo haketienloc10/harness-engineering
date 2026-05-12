@@ -14,8 +14,8 @@ Do not duplicate product, user-journey, or business flow descriptions from `.har
   1. `<path or symbol>`: `<technical role>`
   2. `<path or symbol>`: `<technical role>`
   3. `<path or symbol>`: `<technical role>`
-- Data/control handoffs:
-  - `<handoff, event, call, prop, hook, message, query, or returned value>`
+- Data/control transfers:
+  - `<event, call, prop, hook, message, query, or returned value>`
 - Error/loading/edge handling:
   - `<paths or symbols to inspect>`
 - Tests/evidence:
@@ -31,8 +31,8 @@ Do not duplicate product, user-journey, or business flow descriptions from `.har
 - Entrypoint: `<path>`
 - Path through source:
   1. `<path>`: `<role>`
-- Data/control handoffs:
-  - `<handoff>`
+- Data/control transfers:
+  - `<transfer>`
 - Error/loading/edge handling:
   - `<paths>`
 - Tests/evidence:

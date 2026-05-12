@@ -8,7 +8,7 @@ Nếu task đủ lớn để thành Epic nhưng mới biết một child run, Pl
 
 ## Planner Brief
 
-Planner Agent là role duy nhất authored `01-planner-brief.md` trong production workflow. Planner Agent không được implement application code, approve contract, hoặc approve evaluation của chính run đó.
+Planner subagent là role duy nhất authored `01-planner-brief.md`. Planner subagent phải được spawned từ `.harness/subagents/planner.md` và không được implement application code, approve contract, hoặc approve evaluation của chính run đó.
 
 `01-planner-brief.md` phải làm rõ:
 
@@ -32,7 +32,7 @@ Tránh ép sớm:
 
 ## Implementation Contract
 
-`02-implementation-contract.md` chỉ được authored bởi Planner Agent. Planner Agent không được approve contract của chính mình.
+`02-implementation-contract.md` chỉ được authored bởi Planner subagent. Planner subagent không được approve contract của chính mình.
 
 `02-implementation-contract.md` phải có:
 
@@ -49,11 +49,11 @@ Nếu contract mơ hồ, không đo được, hoặc không test được, revis
 
 ## Contract Review
 
-`03-evaluator-contract-review.md` chỉ được authored bởi independent Contract Reviewer Agent. Contract Reviewer Agent phải approve hoặc reject rõ ràng. Không sửa application code trước khi contract được approve.
+`03-contract-review.md` chỉ được authored bởi Contract Reviewer subagent spawned từ `.harness/subagents/contract-reviewer.md`. Contract Reviewer phải output `approved` hoặc `rejected_requires_revision` rõ ràng. Không sửa application code trước khi contract được approve.
 
-The Contract Reviewer must not be the same runtime session that authored the contract for production-grade workflow.
+The Contract Reviewer must not be the same runtime session that authored the contract.
 
-The Contract Reviewer must reject the contract if the reviewer is the same runtime session as the contract author, unless the task is explicitly allowed to use degraded fallback mode.
+The Contract Reviewer must reject the contract if the reviewer is the same runtime session as the contract author.
 
 The Contract Reviewer must reject any normal run contract that should be an Epic.
 
@@ -71,7 +71,7 @@ Contract Reviewer phải reject nếu:
 - role separation violation;
 - contract cần hidden assumptions từ Planner để hiểu hoặc verify.
 
-Contract Reviewer không được silently rewrite contract. Nếu cần sửa, ghi `Status: REJECTED` và liệt kê `Required Revisions` để Planner Agent revise trước implementation.
+Contract Reviewer không được silently rewrite contract. Nếu cần sửa, ghi `Status: rejected_requires_revision` và liệt kê `Required Revisions` để Planner subagent revise trước implementation.
 
 ## Backward Compatibility
 

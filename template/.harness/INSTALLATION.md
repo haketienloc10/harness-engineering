@@ -10,5 +10,5 @@ Ownership rules sau install:
 - `.harness/runs/RUN_INDEX.md`, normal runs, Epic containers, và child runs không bị reset.
 - Legacy `.harness/epics/*`, nếu có từ Harness cũ, thuộc target repository và không bị installer xóa.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị overwrite nếu target đã có.
-- Kernel folders có thể được update khi chạy installer: `.harness/guides/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
+- Kernel folders có thể được update khi chạy installer: `.harness/guides/`, `.harness/subagents/`, `.harness/workflows/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
 - Seeded Harness workflow skill files được copy vào `.harness/skills/` mà không xóa skill file local khác.

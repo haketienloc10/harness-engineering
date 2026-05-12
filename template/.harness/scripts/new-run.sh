@@ -19,7 +19,7 @@ Usage:
 Create a new Harness run. Use --within for a child run inside an Epic container.
 --epic remains as a backward-compatible alias for --within.
 Oversized task signals are blocked by default. --force-normal-run is explicit
-degraded override and is not production-grade for broad or multi-phase work.
+bounded override and is not valid for broad or multi-phase work.
 EOF
 }
 
@@ -141,7 +141,7 @@ enforce_run_classification() {
       echo "WARNING: Task appears too large for a normal run." >&2
       echo "Reason: $reason" >&2
       echo "Continuing only because --force-normal-run was provided." >&2
-      echo "This is not production-grade for broad, multi-phase, Epic, or child-run work." >&2
+      echo "This is not valid for broad, multi-phase, Epic, or child-run work." >&2
       return
     fi
 
@@ -389,14 +389,8 @@ fi
 mkdir -p "$RUN_DIR"
 
 cp "$TEMPLATES_DIR/run.yaml.template" "$RUN_DIR/run.yaml"
+cp "$TEMPLATES_DIR/run-manifest.template.md" "$RUN_DIR/run-manifest.md"
 cp "$TEMPLATES_DIR/00-input.template.md" "$RUN_DIR/00-input.md"
-cp "$TEMPLATES_DIR/01-planner-brief.template.md" "$RUN_DIR/01-planner-brief.md"
-cp "$TEMPLATES_DIR/02-implementation-contract.template.md" "$RUN_DIR/02-implementation-contract.md"
-cp "$TEMPLATES_DIR/03-evaluator-contract-review.template.md" "$RUN_DIR/03-evaluator-contract-review.md"
-cp "$TEMPLATES_DIR/04-generator-worklog.template.md" "$RUN_DIR/04-generator-worklog.md"
-cp "$TEMPLATES_DIR/05-evaluator-report.template.md" "$RUN_DIR/05-evaluator-report.md"
-cp "$TEMPLATES_DIR/06-fix-report.template.md" "$RUN_DIR/06-fix-report.md"
-cp "$TEMPLATES_DIR/07-final-summary.template.md" "$RUN_DIR/07-final-summary.md"
 
 for f in "$RUN_DIR"/*; do
   if [ -f "$f" ]; then

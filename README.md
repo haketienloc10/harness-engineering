@@ -36,27 +36,35 @@ Harness có ba lớp:
 
 1. **Artifact Protocol**: templates, run folders, evidence files, and `RUN_INDEX.md`.
 2. **Role Policy**: Planner, Contract Reviewer, Generator, and Evaluator responsibilities.
-3. **Lifecycle Orchestrator**: `run.yaml` state machine, gates, next-role detection, executor dispatch, and validation.
+3. **Lifecycle Orchestrator**: `run.yaml`, `run-manifest.md`, state machine, gates, template-based subagent spawning, and validation.
 
-## Runtime-Agnostic Role Execution
+## Template-Based Subagent Orchestration
 
-Harness is agent-runtime agnostic.
+Harness core lifecycle roles MUST be executed by separate spawned subagents instantiated from fixed templates:
 
-For production workflows, Harness separates lifecycle roles:
+- `template/.harness/subagents/planner.md`
+- `template/.harness/subagents/contract-reviewer.md`
+- `template/.harness/subagents/generator.md`
+- `template/.harness/subagents/evaluator.md`
 
 ```txt
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-The top-level agent acts as Orchestrator only.
+The top-level agent acts as coordinator/orchestrator only. It may select the required role, load the role template, pass task-specific inputs, collect the role artifact, and decide the next workflow step based on that artifact.
 
-When the current runtime supports independent role execution through subagents, task tools, external sessions, or isolated workers, Harness requires role-specific execution.
+The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, or continue when subagent spawning is unavailable.
 
-The Orchestrator must dispatch role work to the required executor and must not simulate production role separation in one agent.
+If no spawned subagent runtime is available, the run is blocked before Planner execution. There is no degraded single-session fallback.
 
-If no independent role executor can be started, the run enters `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` unless `fallback_single_session_allowed: true` is explicitly set in `run.yaml`.
+Required blocked message:
 
-Subagents, task tools, external agent sessions, and isolated role workers are executor types for lifecycle roles, not the workflow itself.
+```text
+Subagent runtime unavailable.
+Harness lifecycle requires template-based subagent orchestration.
+This run is blocked.
+No lifecycle role may be executed in this session.
+```
 
 Harness dùng một execution namespace:
 
@@ -122,6 +130,8 @@ target-repo/
     INSTALLATION.md
     HARNESS_SKILLS.md
     guides/
+    subagents/
+    workflows/
     skills/
     templates/
     project-templates/
@@ -140,6 +150,7 @@ Các vùng ownership-safe:
 - Legacy `.harness/epics/*`, nếu có từ Harness cũ, không bị xóa khi update.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
 - `.harness/guides/*`, `.harness/templates/*`, `.harness/scripts/*`, `.harness/project-templates/*` là kernel/template layer có thể được update có chủ đích.
+- `.harness/subagents/*` và `.harness/workflows/*` là kernel layer cho template-based subagent orchestration.
 - `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*` là Harness workflow skill layer được cài vào target repo; installer không xóa skill file local khác.
 
 ## Sau khi cài
@@ -181,6 +192,14 @@ template/
       BACKLOG_POLICY.md
       LANGUAGE_POLICY.md
       LONG_TASK_POLICY.md
+    subagents/
+      planner.md
+      contract-reviewer.md
+      generator.md
+      evaluator.md
+    workflows/
+      default-lifecycle.md
+      epic-lifecycle.md
     skills/
       project-sync.md
       codebase-sync.md
@@ -196,8 +215,8 @@ template/
       00-input.template.md
       01-planner-brief.template.md
       02-implementation-contract.template.md
-      03-evaluator-contract-review.template.md
-      04-generator-worklog.template.md
+      03-contract-review.template.md
+      04-implementation-report.template.md
       05-evaluator-report.template.md
       06-fix-report.template.md
       07-final-summary.template.md

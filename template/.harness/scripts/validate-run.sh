@@ -61,6 +61,18 @@ role_executor_field_get() {
   ' "$RUN_YAML"
 }
 
+require_role_spawned() {
+  local role="$1"
+  local executor_type
+  local executor_id
+
+  executor_type="$(role_executor_field_get "$role" executor_type)"
+  executor_id="$(role_executor_field_get "$role" executor_id)"
+
+  [ "$executor_type" = "subagent" ] || die "$role must use executor_type: subagent"
+  [ -n "$executor_id" ] || die "$role requires a spawned subagent executor_id"
+}
+
 recognized_state() {
   case "$1" in
     CREATED|PLANNING|CONTRACTING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
@@ -75,6 +87,16 @@ recognized_state() {
 require_file() {
   local file="$1"
   [ -f "$RUN_DIR/$file" ] || die "Required artifact missing for state $STATE: $file"
+}
+
+require_manifest() {
+  require_file "run-manifest.md"
+  grep -qF -- "- mode: template_subagents_required" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set mode: template_subagents_required"
+  grep -qF -- "- fallback_allowed: false" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set fallback_allowed: false"
+  grep -qF "planner_template: .harness/subagents/planner.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing planner template source"
+  grep -qF "contract_reviewer_template: .harness/subagents/contract-reviewer.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer template source"
+  grep -qF "generator_template: .harness/subagents/generator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator template source"
+  grep -qF "evaluator_template: .harness/subagents/evaluator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing evaluator template source"
 }
 
 require_completed_artifact() {
@@ -100,33 +122,44 @@ require_artifacts_for_state() {
     CONTRACTING)
       require_file "00-input.md"
       require_completed_artifact "01-planner-brief.md"
+      require_role_spawned "planner"
       ;;
     CONTRACT_REVIEW)
       require_file "00-input.md"
       require_completed_artifact "01-planner-brief.md"
       require_completed_artifact "02-implementation-contract.md"
+      require_role_spawned "planner"
       ;;
     APPROVED_FOR_IMPLEMENTATION|GENERATING)
       require_file "00-input.md"
       require_completed_artifact "01-planner-brief.md"
       require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-evaluator-contract-review.md"
+      require_completed_artifact "03-contract-review.md"
+      require_role_spawned "planner"
+      require_role_spawned "contract_reviewer"
       ;;
     EVALUATING)
       require_file "00-input.md"
       require_completed_artifact "01-planner-brief.md"
       require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-evaluator-contract-review.md"
-      require_completed_artifact "04-generator-worklog.md"
+      require_completed_artifact "03-contract-review.md"
+      require_completed_artifact "04-implementation-report.md"
+      require_role_spawned "planner"
+      require_role_spawned "contract_reviewer"
+      require_role_spawned "generator"
       ;;
     COMPLETED)
       require_file "00-input.md"
       require_completed_artifact "01-planner-brief.md"
       require_completed_artifact "02-implementation-contract.md"
-      require_completed_artifact "03-evaluator-contract-review.md"
-      require_completed_artifact "04-generator-worklog.md"
+      require_completed_artifact "03-contract-review.md"
+      require_completed_artifact "04-implementation-report.md"
       require_completed_artifact "05-evaluator-report.md"
       require_completed_artifact "07-final-summary.md"
+      require_role_spawned "planner"
+      require_role_spawned "contract_reviewer"
+      require_role_spawned "generator"
+      require_role_spawned "evaluator"
       ;;
     REJECTED_FOR_REPLAN)
       require_file "00-input.md"
@@ -135,6 +168,8 @@ require_artifacts_for_state() {
       ;;
     BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
       [ -n "$(yaml_get blocked_reason)" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires blocked_reason"
+      grep -qF -- "- run_status: blocked" "$RUN_DIR/run-manifest.md" || die "Blocked run requires run-manifest.md run_status: blocked"
+      grep -qF -- "- subagent_runtime_available: false" "$RUN_DIR/run-manifest.md" || die "Blocked run requires subagent_runtime_available: false"
       ;;
     FAILED_VERIFICATION)
       require_completed_artifact "05-evaluator-report.md"
@@ -213,6 +248,7 @@ EVALUATOR_EXECUTOR_ID="$(role_executor_field_get evaluator executor_id)"
 recognized_state "$STATE" || die "Unrecognized lifecycle state: $STATE"
 
 validate_path_shape
+require_manifest
 require_artifacts_for_state
 
 if [ "$STATE" = "GENERATING" ]; then
@@ -226,6 +262,10 @@ fi
 
 if [ -n "$GENERATOR_EXECUTOR_ID" ] && [ -n "$EVALUATOR_EXECUTOR_ID" ] && [ "$GENERATOR_EXECUTOR_ID" = "$EVALUATOR_EXECUTOR_ID" ]; then
   die "Evaluator cannot be the same executor_id as Generator"
+fi
+
+if grep -qE 'fallback_single_session|task_tool|external_agent_session|isolated_process' "$RUN_YAML" "$RUN_DIR/run-manifest.md"; then
+  die "Run contains invalid fallback or non-subagent executor language"
 fi
 
 if [ "$STATE" = "APPROVED_FOR_IMPLEMENTATION" ] && [ "$APPROVED_FOR_IMPLEMENTATION" != "true" ]; then

@@ -7,12 +7,12 @@ created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 
 runtime:
-  mode: production_multi_executor
+  mode: template_subagents_required
   agent_runtime: ""
-  independent_executors_required: true
-  fallback_single_session_allowed: false
+  subagent_runtime_available: false
+  fallback_allowed: false
   independence: independent
-  child_run_role_separation_required: true
+  child_run_template_subagents_required: true
 
 goal: ""
 non_goals: []

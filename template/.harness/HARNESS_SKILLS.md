@@ -91,17 +91,18 @@ Outputs:
 ## lifecycle-orchestration
 
 Description:
-Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, role executors, independent review/evaluation, and executor dispatch.
+Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, template-based subagent spawning, independent review/evaluation, and manifest audit.
 
 For non-trivial implementation work, `lifecycle-orchestration` is mandatory.
 
-Harness role transitions are executed through role-specific executors, not handoff files.
+Harness role transitions are executed through spawned subagents from fixed templates.
 
 Load:
 - `.harness/guides/LIFECYCLE_ORCHESTRATION.md`
 - `.harness/guides/SUBAGENT_EXECUTION.md`
+- `.harness/workflows/default-lifecycle.md`
 
-The Orchestrator must dispatch to the next required executor:
+The Orchestrator must spawn the next required subagent:
 
 - `planner`
 - `contract-reviewer`
@@ -110,16 +111,17 @@ The Orchestrator must dispatch to the next required executor:
 
 Do not create `HANDOFF.md` for normal lifecycle transitions.
 
-If no independent role executor can be started, block the run unless fallback is explicitly allowed in `run.yaml`.
+If no subagent runtime can be started, block the run. There is no single-session fallback.
 
 Use when:
 - Starting any non-trivial implementation run.
 - Reviewing or approving an implementation contract.
 - Dispatching work from planning to implementation or from implementation to evaluation.
 - A task might otherwise be handled by one agent/session playing multiple roles.
-- Independent sessions are unavailable and the run must block or use explicit fallback.
+- Subagent spawning is unavailable and the run must block.
 
 Outputs:
 - Correct `run.yaml` lifecycle state
+- Correct `run-manifest.md` execution mode and role status
 - Required role artifact for the current state
-- `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` when production work cannot continue and fallback is not allowed
+- `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` when subagent spawning is unavailable

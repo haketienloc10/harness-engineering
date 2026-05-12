@@ -1,14 +1,15 @@
-# Generator Worklog
+# Implementation Report
 
 ## Runtime Metadata
 
 ```yaml
 role: Generator
-runtime_mode: production_multi_executor
-executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
+runtime_mode: template_subagents_required
+executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
+role_template: .harness/subagents/generator.md
 independence: independent
 contract_reviewer_executor_id: <required>
 ```
@@ -35,9 +36,21 @@ contract_reviewer_executor_id: <required>
 - Reason:
 - Notes:
 
+## Changed Files
+
+| File | Change | Reason |
+|---|---|---|
+|  |  |  |
+
 ## Commands Run During Implementation
 
 ```bash
+...
+```
+
+## Command Output
+
+```text
 ...
 ```
 

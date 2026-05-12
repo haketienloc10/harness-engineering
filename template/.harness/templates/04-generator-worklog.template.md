@@ -2,11 +2,13 @@
 
 ## Runtime Metadata
 
-- Role: Generator Agent
-- Generator session: <session id / agent id / manual label>
-- Approved contract reviewed by: <reviewer session>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+role: Generator
+runtime_mode: production_multi_session
+independence: independent
+generator_session_id: <required>
+contract_reviewer_session_id: <required>
+```
 
 ## Start State
 

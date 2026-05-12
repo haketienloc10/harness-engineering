@@ -2,10 +2,18 @@
 
 ## Runtime Metadata
 
-- Role: Planner Agent
-- Runtime session: <session id / agent id / manual label>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+role: Planner
+runtime_mode: production_multi_session
+independence: independent
+planner_session_id: <required>
+```
+
+## Classification Summary
+
+- Classification: Normal Run | Epic Child Run
+- Why this is bounded:
+- If part of Epic, independent verification target:
 
 ## Related Epic
 

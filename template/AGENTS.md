@@ -104,7 +104,16 @@ Generated Harness artifacts nên dùng ngôn ngữ người dùng đang dùng, t
 
 ## Mandatory Harness lifecycle
 
-Với mọi implementation task không tầm thường, tạo một run dưới:
+Trước khi tạo bất kỳ run nào, classify request:
+
+```txt
+User request
+  -> classify as Normal Run or Epic
+  -> create Epic if broad/multi-phase
+  -> create normal run only if bounded
+```
+
+Với mọi implementation task không tầm thường và bounded, tạo một run dưới:
 
 ```txt
 .harness/runs/RUN-YYYYMMDD-NNN-task-slug/
@@ -146,7 +155,8 @@ Không sửa application code trước khi `03-evaluator-contract-review.md` app
 Lifecycle chuẩn:
 
 ```txt
-User Request
+Classify Request
+  -> Epic or Normal Run
   -> Planner Agent
   -> Contract Reviewer Agent
   -> Generator Agent
@@ -162,9 +172,11 @@ For long-running tasks, do not create a single giant run.
 
 Epic is a planning and coordination run container, not a standalone metadata folder and not a normal implementation run.
 
-Create an Epic only when the task has multiple milestones, multiple user flows, multiple modules, uncertain scope, or cannot be verified cleanly in one run, and the planner can identify at least two independently verifiable child runs before implementation.
+Epic is mandatory when the task has multiple phases, multiple milestones, multiple user flows, multiple modules, uncertain or expanding scope, cannot be verified cleanly in one run, or mentions wording such as `phase`, `phase 1-4`, `part 1-4`, `core loop`, `full feature`, `complete playable`, `end-to-end`, `MVP`, `large task`, or `long task`.
 
-If only one concrete run is known, create a normal run and add follow-up proposal/backlog instead of creating an Epic.
+A task named like `phase 1-4` must not become one normal run.
+
+If a task qualifies as an Epic but only one child run is known, Planner must reduce scope to one bounded normal run or ask/derive additional decomposition before implementation. Do not use an oversized normal run as a workaround.
 
 Epic artifacts live under:
 
@@ -188,15 +200,16 @@ Each Epic must be decomposed into smaller child runs. Each child run keeps the n
 
 Before creating a run for a long task, check whether an active Epic should own the run.
 
-Relevant guide:
+Relevant guides:
 
 ```txt
+.harness/guides/RUN_CLASSIFICATION.md
 .harness/guides/LONG_TASK_POLICY.md
 ```
 
 ---
 
-## Role separation
+## Production Role Separation
 
 Production workflow yêu cầu các agent/session riêng cho:
 
@@ -209,15 +222,32 @@ Một role session không được approve output trước đó của chính nó
 
 Evaluator không được rely vào hidden reasoning hoặc memory từ Planner/Generator. Evaluation chỉ được dựa trên visible artifacts, code diff, command output, runtime evidence, browser evidence, API evidence, logs, và acceptance criteria. Evaluator không được approve chỉ bằng code inspection.
 
-Single-agent simulation chỉ là degraded fallback cho local experimentation, task nhỏ low-risk, hoặc môi trường không hỗ trợ multi-agent. Fallback artifact phải ghi rõ:
+For production-grade implementation work, Planner, Contract Reviewer, Generator, and Evaluator must run as separate runtime sessions.
+
+A single runtime session must not approve its own contract or evaluate its own implementation.
+
+If independent sessions are unavailable, stop at the role boundary and produce a handoff prompt for the next role.
+
+Single-agent simulation chỉ là degraded fallback cho local experimentation, low-risk documentation-only tasks, learning/demo workflows, hoặc task được user đánh dấu rõ là fallback-allowed. Fallback artifact phải ghi rõ:
 
 ```yaml
 runtime_mode: fallback_single_session
 independence: degraded
-reason: "<why separate sessions were unavailable>"
+reason: "<why fallback is allowed for this task>"
 ```
 
 Fallback mode không phải production-grade.
+
+Fallback single-session bị cấm cho:
+
+- Epic;
+- child runs inside Epic;
+- broad implementation tasks;
+- production implementation;
+- UI/API behaviour implementation;
+- any task where user explicitly requires independent roles.
+
+Nếu production implementation cần session độc lập mà environment không tạo được tự động, current agent phải dừng ở role boundary và tạo handoff prompt cho independent session tiếp theo.
 
 Chi tiết:
 
@@ -286,6 +316,7 @@ Chỉ load guide liên quan:
 .harness/guides/AGENT_WORKFLOW.md
 .harness/guides/PROJECT_DISCOVERY.md
 .harness/guides/LANGUAGE_POLICY.md
+.harness/guides/RUN_CLASSIFICATION.md
 .harness/guides/PLANNING_AND_CONTRACTS.md
 .harness/guides/RUNTIME_ROLE_SEPARATION.md
 .harness/guides/TESTING_POLICY.md

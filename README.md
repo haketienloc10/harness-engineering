@@ -38,6 +38,8 @@ Harness dùng một execution namespace:
 - `.harness/runs/EPIC-*`: Epic containers cho long-running tasks, giữ roadmap, acceptance matrix, decision log, và child run index.
 - `.harness/runs/EPIC-*/runs/RUN-*`: child runs, là nơi chứa implementation contract, evaluator report, worklog, và final summary.
 
+Trước khi tạo normal run, Harness phải classify request. Multi-phase, broad, MVP, full feature, core loop, complete playable, hoặc task không verify gọn trong một run phải thành Epic và được chia thành child runs nhỏ.
+
 ## Cài nhanh bằng curl
 
 Chạy từ thư mục repository đích:
@@ -143,6 +145,7 @@ template/
     guides/
       HARNESS_PRINCIPLES.md
       AGENT_WORKFLOW.md
+      RUN_CLASSIFICATION.md
       PROJECT_DISCOVERY.md
       PLANNING_AND_CONTRACTS.md
       TESTING_POLICY.md
@@ -173,6 +176,7 @@ template/
       00-epic-overview.template.md
       01-epic-roadmap.template.md
       02-epic-acceptance-matrix.template.md
+      03-epic-contract-review.template.md
       03-epic-decision-log.template.md
       04-epic-run-index.template.md
       epic.yaml.template

@@ -2,7 +2,9 @@
 
 ## Epic Check
 
-Trước khi tạo một run, quyết định task có thuộc Epic container không. Nếu task có nhiều milestone, nhiều user flow, nhiều module, scope chưa chắc, hoặc không thể verify gọn trong một run, dùng `.harness/guides/LONG_TASK_POLICY.md` và chia thành nhiều child runs nhỏ. Chỉ tạo Epic khi planner xác định được ít nhất hai child runs có thể verify độc lập; nếu chỉ biết một run, tạo normal run và ghi follow-up proposal/backlog.
+Trước khi tạo một run, classify task bằng `.harness/guides/RUN_CLASSIFICATION.md`. Nếu task có nhiều phase, milestone, user flow, module, scope chưa chắc, hoặc không thể verify gọn trong một run, dùng `.harness/guides/LONG_TASK_POLICY.md` và tạo Epic. Một task có wording như `phase 1-4`, `part 1-4`, `core loop`, `complete playable`, `full feature`, `end-to-end`, `MVP`, `large task`, hoặc `long task` không được trở thành một normal run.
+
+Nếu task đủ lớn để thành Epic nhưng mới biết một child run, Planner phải giảm scope xuống một normal run thật sự bounded, hoặc hỏi/derive thêm decomposition trước implementation.
 
 ## Planner Brief
 
@@ -47,9 +49,13 @@ Nếu contract mơ hồ, không đo được, hoặc không test được, revis
 
 ## Contract Review
 
-`03-evaluator-contract-review.md` chỉ được authored bởi Contract Reviewer Agent. Contract Reviewer Agent phải approve hoặc reject rõ ràng. Không sửa application code trước khi contract được approve.
+`03-evaluator-contract-review.md` chỉ được authored bởi independent Contract Reviewer Agent. Contract Reviewer Agent phải approve hoặc reject rõ ràng. Không sửa application code trước khi contract được approve.
 
 The Contract Reviewer must not be the same runtime session that authored the contract for production-grade workflow.
+
+The Contract Reviewer must reject the contract if the reviewer is the same runtime session as the contract author, unless the task is explicitly allowed to use degraded fallback mode.
+
+The Contract Reviewer must reject any normal run contract that should be an Epic.
 
 Contract Reviewer phải reject nếu:
 
@@ -59,8 +65,10 @@ Contract Reviewer phải reject nếu:
 - behaviour contract ambiguous;
 - assumptions không được nêu rõ;
 - scope quá lớn cho một run;
+- too many phases in one normal run;
 - contract conflict với project rules hoặc user request;
 - không có independent verification path;
+- role separation violation;
 - contract cần hidden assumptions từ Planner để hiểu hoặc verify.
 
 Contract Reviewer không được silently rewrite contract. Nếu cần sửa, ghi `Status: REJECTED` và liệt kê `Required Revisions` để Planner Agent revise trước implementation.

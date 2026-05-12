@@ -8,6 +8,41 @@ Load only the selected skill file.
 
 Do not load all skill files by default.
 
+## run-classification
+
+Description:
+Use before creating any run. Determines whether the request should be a normal run or an Epic.
+
+Use when:
+- Starting any task that might create a run.
+- Task text mentions phases, parts, large scope, MVP, full feature, core loop, complete playable, multiple modules, multiple user flows, or unclear verification boundary.
+- A normal run contract looks broad, vague, or hard to verify as one unit.
+
+Load:
+`.harness/guides/RUN_CLASSIFICATION.md`
+
+Outputs:
+- Decision: Normal Run | Epic | Child Run | Invalid oversized normal run
+- Required next action: create bounded normal run, create Epic, create child run, or mark `SUPERSEDED_BY_EPIC`
+
+## epic-workflow
+
+Description:
+Use for long-running or multi-phase tasks. Creates an Epic container and decomposes work into independently verifiable child runs.
+
+Use when:
+- Task has multiple phases, milestones, modules, user flows, or verification checkpoints.
+- Task text mentions `phase 1-4`, `part 1-4`, `core loop`, `complete playable`, `full feature`, `end-to-end`, `MVP`, `large task`, or `long task`.
+- A created normal run is discovered to be oversized.
+
+Load:
+`.harness/guides/LONG_TASK_POLICY.md`
+
+Outputs:
+- Epic container under `.harness/runs/EPIC-*`
+- Child-run plan with at least two independently verifiable child runs
+- No implementation in oversized normal runs
+
 ## project-sync
 
 Description:
@@ -56,7 +91,7 @@ Outputs:
 ## runtime-role-separation
 
 Description:
-Use the Runtime Role Separation guide before non-trivial implementation to enforce separate Planner, Contract Reviewer, Generator, and Evaluator sessions and prevent production-grade self-approval.
+Use the Runtime Role Separation guide before non-trivial implementation to enforce separate Planner, Contract Reviewer, Generator, and Evaluator sessions and prevent production-grade self-approval/self-evaluation.
 
 Use when:
 - Starting any non-trivial implementation run.
@@ -64,6 +99,7 @@ Use when:
 - Handing work from planning to implementation or from implementation to evaluation.
 - A task might otherwise be handled by one agent/session playing multiple roles.
 - Recording fallback single-session mode and degraded independence.
+- Independent sessions are unavailable and a role-boundary handoff is required.
 
 Load:
 `.harness/guides/RUNTIME_ROLE_SEPARATION.md`
@@ -72,3 +108,4 @@ Outputs:
 - Correct runtime role metadata in run artifacts
 - Clear handoff note between roles
 - Explicit `independence: independent` or `independence: degraded`
+- `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF` when production work cannot continue in the same session

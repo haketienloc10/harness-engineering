@@ -2,16 +2,19 @@
 
 ## Runtime Metadata
 
-- Role: Evaluator Agent
-- Evaluator session: <session id / agent id / manual label>
-- Generator session reviewed: <session id / agent id / manual label>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+role: Evaluator
+runtime_mode: production_multi_session
+independence: independent
+evaluator_session_id: <required>
+generator_session_id: <required>
+```
 
 ## Independence Check
 
 - Evaluator is separate from Generator: yes | no
-- If no, mark lower trust and explain fallback.
+- If no, is fallback explicitly allowed for this task: yes | no
+- Decision if not independent and fallback not allowed: FAIL
 
 ## Evaluation Decision
 

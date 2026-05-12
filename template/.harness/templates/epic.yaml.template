@@ -6,6 +6,11 @@ owner: agent
 created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 
+runtime:
+  mode: production_multi_session
+  independence: independent
+  child_run_role_separation_required: true
+
 goal: ""
 non_goals: []
 

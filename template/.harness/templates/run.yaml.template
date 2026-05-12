@@ -2,14 +2,26 @@ run_id: <RUN-ID>
 task_slug: <TASK-SLUG>
 epic_id: ""
 status: created
+classification: normal_run
 branch: ""
 worktree: ""
 owner: agent
 created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 
+runtime:
+  mode: production_multi_session
+  independence: independent
+  required_roles:
+    - Planner
+    - ContractReviewer
+    - Generator
+    - Evaluator
+
 scope:
   expected_files: []
+  bounded_unit_required: true
+  oversized_normal_run_status: ""
   protected_files:
     - .harness/guides/**
     - .harness/templates/**

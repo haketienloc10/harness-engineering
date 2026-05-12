@@ -14,9 +14,12 @@ Usage:
   bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task "task name"
   bash .harness/scripts/new-run.sh "task name" --within EPIC-YYYYMMDD-NNN-task
   bash .harness/scripts/new-run.sh --epic EPIC-YYYYMMDD-NNN-task "task name"
+  bash .harness/scripts/new-run.sh --force-normal-run "bounded task name"
 
 Create a new Harness run. Use --within for a child run inside an Epic container.
 --epic remains as a backward-compatible alias for --within.
+Oversized task signals are blocked by default. --force-normal-run is explicit
+degraded override and is not production-grade for broad or multi-phase work.
 EOF
 }
 
@@ -43,9 +46,14 @@ slugify() {
 parse_args() {
   TASK_PARTS=()
   EPIC_ID=""
+  FORCE_NORMAL_RUN=0
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --force-normal-run)
+        FORCE_NORMAL_RUN=1
+        shift
+        ;;
       --within)
         [ "$#" -ge 2 ] || die "--within requires an EPIC-ID"
         EPIC_ID="$2"
@@ -76,6 +84,79 @@ parse_args() {
   done
 
   raw_slug="${TASK_PARTS[*]:-untitled}"
+}
+
+oversized_signal_reason() {
+  local s="$1"
+  local match
+
+  match="$(printf "%s\n" "$s" | sed -n -E 's/.*(^|-)phase-([0-9]+-[0-9]+)($|-).*/phase-\2/p' | head -n 1)"
+  if [ -n "$match" ]; then
+    printf "contains multi-phase signal: %s" "$match"
+    return 0
+  fi
+
+  match="$(printf "%s\n" "$s" | sed -n -E 's/.*(^|-)part-([0-9]+-[0-9]+)($|-).*/part-\2/p' | head -n 1)"
+  if [ -n "$match" ]; then
+    printf "contains multi-part signal: %s" "$match"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)phase($|-)'; then
+    printf "contains multi-phase signal: phase"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)part($|-)'; then
+    printf "contains multi-part signal: part"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)core-loop($|-)'; then
+    printf "contains broad workflow signal: core-loop"
+    return 0
+  fi
+
+  if printf "%s\n" "$s" | grep -Eq '(^|-)end-to-end($|-)'; then
+    printf "contains broad verification signal: end-to-end"
+    return 0
+  fi
+
+  for match in full complete mvp large long multi workflow module milestone; do
+    if printf "%s\n" "$s" | grep -Eq "(^|-)$match($|-)"; then
+      printf "contains oversized task signal: %s" "$match"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+enforce_run_classification() {
+  local reason
+  local epic_slug
+
+  if reason="$(oversized_signal_reason "$slug")"; then
+    if [ "$FORCE_NORMAL_RUN" -eq 1 ]; then
+      echo "WARNING: Task appears too large for a normal run." >&2
+      echo "Reason: $reason" >&2
+      echo "Continuing only because --force-normal-run was provided." >&2
+      echo "This is not production-grade for broad, multi-phase, Epic, or child-run work." >&2
+      return
+    fi
+
+    echo "ERROR: Task appears too large for a normal run." >&2
+    echo "Reason: $reason" >&2
+    if [ -n "$EPIC_ID" ]; then
+      echo "This child run appears too broad. Create smaller independently verifiable child runs under: $EPIC_ID" >&2
+    else
+      epic_slug="$(printf "%s\n" "$slug" | sed -E 's/(^|-)phase-[0-9]+-[0-9]+($|-)/-/g; s/(^|-)part-[0-9]+-[0-9]+($|-)/-/g; s/(^|-)phase($|-)/-/g; s/(^|-)part($|-)/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
+      [ -n "$epic_slug" ] || epic_slug="$slug"
+      echo "Use: bash .harness/scripts/new-epic.sh \"${epic_slug}\"" >&2
+    fi
+    echo "Override only for an explicitly bounded, non-production exception with: --force-normal-run" >&2
+    exit 1
+  fi
 }
 
 replace_placeholders() {
@@ -258,6 +339,8 @@ slug="$(slugify "$raw_slug")"
 
 [ -d "$TEMPLATES_DIR" ] || die "Templates directory not found: $TEMPLATES_DIR"
 
+enforce_run_classification
+
 TODAY="$(date +%Y%m%d)"
 NOW="$(date -Iseconds)"
 
@@ -313,6 +396,7 @@ done
 
 if [ -n "$EPIC_ID" ]; then
   set_yaml_field "$RUN_DIR/run.yaml" "epic_id" "$EPIC_ID"
+  set_yaml_field "$RUN_DIR/run.yaml" "classification" "epic_child_run"
   append_run_index_row "| child-run | $EPIC_ID | $RUN_ID | $slug | created |  |  | agent | $NOW | $NOW |"
 else
   append_run_index_row "| run |  | $RUN_ID | $slug | created |  |  | agent | $NOW | $NOW |"

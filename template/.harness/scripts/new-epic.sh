@@ -197,8 +197,9 @@ cp "$TEMPLATES_DIR/epic.yaml.template" "$EPIC_DIR/epic.yaml"
 cp "$TEMPLATES_DIR/00-epic-overview.template.md" "$EPIC_DIR/00-epic-overview.md"
 cp "$TEMPLATES_DIR/01-epic-roadmap.template.md" "$EPIC_DIR/01-roadmap.md"
 cp "$TEMPLATES_DIR/02-epic-acceptance-matrix.template.md" "$EPIC_DIR/02-acceptance-matrix.md"
-cp "$TEMPLATES_DIR/03-epic-decision-log.template.md" "$EPIC_DIR/03-decision-log.md"
+cp "$TEMPLATES_DIR/03-epic-contract-review.template.md" "$EPIC_DIR/03-epic-contract-review.md"
 cp "$TEMPLATES_DIR/04-epic-run-index.template.md" "$EPIC_DIR/04-run-index.md"
+cp "$TEMPLATES_DIR/03-epic-decision-log.template.md" "$EPIC_DIR/05-decision-log.md"
 
 for f in "$EPIC_DIR"/*; do
   [ -f "$f" ] && replace_placeholders "$f"

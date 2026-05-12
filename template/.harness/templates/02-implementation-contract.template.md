@@ -2,10 +2,19 @@
 
 ## Runtime Metadata
 
-- Role: Planner Agent
-- Contract author session: <session id / agent id / manual label>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+role: Planner
+runtime_mode: production_multi_session
+independence: independent
+contract_author_session_id: <required>
+```
+
+## Classification Guard
+
+- Task classification: Normal Run | Epic Child Run
+- Normal run is bounded: yes | no
+- Oversized/Epic signals present: no | yes
+- If oversized/Epic signals are present, this contract must be rejected unless scoped down:
 
 ## Contract Status
 

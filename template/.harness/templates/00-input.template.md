@@ -2,10 +2,19 @@
 
 ## Runtime Metadata
 
-- Role: Planner Agent
-- Runtime session: <session id / agent id / manual label>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+role: Planner
+runtime_mode: production_multi_session
+independence: independent
+planner_session_id: <required>
+```
+
+## Task Classification
+
+- Classification: Normal Run | Epic Child Run
+- Epic required: yes | no
+- If Epic required, normal run creation is invalid: yes | no
+- Classification guide used: `.harness/guides/RUN_CLASSIFICATION.md`
 
 ## Run ID
 

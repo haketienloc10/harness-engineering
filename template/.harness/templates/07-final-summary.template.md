@@ -2,10 +2,12 @@
 
 ## Runtime Metadata
 
-- Finalized by role: Evaluator Agent | Coordinator | Generator Agent
-- Based on evaluator report: <path>
-- Runtime mode: production_multi_session | fallback_single_session
-- Independence: independent | degraded
+```yaml
+finalized_by_role: Evaluator | Coordinator
+runtime_mode: production_multi_session
+independence: independent
+based_on_evaluator_report: <path>
+```
 
 ## Related Epic
 

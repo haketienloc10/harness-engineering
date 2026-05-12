@@ -15,6 +15,15 @@ Production mode yêu cầu các agent/session riêng cho:
 
 Một role không được approve output của chính nó. Contract Reviewer không được là cùng runtime session đã authored contract. Evaluator không được là cùng runtime session đã generated implementation.
 
+Production implementation tasks must use:
+
+```yaml
+runtime_mode: production_multi_session
+independence: independent
+```
+
+Một runtime session không được đóng nhiều production roles trong cùng một run.
+
 Lifecycle chuẩn:
 
 ```txt
@@ -78,39 +87,80 @@ Evaluator Agent may use:
 
 ## Required Metadata
 
-New run artifacts should include runtime metadata near the top:
+New run artifacts must include runtime metadata near the top:
 
 ```yaml
 runtime_mode: production_multi_session | fallback_single_session
 independence: independent | degraded
-role: "<Planner Agent | Contract Reviewer Agent | Generator Agent | Evaluator Agent | Coordinator>"
-session: "<session id / agent id / manual label>"
+role: Planner | ContractReviewer | Generator | Evaluator | Coordinator
+session_id: <manual label or runtime id>
 ```
 
 Existing old runs may not have runtime metadata. New runs should include it. Old runs should not be rewritten unless explicitly requested.
 
 ## Fallback Mode
 
-Single-session simulation is allowed only for local experimentation, small low-risk tasks, or environments without multi-agent support.
+Fallback single-session mode is not production-grade.
+
+It is allowed only for:
+
+- local experimentation;
+- low-risk documentation-only tasks;
+- learning/demo workflows;
+- tasks explicitly marked by the user as fallback-allowed.
+
+Fallback mode is forbidden for:
+
+- multi-phase tasks;
+- Epic tasks;
+- child runs inside Epic;
+- implementation tasks affecting application behaviour;
+- UI/API behaviour implementation;
+- production-grade workflow;
+- tasks requiring independent contract review or independent evaluation;
+- tasks where the user explicitly requires independent roles.
+
+Environment limitations are not a production fallback permission. If independent role sessions are unavailable for real implementation work, the current agent must stop after its assigned role and produce a handoff prompt for the next independent session.
 
 Fallback artifacts must include:
 
 ```yaml
 runtime_mode: fallback_single_session
 independence: degraded
-reason: "<why separate sessions were unavailable>"
+reason: "<why fallback is allowed for this task>"
 ```
 
 Fallback mode is not production-grade. A fallback Evaluator must still use visible artifacts, commands, diffs, logs, runtime checks, browser/API evidence, and acceptance criteria instead of hidden reasoning.
+
+## Blocking Rule
+
+If a task requires production multi-session and the environment cannot spawn separate sessions, mark the run blocked for handoff:
+
+```md
+## Role Separation Status
+
+- Production multi-session required: yes
+- Current session role: <role>
+- Next required role: <role>
+- Same-session fallback allowed: no
+- Status: BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
+- Reason: This task requires independent runtime roles.
+```
 
 ## Handoff Protocol
 
 Each phase must end with a clear handoff note:
 
-- current phase result;
-- artifacts produced;
-- next role allowed to proceed or blocked;
-- reason if blocked.
+```md
+## Handoff
+
+- Completed role:
+- Artifacts produced:
+- Next required role:
+- Allowed next actions:
+- Blocked actions:
+- Notes for next role:
+```
 
 Contract Review decision:
 

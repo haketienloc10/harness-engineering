@@ -1,5 +1,16 @@
 # Epic Roadmap
 
+This artifact is the Epic breakdown. Each row should become a bounded child run with independent verification.
+
+## Runtime Metadata
+
+```yaml
+role: Planner
+runtime_mode: production_multi_session
+independence: independent
+epic_planner_session_id: <required>
+```
+
 ## Milestones
 
 | Milestone | Purpose | Candidate Run | Dependency | Status |

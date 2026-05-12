@@ -6,6 +6,8 @@ Default workflow là multi-agent / multi-session. Production-grade work yêu c�
 
 ```txt
 User Request
+  -> Classify Request
+  -> Epic or Normal Run
   -> Planner Agent
   -> Contract Reviewer Agent
   -> Generator Agent
@@ -13,14 +15,17 @@ User Request
   -> Final Summary
 ```
 
-Single-agent simulation chỉ được dùng như degraded fallback cho local experimentation, task nhỏ low-risk, hoặc môi trường không hỗ trợ multi-agent. Fallback artifacts phải ghi `runtime_mode: fallback_single_session` và `independence: degraded`.
+Single-agent simulation chỉ được dùng như degraded fallback cho local experimentation, low-risk documentation-only tasks, learning/demo workflows, hoặc task được user đánh dấu rõ là fallback-allowed. Fallback bị cấm cho production implementation, Epic, child runs, UI/API behaviour implementation, và task cần independent review/evaluation.
 
 ## Bootstrap Run
 
-1. Đọc user request và project adapter liên quan trong `.harness/project/*`.
-2. Trước khi tạo run, quyết định task có thuộc Epic container không. Với long task, đọc `.harness/guides/LONG_TASK_POLICY.md`; chỉ tạo Epic nếu xác định được ít nhất hai child runs có thể verify độc lập.
-3. Tạo normal run bằng `bash .harness/scripts/new-run.sh <task-slug>` hoặc child run bằng `bash .harness/scripts/new-run.sh --within <EPIC-ID> <task-slug>`.
-4. Dùng `.harness/guides/RUNTIME_ROLE_SEPARATION.md` để chọn role/session tiếp theo và ghi runtime metadata vào artifact.
+1. Đọc user request.
+2. Đọc project adapter nếu relevant.
+3. Classify task là Normal Run hay Epic bằng `.harness/guides/RUN_CLASSIFICATION.md`.
+4. Nếu Epic required, tạo Epic và child-run plan. Không tạo normal run cho task broad/multi-phase.
+5. Chỉ tạo normal run nếu bounded và verify được như một đơn vị.
+6. Tạo normal run bằng `bash .harness/scripts/new-run.sh <task-slug>` hoặc child run bằng `bash .harness/scripts/new-run.sh --within <EPIC-ID> <task-slug>`.
+7. Enforce role separation cho mọi normal run và mọi child run bằng `.harness/guides/RUNTIME_ROLE_SEPARATION.md`.
 
 ## Planner Phase
 
@@ -44,6 +49,7 @@ Outputs:
 - `02-implementation-contract.md`.
 
 Planner Agent phải kết thúc bằng handoff note cho Contract Reviewer Agent.
+Planner Agent phải dừng sau `02-implementation-contract.md`; không implement và không tự approve contract.
 
 ## Contract Review Phase
 
@@ -71,6 +77,7 @@ Decision:
 - `REJECTED`: Planner must revise contract before implementation.
 
 Contract Reviewer Agent phải là runtime session khác với Planner Agent trong production mode.
+Contract Reviewer Agent phải dừng sau `03-evaluator-contract-review.md`.
 
 ## Generator Phase
 
@@ -93,6 +100,7 @@ Outputs:
 - `06-fix-report.md` if applicable.
 
 Generator Agent chỉ implement sau khi `03-evaluator-contract-review.md` có `Status: APPROVED`.
+Generator Agent phải dừng sau `04-generator-worklog.md` hoặc `06-fix-report.md`; không tự evaluate.
 
 ## Evaluator Phase
 
@@ -121,6 +129,24 @@ Outputs:
 - `07-final-summary.md` after verified completion.
 
 Evaluator Agent phải là runtime session khác với Generator Agent trong production mode. Evaluation phải dựa trên visible artifacts, diff, command output, runtime evidence, browser/API evidence, logs, và acceptance criteria.
+Evaluator Agent phải dừng sau `05-evaluator-report.md` và `07-final-summary.md` nếu final summary được giao cho Evaluator.
+
+## Handoff Note Format
+
+Mỗi role phải kết thúc bằng:
+
+```md
+## Handoff
+
+- Completed role:
+- Artifacts produced:
+- Next required role:
+- Allowed next actions:
+- Blocked actions:
+- Notes for next role:
+```
+
+Nếu không có independent session cho role tiếp theo trong production implementation, current agent phải dừng ở boundary và ghi `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`.
 
 ## Kỷ luật phạm vi
 

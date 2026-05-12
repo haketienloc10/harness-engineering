@@ -225,6 +225,7 @@ template/
       list-runs.sh
       link-run-to-epic.sh
       next-role.sh
+      validate-epic.sh
       validate-run.sh
       check-conflicts.sh
       verify.sh

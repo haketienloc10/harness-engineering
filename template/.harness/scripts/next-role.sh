@@ -234,9 +234,15 @@ if [ "$NEXT_ROLE" != "none" ]; then
   EXECUTOR_VALUE="$(role_executor_get "$NEXT_ROLE")"
   if [ "$STATE" = "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ]; then
     BLOCKED="true"
-  elif { [ "$EXECUTOR_VALUE" = "unavailable" ] || [ "$EXECUTOR_VALUE" = "blocked" ]; } && [ "$FALLBACK_SINGLE_SESSION_ALLOWED" != "true" ]; then
-    block_for_executor_unavailable
-    BLOCKED="true"
+  elif [ "$FALLBACK_SINGLE_SESSION_ALLOWED" != "true" ]; then
+    case "$EXECUTOR_VALUE" in
+      subagent|task_tool|external_agent_session|isolated_process)
+        ;;
+      *)
+        block_for_executor_unavailable
+        BLOCKED="true"
+        ;;
+    esac
   fi
 fi
 

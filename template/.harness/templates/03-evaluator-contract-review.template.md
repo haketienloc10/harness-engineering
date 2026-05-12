@@ -62,7 +62,9 @@ Only required if rejected.
 
 - ...
 
-## Handoff
+## Dispatch Decision
 
-- Next role allowed to proceed: Generator Agent | Planner Agent | None
+- Next role allowed to proceed: generator | planner | none
+- Required next executor:
+- Required next state:
 - Reason:

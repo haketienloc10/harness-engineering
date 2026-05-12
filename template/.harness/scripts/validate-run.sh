@@ -30,30 +30,32 @@ yaml_get() {
 
 role_executor_get() {
   local role="$1"
-  awk -v role="$role" '
+  role_executor_field_get "$role" "executor_type"
+}
+
+role_executor_field_get() {
+  local role="$1"
+  local field="$2"
+  awk -v role="$role" -v field="$field" '
     /^role_executors:/ { in_roles = 1; next }
     in_roles == 1 && /^[^[:space:]]/ { in_roles = 0 }
     in_roles == 1 {
       pattern = "^[[:space:]]+" role ":[[:space:]]*"
       if ($0 ~ pattern) {
-        value = $0
-        sub(pattern, "", value)
-        gsub(/^"|"$/, "", value)
-        if (value != "") {
-          print value
-          exit
-        }
         in_role = 1
         next
       }
       if (in_role == 1 && $0 ~ /^[[:space:]]+[a-zA-Z_]+:[[:space:]]*$/) {
         in_role = 0
       }
-      if (in_role == 1 && $0 ~ /^[[:space:]]+executor_type:[[:space:]]*/) {
-        sub(/^[[:space:]]+executor_type:[[:space:]]*/, "", $0)
-        gsub(/^"|"$/, "", $0)
-        print $0
-        exit
+      if (in_role == 1) {
+        field_pattern = "^[[:space:]]+" field ":[[:space:]]*"
+        if ($0 ~ field_pattern) {
+          sub(field_pattern, "", $0)
+          gsub(/^"|"$/, "", $0)
+          print $0
+          exit
+        }
       }
     }
   ' "$RUN_YAML"
@@ -75,6 +77,18 @@ require_file() {
   [ -f "$RUN_DIR/$file" ] || die "Required artifact missing for state $STATE: $file"
 }
 
+require_completed_artifact() {
+  local file="$1"
+
+  require_file "$file"
+
+  grep -q '<required>' "$RUN_DIR/$file" && die "Required artifact still contains <required>: $file"
+  grep -q '<command>' "$RUN_DIR/$file" && die "Required artifact still contains <command>: $file"
+  grep -qE '^\.\.\.$' "$RUN_DIR/$file" && die "Required artifact still contains placeholder content: $file"
+  grep -qE 'Status: APPROVED \| REJECTED|Status: PASS \| FAIL' "$RUN_DIR/$file" && die "Required artifact still contains unresolved status choice: $file"
+  grep -qE 'Pass/Fail|Yes/No|Continue / Sequence / Worktree / Block|Low/Medium/High|Manual/E2E/API/Unit/Build' "$RUN_DIR/$file" && die "Required artifact still contains unresolved option placeholder: $file"
+}
+
 require_artifacts_for_state() {
   case "$STATE" in
     CREATED)
@@ -85,45 +99,45 @@ require_artifacts_for_state() {
       ;;
     CONTRACTING)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
+      require_completed_artifact "01-planner-brief.md"
       ;;
     CONTRACT_REVIEW)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
-      require_file "02-implementation-contract.md"
+      require_completed_artifact "01-planner-brief.md"
+      require_completed_artifact "02-implementation-contract.md"
       ;;
     APPROVED_FOR_IMPLEMENTATION|GENERATING)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
-      require_file "02-implementation-contract.md"
-      require_file "03-evaluator-contract-review.md"
+      require_completed_artifact "01-planner-brief.md"
+      require_completed_artifact "02-implementation-contract.md"
+      require_completed_artifact "03-evaluator-contract-review.md"
       ;;
     EVALUATING)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
-      require_file "02-implementation-contract.md"
-      require_file "03-evaluator-contract-review.md"
-      require_file "04-generator-worklog.md"
+      require_completed_artifact "01-planner-brief.md"
+      require_completed_artifact "02-implementation-contract.md"
+      require_completed_artifact "03-evaluator-contract-review.md"
+      require_completed_artifact "04-generator-worklog.md"
       ;;
     COMPLETED)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
-      require_file "02-implementation-contract.md"
-      require_file "03-evaluator-contract-review.md"
-      require_file "04-generator-worklog.md"
-      require_file "05-evaluator-report.md"
-      require_file "07-final-summary.md"
+      require_completed_artifact "01-planner-brief.md"
+      require_completed_artifact "02-implementation-contract.md"
+      require_completed_artifact "03-evaluator-contract-review.md"
+      require_completed_artifact "04-generator-worklog.md"
+      require_completed_artifact "05-evaluator-report.md"
+      require_completed_artifact "07-final-summary.md"
       ;;
     REJECTED_FOR_REPLAN)
       require_file "00-input.md"
-      require_file "01-planner-brief.md"
-      require_file "02-implementation-contract.md"
+      require_completed_artifact "01-planner-brief.md"
+      require_completed_artifact "02-implementation-contract.md"
       ;;
     BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
       [ -n "$(yaml_get blocked_reason)" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires blocked_reason"
       ;;
     FAILED_VERIFICATION)
-      require_file "05-evaluator-report.md"
+      require_completed_artifact "05-evaluator-report.md"
       ;;
     CANCELLED)
       require_file "00-input.md"
@@ -192,8 +206,8 @@ RUN_YAML="$RUN_DIR/run.yaml"
 STATE="$(yaml_get state)"
 APPROVED_FOR_IMPLEMENTATION="$(yaml_get approved_for_implementation)"
 GENERATOR_ALLOWED="$(yaml_get generator_allowed)"
-GENERATOR_EXECUTOR="$(role_executor_get generator)"
-EVALUATOR_EXECUTOR="$(role_executor_get evaluator)"
+GENERATOR_EXECUTOR_ID="$(role_executor_field_get generator executor_id)"
+EVALUATOR_EXECUTOR_ID="$(role_executor_field_get evaluator executor_id)"
 
 [ -n "$STATE" ] || die "state is empty in run.yaml"
 recognized_state "$STATE" || die "Unrecognized lifecycle state: $STATE"
@@ -210,8 +224,8 @@ if [ "$STATE" = "COMPLETED" ]; then
   validate_evaluator_report
 fi
 
-if [ -n "$GENERATOR_EXECUTOR" ] && [ -n "$EVALUATOR_EXECUTOR" ] && [ "$GENERATOR_EXECUTOR" = "$EVALUATOR_EXECUTOR" ]; then
-  die "Evaluator cannot be the same executor as Generator"
+if [ -n "$GENERATOR_EXECUTOR_ID" ] && [ -n "$EVALUATOR_EXECUTOR_ID" ] && [ "$GENERATOR_EXECUTOR_ID" = "$EVALUATOR_EXECUTOR_ID" ]; then
+  die "Evaluator cannot be the same executor_id as Generator"
 fi
 
 if [ "$STATE" = "APPROVED_FOR_IMPLEMENTATION" ] && [ "$APPROVED_FOR_IMPLEMENTATION" != "true" ]; then

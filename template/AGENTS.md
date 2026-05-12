@@ -93,6 +93,30 @@ Không sửa application code trước khi `03-evaluator-contract-review.md` app
 
 ---
 
+## Long Task / Epic Policy
+
+For long-running tasks, do not create a single giant run.
+
+Create an Epic when the task has multiple milestones, multiple user flows, multiple modules, uncertain scope, or cannot be verified cleanly in one run.
+
+Epic artifacts live under:
+
+```txt
+.harness/epics/EPIC-YYYYMMDD-NNN-task-slug/
+```
+
+Each Epic must be decomposed into smaller runs. Each run keeps the normal Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary lifecycle.
+
+Before creating a run for a long task, check whether an active Epic should own the run.
+
+Relevant guide:
+
+```txt
+.harness/guides/LONG_TASK_POLICY.md
+```
+
+---
+
 ## Role separation
 
 Agent có thể đóng Planner, Generator, và Evaluator trong cùng một conversation turn, nhưng artifacts phải tách biệt.
@@ -168,6 +192,7 @@ Chỉ load guide liên quan:
 .harness/guides/TESTING_POLICY.md
 .harness/guides/PARALLEL_WORK.md
 .harness/guides/BACKLOG_POLICY.md
+.harness/guides/LONG_TASK_POLICY.md
 ```
 
 Không load toàn bộ guides theo mặc định.

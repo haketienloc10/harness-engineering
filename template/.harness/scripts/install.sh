@@ -31,6 +31,8 @@ Ownership-safe rules:
   - Do not overwrite .harness/project/* if it already exists.
   - Do not reset .harness/runs/RUN_INDEX.md if it already exists.
   - Do not copy run history from the template.
+  - Do not reset .harness/epics/EPIC_INDEX.md if it already exists.
+  - Do not copy epic history from the template.
   - Do not overwrite .harness/backlog/HARNESS_BACKLOG.md if it already exists.
   - Kernel folders may be replaced on update:
     .harness/guides/
@@ -144,6 +146,17 @@ write_clean_run_index() {
 EOF
 }
 
+write_clean_epic_index() {
+  local dest="$1"
+
+  run_write_file "$dest" <<'EOF'
+# Harness Epic Index
+
+| Epic ID | Task | Status | Owner | Started At | Last Updated | Active Run | Notes |
+|---|---|---|---|---|---|---|---|
+EOF
+}
+
 write_installation_note() {
   local dest="$1"
   local installed_at
@@ -160,6 +173,8 @@ This target repository owns its installed \`.harness/\` tree.
 
 - \`.harness/project/*\` belongs to this target repository. The installer creates missing files only and does not overwrite existing project adapter files.
 - \`.harness/runs/RUN_INDEX.md\` and run history belong to this target repository. The installer does not reset an existing run index and does not copy run history from the seed template.
+- \`.harness/epics/*\` belongs to target repository.
+- Installer does not reset \`.harness/epics/EPIC_INDEX.md\` and does not copy epic history from seed.
 - \`.harness/backlog/HARNESS_BACKLOG.md\` belongs to this target repository. The installer does not overwrite it if it already exists.
 - Kernel folders may be replaced during an explicit update:
   - \`.harness/guides/\`
@@ -341,6 +356,20 @@ install_harness_tree() {
     touch "$target_harness/runs/.gitkeep"
   else
     planned "touch $target_harness/runs/.gitkeep"
+  fi
+
+  run_mkdir "$target_harness/epics"
+  if [ -f "$target_harness/epics/EPIC_INDEX.md" ]; then
+    info "Preserved existing epic index: $target_harness/epics/EPIC_INDEX.md"
+  else
+    write_clean_epic_index "$target_harness/epics/EPIC_INDEX.md"
+    info "Created epic index: $target_harness/epics/EPIC_INDEX.md"
+  fi
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    touch "$target_harness/epics/.gitkeep"
+  else
+    planned "touch $target_harness/epics/.gitkeep"
   fi
 
   info "Installed .harness/ workflow files"

@@ -1,5 +1,9 @@
 # Planning and Contract Policy
 
+## Epic Check
+
+Trước khi tạo một run, quyết định task có thuộc Epic không. Nếu task có nhiều milestone, nhiều user flow, nhiều module, scope chưa chắc, hoặc không thể verify gọn trong một run, dùng `.harness/guides/LONG_TASK_POLICY.md` và chia thành nhiều run nhỏ.
+
 ## Planner Brief
 
 `01-planner-brief.md` phải làm rõ:

@@ -32,6 +32,11 @@ Update = optional, explicit, ownership-safe merge
 - Không coi `.harness/` trong target repo là application source code.
 - Không reset run history, backlog local, hoặc project adapter khi update.
 
+Harness hỗ trợ 2 tầng làm việc:
+
+- Epic / Workstream layer: dùng cho long-running tasks, giữ roadmap, acceptance matrix, decision log, và run index.
+- Run layer: dùng cho từng implementation unit, giữ planner, contract, evaluator, worklog, và final summary.
+
 ## Cài nhanh bằng curl
 
 Chạy từ thư mục repository đích:
@@ -92,6 +97,7 @@ target-repo/
     project/
     scripts/
     backlog/
+    epics/
     runs/
 ```
 
@@ -99,6 +105,7 @@ Các vùng ownership-safe:
 
 - `.harness/project/*` chỉ được tạo nếu chưa có. Đây là project adapter của repo đích.
 - `.harness/runs/*` không bị reset khi update.
+- `.harness/epics/*` không bị reset khi update. Installer không copy epic history từ seed.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
 - `.harness/guides/*`, `.harness/templates/*`, `.harness/scripts/*`, `.harness/project-templates/*` là kernel/template layer có thể được update có chủ đích.
 
@@ -132,6 +139,7 @@ template/
       PARALLEL_WORK.md
       BACKLOG_POLICY.md
       LANGUAGE_POLICY.md
+      LONG_TASK_POLICY.md
     templates/
       00-input.template.md
       01-planner-brief.template.md
@@ -141,6 +149,12 @@ template/
       05-evaluator-report.template.md
       06-fix-report.template.md
       07-final-summary.template.md
+      00-epic-overview.template.md
+      01-epic-roadmap.template.md
+      02-epic-acceptance-matrix.template.md
+      03-epic-decision-log.template.md
+      04-epic-run-index.template.md
+      epic.yaml.template
       run.yaml.template
     project-templates/
       PROJECT_MAP.template.md
@@ -152,13 +166,18 @@ template/
     scripts/
       install.sh
       inspect-project.sh
+      new-epic.sh
       new-run.sh
+      list-epics.sh
       list-runs.sh
+      link-run-to-epic.sh
       check-conflicts.sh
       verify.sh
       smoke.sh
     backlog/
       HARNESS_BACKLOG.md
+    epics/
+      .gitkeep
     runs/
       .gitkeep
 ```

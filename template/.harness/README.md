@@ -15,6 +15,7 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
   project-templates/
   scripts/
   backlog/
+  epics/
   runs/
 ```
 
@@ -24,7 +25,8 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 - `project-templates/`: template trung lập dùng khi tạo project adapter mới.
 - `scripts/`: helper scripts như `new-run.sh`, `inspect-project.sh`, `verify.sh`.
 - `backlog/`: proposal cải tiến Harness local.
-- `runs/`: run history của target repo.
+- `epics/`: workstream/long-task coordination layer. Epic dùng cho task dài hơi, giữ roadmap, acceptance matrix, decision log, và run index.
+- `runs/`: execution units. Run dùng cho đơn vị thực thi nhỏ có thể verify.
 
 ## Sau khi install
 

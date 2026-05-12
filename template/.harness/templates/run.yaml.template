@@ -1,5 +1,6 @@
 run_id: <RUN-ID>
 task_slug: <TASK-SLUG>
+epic_id: ""
 status: created
 branch: ""
 worktree: ""

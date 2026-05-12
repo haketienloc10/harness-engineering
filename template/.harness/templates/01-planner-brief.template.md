@@ -1,5 +1,9 @@
 # Planner Brief
 
+## Related Epic
+
+None
+
 ## Goal
 
 <Mục tiêu cần đạt, viết lại rõ ràng>

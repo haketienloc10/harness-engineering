@@ -1,0 +1,30 @@
+epic_id: <EPIC-ID>
+task_slug: <TASK-SLUG>
+status: active
+owner: agent
+created_at: <CREATED-AT>
+updated_at: <UPDATED-AT>
+
+goal: ""
+non_goals: []
+
+scope:
+  summary: ""
+  expected_modules: []
+  expected_user_flows: []
+  expected_runtime_surfaces: []
+
+decomposition:
+  strategy: milestone
+  run_count_estimate: unknown
+  active_run_id: ""
+
+acceptance:
+  source_file: 02-acceptance-matrix.md
+  completion_policy: all_required_acceptance_passed
+
+risk:
+  known_unknowns: []
+  high_risk_areas: []
+
+notes: ""

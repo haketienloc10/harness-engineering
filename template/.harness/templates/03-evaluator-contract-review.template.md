@@ -4,15 +4,18 @@
 
 ```yaml
 role: ContractReviewer
-runtime_mode: production_multi_session
+runtime_mode: production_multi_executor
+executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_id: <required>
+agent_runtime: <required>
+agent_session_id: <required>
 independence: independent
-reviewer_session_id: <required>
-contract_author_session_id: <required>
+contract_author_executor_id: <required>
 ```
 
 ## Independence Check
 
-- Reviewer is separate from contract author: yes | no
+- Reviewer executor is separate from contract author executor: yes | no
 - If no, is fallback explicitly allowed for this task: yes | no
 - Decision if not independent and fallback not allowed: REJECTED
 

@@ -93,6 +93,12 @@ Outputs:
 Description:
 Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, role executors, independent review/evaluation, and handoff fallback.
 
+For non-trivial implementation work, `lifecycle-orchestration` is mandatory.
+
+Harness is agent-runtime agnostic.
+
+If the current agent runtime supports independent subagent or task execution, role-specific execution is mandatory, not optional.
+
 Use when:
 - Starting any non-trivial implementation run.
 - Reviewing or approving an implementation contract.
@@ -101,10 +107,18 @@ Use when:
 - Independent sessions are unavailable and a role-boundary handoff is required.
 
 Load:
-`.harness/guides/LIFECYCLE_ORCHESTRATION.md`
+- `.harness/guides/LIFECYCLE_ORCHESTRATION.md`
+- `.harness/guides/SUBAGENT_EXECUTION.md`
 
-If Codex subagents are available, also load:
-`.harness/guides/SUBAGENT_EXECUTION.md`
+The Orchestrator must not perform required role work directly when independent executors are available.
+
+The Orchestrator must dispatch to the next role-specific executor:
+- `planner`
+- `contract-reviewer`
+- `generator`
+- `evaluator`
+
+Only use `HANDOFF.md` when no independent executor, subagent, task tool, or external agent session is available.
 
 Outputs:
 - Correct `run.yaml` lifecycle state

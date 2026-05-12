@@ -8,13 +8,29 @@ Planner -> Contract Reviewer -> Generator -> Evaluator
 
 `run.yaml` is the authoritative state source. Markdown artifacts are evidence for state transitions.
 
+## Executor Dispatch Rule
+
+Harness is agent-runtime agnostic.
+
+For production lifecycle work, required role decisions must be produced by independent role executors, not by the Orchestrator.
+
+When the current runtime supports independent role execution:
+- `PLANNING` and `CONTRACTING` must dispatch to `planner`.
+- `CONTRACT_REVIEW` must dispatch to `contract-reviewer`.
+- `GENERATING` must dispatch to `generator`.
+- `EVALUATING` must dispatch to `evaluator`.
+
+The Orchestrator must not continue by writing the required role artifact itself.
+
+`HANDOFF.md` is only valid when no independent role executor can be started.
+
 ## Hard Rules
 
 1. Generator cannot start unless Contract Reviewer approved the contract.
 2. Evaluator cannot be the same executor as Generator.
 3. Final Summary cannot claim completion without evaluator evidence.
-4. The orchestrator may coordinate state but must not replace required role decisions with its own judgment.
-5. If a required executor cannot run, create `HANDOFF.md`, set state to `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, and stop.
+4. The Orchestrator may coordinate state but must not replace required role decisions with its own judgment.
+5. If a required independent executor cannot run, create `HANDOFF.md`, set state to `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, and stop.
 
 ## State Table
 
@@ -23,7 +39,7 @@ Planner -> Contract Reviewer -> Generator -> Evaluator
 | `CREATED` | `run.yaml`, `00-input.md` | Orchestrator | Confirm task record, route to Planner | Implement code, approve contract, evaluate | Updated `run.yaml` with `state: PLANNING` | `PLANNING`, `CANCELLED`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF` |
 | `PLANNING` | `00-input.md`, project/codebase context as needed | `planner` | Analyze scope, classify run, write plan | Implement code, approve own contract, evaluate | `01-planner-brief.md` | `CONTRACTING`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
 | `CONTRACTING` | `01-planner-brief.md` | `planner` | Write measurable implementation contract | Implement code, approve own contract, evaluate | `02-implementation-contract.md` | `CONTRACT_REVIEW`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
-| `CONTRACT_REVIEW` | `02-implementation-contract.md` | `contract_reviewer` | Approve or reject contract, document gaps | Implement code, rewrite contract silently | `03-evaluator-contract-review.md` | `APPROVED_FOR_IMPLEMENTATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
+| `CONTRACT_REVIEW` | `02-implementation-contract.md` | `contract-reviewer` | Approve or reject contract, document gaps | Implement code, rewrite contract silently | `03-evaluator-contract-review.md` | `APPROVED_FOR_IMPLEMENTATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
 | `APPROVED_FOR_IMPLEMENTATION` | Approved `03-evaluator-contract-review.md`, `approved_for_implementation: true`, `generator_allowed: true` | Orchestrator | Route to Generator | Start evaluation, claim implementation done | Updated `run.yaml` with `state: GENERATING` | `GENERATING`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
 | `GENERATING` | Approved contract and review artifacts | `generator` | Implement only the approved contract, record commands and diff summary | Change contract scope, self-evaluate, mark complete | `04-generator-worklog.md` | `EVALUATING`, `FAILED_VERIFICATION`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
 | `EVALUATING` | `04-generator-worklog.md`, code diff, verification commands | `evaluator` | Verify with real evidence, pass/fail/block | Patch implementation to make tests pass, rely on hidden memory, be same executor as Generator | `05-evaluator-report.md` | `COMPLETED`, `FAILED_VERIFICATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, `CANCELLED` |
@@ -48,4 +64,4 @@ next_required_artifact:
 role_executors:
 ```
 
-The orchestrator may update state fields after a role artifact exists. It must not invent approval, implementation, or verification decisions.
+The Orchestrator may update state fields after a role artifact exists. It must not invent approval, implementation, or verification decisions.

@@ -6,9 +6,12 @@ This artifact records the Epic input and Epic planner brief. Implementation must
 
 ```yaml
 role: Planner
-runtime_mode: production_multi_session
+runtime_mode: production_multi_executor
+executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_id: <required>
+agent_runtime: <required>
+agent_session_id: <required>
 independence: independent
-epic_planner_session_id: <required>
 ```
 
 ## Epic ID

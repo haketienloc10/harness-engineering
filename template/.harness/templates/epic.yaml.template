@@ -7,7 +7,11 @@ created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 
 runtime:
-  mode: production_multi_session
+  mode: production_multi_executor
+  agent_runtime: ""
+  independent_executors_required_when_available: true
+  handoff_only_when_independent_executor_unavailable: true
+  fallback_single_session_allowed: false
   independence: independent
   child_run_role_separation_required: true
 

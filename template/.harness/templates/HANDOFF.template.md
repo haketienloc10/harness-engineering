@@ -1,5 +1,11 @@
 # Harness Role Handoff
 
+Use this file only when no independent executor, subagent, task tool, external agent session, or isolated role worker is available.
+
+Do not create this file when the next role can be executed by an independent role executor.
+
+Harness is agent-runtime agnostic. This handoff is a fallback mechanism, not the default lifecycle path.
+
 ## Current Run
 
 `<RUN-DIR>`
@@ -36,10 +42,10 @@
 
 <DECISION-CRITERIA>
 
-## Copy-Paste Prompt For New Codex CLI Session
+## Copy-Paste Prompt For New Agent Session
 
 ```txt
-You are continuing a Harness lifecycle run in an independent Codex CLI session.
+You are continuing a Harness lifecycle run in an independent agent session.
 
 Run directory:
 <RUN-DIR>

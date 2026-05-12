@@ -2,27 +2,37 @@
 
 ## Purpose
 
+Harness is agent-runtime agnostic.
+
 Harness dùng các runtime role tách biệt để giảm self-approval, context contamination, và implementation bias.
+
+Top-level agent là Orchestrator. Orchestrator điều phối lifecycle state, nhưng không làm thay role production khi current agent runtime hỗ trợ independent executor.
 
 ## Production Mode
 
-Production mode yêu cầu các agent/session riêng cho:
+Production mode yêu cầu independent role executors cho:
 
 - Planner Agent
 - Contract Reviewer Agent
 - Generator Agent
 - Evaluator Agent
 
-Một role không được approve output của chính nó. Contract Reviewer không được là cùng runtime session đã authored contract. Evaluator không được là cùng runtime session đã generated implementation.
+Nếu current agent runtime hỗ trợ subagent, task tool, external agent session, isolated role executor, hoặc role-specific process, role-specific execution là mandatory.
+
+Một role không được approve output của chính nó. Contract Reviewer không được là cùng executor đã authored contract. Evaluator không được là cùng executor đã generated implementation.
 
 Production implementation tasks must use:
 
 ```yaml
-runtime_mode: production_multi_session
+runtime_mode: production_multi_executor
+executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_id: <required>
+agent_runtime: <required>
+agent_session_id: <required>
 independence: independent
 ```
 
-Một runtime session không được đóng nhiều production roles trong cùng một run.
+Một executor không được đóng nhiều production roles trong cùng một run.
 
 Lifecycle chuẩn:
 
@@ -46,7 +56,7 @@ User Request
 
 ## Context Isolation
 
-Each role should run in a fresh session where possible.
+Each role should run in an independent executor where possible. When the current runtime supports independent executors, this is required.
 
 Evaluator must not use Planner/Generator hidden reasoning or memory. Evaluator must cite visible evidence from artifacts, diffs, command output, runtime checks, browser/API evidence, screenshots descriptions, or logs.
 
@@ -90,10 +100,13 @@ Evaluator Agent may use:
 New run artifacts must include runtime metadata near the top:
 
 ```yaml
-runtime_mode: production_multi_session | fallback_single_session
+runtime_mode: production_multi_executor | fallback_single_session
+executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_id: <required>
+agent_runtime: <required>
+agent_session_id: <required>
 independence: independent | degraded
 role: Planner | ContractReviewer | Generator | Evaluator | Coordinator
-session_id: <manual label or runtime id>
 ```
 
 Existing old runs may not have runtime metadata. New runs should include it. Old runs should not be rewritten unless explicitly requested.
@@ -120,7 +133,7 @@ Fallback mode is forbidden for:
 - tasks requiring independent contract review or independent evaluation;
 - tasks where the user explicitly requires independent roles.
 
-Environment limitations are not a production fallback permission. If independent role sessions are unavailable for real implementation work, the current agent must stop after its assigned role and produce a handoff prompt for the next independent session.
+Environment limitations are not a production fallback permission. If independent role executors are unavailable for real implementation work, the current agent must stop after its assigned role and produce `HANDOFF.md` for the next independent executor.
 
 Fallback artifacts must include:
 
@@ -134,18 +147,20 @@ Fallback mode is not production-grade. A fallback Evaluator must still use visib
 
 ## Blocking Rule
 
-If a task requires production multi-session and the environment cannot spawn separate sessions, mark the run blocked for handoff:
+If a task requires production multi-executor and the environment cannot spawn independent executors, mark the run blocked for handoff:
 
 ```md
 ## Role Separation Status
 
-- Production multi-session required: yes
+- Production multi-executor required: yes
 - Current session role: <role>
 - Next required role: <role>
 - Same-session fallback allowed: no
 - Status: BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
 - Reason: This task requires independent runtime roles.
 ```
+
+Do not create `HANDOFF.md` merely to cross a role boundary when an independent role executor can be started.
 
 ## Handoff Protocol
 

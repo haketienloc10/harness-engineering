@@ -38,7 +38,25 @@ Harness có ba lớp:
 2. **Role Policy**: Planner, Contract Reviewer, Generator, and Evaluator responsibilities.
 3. **Lifecycle Orchestrator**: `run.yaml` state machine, gates, next-role detection, handoff, and validation.
 
-Subagents là executor cho từng role lifecycle, không phải workflow tự thân. Khi subagents không có sẵn hoặc không thể bảo đảm independence, Harness phải tạo `HANDOFF.md` để user mở session mới thay vì kết thúc bằng “Suggested Next Steps” chung chung.
+## Runtime-Agnostic Role Execution
+
+Harness is agent-runtime agnostic.
+
+For production workflows, Harness separates lifecycle roles:
+
+```txt
+Planner -> Contract Reviewer -> Generator -> Evaluator
+```
+
+The top-level agent acts as Orchestrator only.
+
+When the current runtime supports independent role execution through subagents, task tools, external sessions, or isolated workers, Harness requires role-specific execution.
+
+The Orchestrator must dispatch role work to the required executor and must not simulate production role separation in one agent.
+
+`HANDOFF.md` is only used when no independent role executor can be started.
+
+Subagents, task tools, external agent sessions, and isolated role workers are executor types for lifecycle roles, not the workflow itself.
 
 Harness dùng một execution namespace:
 

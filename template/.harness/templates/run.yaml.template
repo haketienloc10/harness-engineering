@@ -11,11 +11,42 @@ evaluator_required: true
 last_artifact: 00-input.md
 next_required_artifact: 01-planner-brief.md
 
+runtime:
+  mode: production_multi_executor
+  agent_runtime: ""
+  independent_executors_required_when_available: true
+  handoff_only_when_independent_executor_unavailable: true
+  fallback_single_session_allowed: false
+  supported_executor_types: []
+
 role_executors:
+  orchestrator:
+    executor_type:
+    executor_id:
   planner:
+    executor_type:
+    executor_id:
+    artifact:
   contract_reviewer:
+    executor_type:
+    executor_id:
+    artifact:
   generator:
+    executor_type:
+    executor_id:
+    artifact:
   evaluator:
+    executor_type:
+    executor_id:
+    artifact:
+
+allowed_executor_types:
+  - subagent
+  - task_tool
+  - external_agent_session
+  - isolated_process
+  - manual_handoff
+  - fallback_single_session
 
 scope:
   task_slug: <TASK-SLUG>

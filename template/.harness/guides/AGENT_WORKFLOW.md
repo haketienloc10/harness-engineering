@@ -2,7 +2,7 @@
 
 ## Luồng mặc định
 
-Default workflow là multi-agent / multi-session. Production-grade work yêu cầu handoff giữa các runtime session/agent riêng:
+Default workflow là multi-agent / multi-session. Production-grade work yêu cầu dispatch giữa các independent role executors:
 
 ```txt
 User Request
@@ -17,6 +17,10 @@ User Request
 
 Single-agent simulation chỉ được dùng như degraded fallback cho local experimentation, low-risk documentation-only tasks, learning/demo workflows, hoặc task được user đánh dấu rõ là fallback-allowed. Fallback bị cấm cho production implementation, Epic, child runs, UI/API behaviour implementation, và task cần independent review/evaluation.
 
+When independent role executors are available, each phase boundary is crossed by dispatching the next role-specific executor.
+
+Do not create a handoff file just because the next role is different.
+
 ## Bootstrap Run
 
 1. Đọc user request.
@@ -25,7 +29,7 @@ Single-agent simulation chỉ được dùng như degraded fallback cho local ex
 4. Nếu Epic required, tạo Epic và child-run plan. Không tạo normal run cho task broad/multi-phase.
 5. Chỉ tạo normal run nếu bounded và verify được như một đơn vị.
 6. Tạo normal run bằng `bash .harness/scripts/new-run.sh <task-slug>` hoặc child run bằng `bash .harness/scripts/new-run.sh --within <EPIC-ID> <task-slug>`.
-7. Enforce lifecycle state và role separation bằng `.harness/guides/LIFECYCLE_ORCHESTRATION.md`; nếu có Codex subagents, dùng `.harness/guides/SUBAGENT_EXECUTION.md`.
+7. Enforce lifecycle state và role separation bằng `.harness/guides/LIFECYCLE_ORCHESTRATION.md`; nếu current agent runtime hỗ trợ independent subagent hoặc task execution, dùng `.harness/guides/SUBAGENT_EXECUTION.md`.
 
 ## Planner Phase
 
@@ -133,7 +137,13 @@ Evaluator Agent phải dừng sau `05-evaluator-report.md` và `07-final-summary
 
 ## Handoff Note Format
 
-Mỗi role phải kết thúc bằng:
+Each role artifact may end with a Handoff note for traceability.
+
+This note is not the same as `HANDOFF.md`.
+
+`HANDOFF.md` is only created when the next independent executor cannot be started.
+
+Mỗi role có thể kết thúc bằng:
 
 ```md
 ## Handoff
@@ -146,7 +156,7 @@ Mỗi role phải kết thúc bằng:
 - Notes for next role:
 ```
 
-Nếu không có independent session cho role tiếp theo trong production implementation, current agent phải dừng ở boundary và ghi `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`.
+Nếu không có independent executor cho role tiếp theo trong production implementation, current agent phải dừng ở boundary, tạo `HANDOFF.md`, và ghi `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`.
 
 ## Kỷ luật phạm vi
 

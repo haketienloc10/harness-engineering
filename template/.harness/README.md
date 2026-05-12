@@ -30,6 +30,8 @@ Nó thuộc quyền sở hữu của target repository sau khi install. Repo see
 - `backlog/`: proposal cải tiến Harness local.
 - `runs/`: execution namespace. Chứa normal runs và Epic containers. Epic là container điều phối task dài hơi, còn child runs trong Epic mới là đơn vị implementation có thể verify.
 
+Production workflow dùng các session/agent riêng cho Planner, Contract Reviewer, Generator, và Evaluator. Single-session simulation chỉ là lower-trust fallback cho local experimentation hoặc môi trường không hỗ trợ multi-agent.
+
 ## Sau khi install
 
 Ask your agent:

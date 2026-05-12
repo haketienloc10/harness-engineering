@@ -1,21 +1,32 @@
-# Evaluator Contract Review
+# Contract Reviewer Report
 
-## Review Decision
+## Runtime Metadata
 
-- [ ] Approved
-- [ ] Needs Revision
-- [ ] Blocked due to conflict
+- Role: Contract Reviewer Agent
+- Reviewer session: <session id / agent id / manual label>
+- Contract author session reviewed: <session id / agent id / manual label>
+- Runtime mode: production_multi_session | fallback_single_session
+- Independence: independent | degraded
 
-## Contract Completeness
+## Decision
 
-- [ ] Goal is clear
-- [ ] Non-goals are clear
-- [ ] Behaviour is testable
-- [ ] Verification commands are concrete
-- [ ] Runtime/smoke checks are defined if needed
-- [ ] Risky assumptions are called out
-- [ ] Expected changed files/areas are listed
-- [ ] Active run conflict check is completed
+- Status: APPROVED | REJECTED
+- Reason:
+
+## Independence Check
+
+- Reviewer is separate from contract author: yes | no
+- If no, mark lower trust and explain why fallback was used.
+
+## Contract Quality Checklist
+
+- Acceptance criteria are measurable: pass | fail
+- Verification plan is executable: pass | fail
+- Scope is bounded: pass | fail
+- Behaviour contract is clear: pass | fail
+- Assumptions are explicit: pass | fail
+- Conflict risks are identified: pass | fail
+- Project rules are respected: pass | fail
 
 ## Conflict Review
 
@@ -36,14 +47,13 @@
 
 - ...
 
-## Required Changes Before Coding
+## Required Revisions
+
+Only required if rejected.
 
 - ...
 
-## Final Decision
+## Handoff
 
-<Approved / Needs Revision / Blocked>
-
-## Notes
-
-<Không sửa code ở bước này>
+- Next role allowed to proceed: Generator Agent | Planner Agent | None
+- Reason:

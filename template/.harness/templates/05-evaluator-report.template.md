@@ -1,5 +1,18 @@
 # Evaluator Report
 
+## Runtime Metadata
+
+- Role: Evaluator Agent
+- Evaluator session: <session id / agent id / manual label>
+- Generator session reviewed: <session id / agent id / manual label>
+- Runtime mode: production_multi_session | fallback_single_session
+- Independence: independent | degraded
+
+## Independence Check
+
+- Evaluator is separate from Generator: yes | no
+- If no, mark lower trust and explain fallback.
+
 ## Evaluation Decision
 
 - [ ] Pass
@@ -66,9 +79,18 @@ Evaluator phải điền một dòng cho từng required behaviour trong impleme
 
 - ...
 
-## Final Verdict
+## Evidence
 
-<Pass / Fail / Needs Fix / Blocked>
+Include exact commands, outputs, logs, screenshots descriptions, browser/API evidence, or runtime observations.
+
+```text
+...
+```
+
+## Decision
+
+- Status: PASS | FAIL
+- Reason:
 
 ## Notes for Generator
 

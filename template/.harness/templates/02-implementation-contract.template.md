@@ -1,5 +1,12 @@
 # Implementation Contract
 
+## Runtime Metadata
+
+- Role: Planner Agent
+- Contract author session: <session id / agent id / manual label>
+- Runtime mode: production_multi_session | fallback_single_session
+- Independence: independent | degraded
+
 ## Contract Status
 
 Draft

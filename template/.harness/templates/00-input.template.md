@@ -1,5 +1,12 @@
 # Run Input
 
+## Runtime Metadata
+
+- Role: Planner Agent
+- Runtime session: <session id / agent id / manual label>
+- Runtime mode: production_multi_session | fallback_single_session
+- Independence: independent | degraded
+
 ## Run ID
 
 <RUN-ID>

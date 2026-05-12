@@ -6,7 +6,7 @@ Repository này đã cài **Harness** để làm việc với AI theo cách có 
 
 File này là bootstrap instruction của target repository. Giữ file này ngắn; quy trình chi tiết nằm trong `.harness/guides/*` và chỉ đọc khi liên quan đến task hiện tại.
 
-Người dùng vẫn có thể đưa một yêu cầu phát triển bình thường. Agent phải tự điều phối các vai trò Planner, Generator, và Evaluator thông qua artifact trong `.harness/runs/*`.
+Người dùng vẫn có thể đưa một yêu cầu phát triển bình thường. Production workflow yêu cầu các runtime session/agent riêng cho Planner, Contract Reviewer, Generator, và Evaluator, được điều phối qua artifact trong `.harness/runs/*`.
 
 ---
 
@@ -124,6 +124,17 @@ Luôn update:
 
 Không sửa application code trước khi `03-evaluator-contract-review.md` approve `02-implementation-contract.md`.
 
+Lifecycle chuẩn:
+
+```txt
+User Request
+  -> Planner Agent
+  -> Contract Reviewer Agent
+  -> Generator Agent
+  -> Evaluator Agent
+  -> Final Summary
+```
+
 ---
 
 ## Long Task / Epic Policy
@@ -154,7 +165,7 @@ Create child runs with:
 bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child task"
 ```
 
-Each Epic must be decomposed into smaller child runs. Each child run keeps the normal Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary lifecycle.
+Each Epic must be decomposed into smaller child runs. Each child run keeps the normal Planner Agent -> Contract Reviewer Agent -> Generator Agent -> Evaluator Agent -> Final Summary lifecycle.
 
 Before creating a run for a long task, check whether an active Epic should own the run.
 
@@ -168,13 +179,32 @@ Relevant guide:
 
 ## Role separation
 
-Agent có thể đóng Planner, Generator, và Evaluator trong cùng một conversation turn, nhưng artifacts phải tách biệt.
+Production workflow yêu cầu các agent/session riêng cho:
 
-- Planner định nghĩa goal, scope, non-scope, acceptance criteria, impacted areas, risks, và unknowns.
-- Generator chỉ implement approved contract.
-- Evaluator kiểm chứng bằng original input, planner brief, contract, acceptance criteria, và evidence thực tế.
+- Planner Agent
+- Contract Reviewer Agent
+- Generator Agent
+- Evaluator Agent
 
-Evaluator không được approve chỉ bằng code inspection.
+Một role session không được approve output trước đó của chính nó. Planner Agent tạo `00-input.md`, `01-planner-brief.md`, và `02-implementation-contract.md`, nhưng không được implement application code hoặc approve contract của mình. Contract Reviewer Agent review contract và phải approve/reject trong `03-evaluator-contract-review.md`, nhưng không được sửa application code hoặc rewrite contract âm thầm. Generator Agent chỉ implement sau khi contract được approve và không được tự approve implementation. Evaluator Agent phải là session/agent khác với Generator trong production mode.
+
+Evaluator không được rely vào hidden reasoning hoặc memory từ Planner/Generator. Evaluation chỉ được dựa trên visible artifacts, code diff, command output, runtime evidence, browser evidence, API evidence, logs, và acceptance criteria. Evaluator không được approve chỉ bằng code inspection.
+
+Single-agent simulation chỉ là degraded fallback cho local experimentation, task nhỏ low-risk, hoặc môi trường không hỗ trợ multi-agent. Fallback artifact phải ghi rõ:
+
+```yaml
+runtime_mode: fallback_single_session
+independence: degraded
+reason: "<why separate sessions were unavailable>"
+```
+
+Fallback mode không phải production-grade.
+
+Chi tiết:
+
+```txt
+.harness/guides/RUNTIME_ROLE_SEPARATION.md
+```
 
 ---
 
@@ -238,6 +268,7 @@ Chỉ load guide liên quan:
 .harness/guides/PROJECT_DISCOVERY.md
 .harness/guides/LANGUAGE_POLICY.md
 .harness/guides/PLANNING_AND_CONTRACTS.md
+.harness/guides/RUNTIME_ROLE_SEPARATION.md
 .harness/guides/TESTING_POLICY.md
 .harness/guides/PARALLEL_WORK.md
 .harness/guides/BACKLOG_POLICY.md

@@ -1,5 +1,12 @@
 # Final Summary
 
+## Runtime Metadata
+
+- Finalized by role: Evaluator Agent | Coordinator | Generator Agent
+- Based on evaluator report: <path>
+- Runtime mode: production_multi_session | fallback_single_session
+- Independence: independent | degraded
+
 ## Related Epic
 
 None

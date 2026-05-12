@@ -79,13 +79,20 @@ bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child tas
 
 `--epic` có thể tồn tại như alias tương thích, nhưng docs và workflow mới phải dùng `--within`.
 
-Mỗi child run vẫn giữ lifecycle bình thường:
+Mỗi child run vẫn giữ lifecycle multi-agent bình thường:
 
 ```txt
-Planner -> Contract -> Evaluator -> Implementation -> Verification -> Summary
+Planner Agent -> Contract Reviewer Agent -> Generator Agent -> Evaluator Agent -> Final Summary
 ```
 
 Acceptance criteria cấp Epic được track trong `02-acceptance-matrix.md`; evidence phải trỏ tới child runs.
+
+Với mỗi child run:
+
+- Contract Reviewer Agent phải độc lập với Planner Agent của child run đó trong production mode.
+- Evaluator Agent phải độc lập với Generator Agent của child run đó trong production mode.
+- Epic coordinator không được thay thế Evaluator approval của child run.
+- Nếu child run dùng fallback single-session, artifact phải mark `runtime_mode: fallback_single_session` và `independence: degraded`.
 
 ## Quy Tắc Không Tạo Run Khổng Lồ
 
@@ -126,6 +133,8 @@ Evaluator ở cấp Epic kiểm tra:
 - roadmap và `04-run-index.md` khớp thực tế.
 
 Evaluator không được đóng Epic chỉ vì run cuối pass nếu acceptance matrix cấp Epic chưa đủ evidence.
+
+Epic coordinator có thể tổng hợp roadmap, decision log, và acceptance matrix, nhưng không được substitute cho independent Evaluator approval ở cấp child run.
 
 ## Quy Tắc Đóng Epic
 

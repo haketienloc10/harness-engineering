@@ -38,13 +38,13 @@ Harness có ba lớp:
 
 1. Artifact Protocol: run folders, templates, and evidence files.
 2. Role Policy: Planner, Contract Reviewer, Generator, and Evaluator boundaries.
-3. Lifecycle Orchestrator: `run.yaml`, state transitions, gates, `next-role.sh`, `HANDOFF.md`, and `validate-run.sh`.
+3. Lifecycle Orchestrator: `run.yaml`, state transitions, gates, `next-role.sh`, executor dispatch, and `validate-run.sh`.
 
 Harness is agent-runtime agnostic.
 
 Production workflow dùng independent role executors cho Planner, Contract Reviewer, Generator, và Evaluator. Subagents, task tools, external agent sessions, và isolated role workers là executor types cho từng role, không thay thế lifecycle state machine.
 
-Khi current agent runtime hỗ trợ independent role execution, Harness bắt buộc dispatch sang role-specific executor. Nếu không thể start independent executor, tạo `HANDOFF.md` và dừng ở role boundary thay vì ghi “Suggested Next Steps” chung chung.
+Khi current agent runtime hỗ trợ independent role execution, Harness bắt buộc dispatch sang role-specific executor. Nếu không thể start independent executor, run phải vào `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` trừ khi `run.yaml` explicit cho phép `fallback_single_session_allowed: true`.
 
 ## Sau khi install
 

@@ -25,7 +25,7 @@ Production implementation tasks must use:
 
 ```yaml
 runtime_mode: production_multi_executor
-executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
@@ -101,7 +101,7 @@ New run artifacts must include runtime metadata near the top:
 
 ```yaml
 runtime_mode: production_multi_executor | fallback_single_session
-executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
@@ -133,7 +133,7 @@ Fallback mode is forbidden for:
 - tasks requiring independent contract review or independent evaluation;
 - tasks where the user explicitly requires independent roles.
 
-Environment limitations are not a production fallback permission. If independent role executors are unavailable for real implementation work, the current agent must stop after its assigned role and produce `HANDOFF.md` for the next independent executor.
+Environment limitations are not a production fallback permission. If independent role executors are unavailable for real implementation work, the current agent must stop at the role boundary and set `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` unless `fallback_single_session_allowed: true` is explicitly set in `run.yaml`.
 
 Fallback artifacts must include:
 
@@ -147,7 +147,7 @@ Fallback mode is not production-grade. A fallback Evaluator must still use visib
 
 ## Blocking Rule
 
-If a task requires production multi-executor and the environment cannot spawn independent executors, mark the run blocked for handoff:
+If a task requires production multi-executor and the environment cannot spawn independent executors, mark the run blocked:
 
 ```md
 ## Role Separation Status
@@ -156,18 +156,18 @@ If a task requires production multi-executor and the environment cannot spawn in
 - Current session role: <role>
 - Next required role: <role>
 - Same-session fallback allowed: no
-- Status: BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF
+- Status: BLOCKED_FOR_EXECUTOR_UNAVAILABLE
 - Reason: This task requires independent runtime roles.
 ```
 
-Do not create `HANDOFF.md` merely to cross a role boundary when an independent role executor can be started.
+Do not create `HANDOFF.md` for role transitions.
 
-## Handoff Protocol
+## Next Role Note
 
-Each phase must end with a clear handoff note:
+Each phase may end with a clear Next role note for traceability:
 
 ```md
-## Handoff
+## Next Role
 
 - Completed role:
 - Artifacts produced:
@@ -176,6 +176,8 @@ Each phase must end with a clear handoff note:
 - Blocked actions:
 - Notes for next role:
 ```
+
+This note is not a handoff file and must not replace executor dispatch.
 
 Contract Review decision:
 

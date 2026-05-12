@@ -11,27 +11,28 @@ Repository này đã cài **Harness** để điều phối AI-assisted developme
 - Dùng `run.yaml` làm authoritative workflow state.
 - Không sửa application code trước khi Contract Reviewer approve contract và `run.yaml` cho phép Generator.
 - Evaluator phải độc lập với Generator và phải có evidence thật.
-- Không kết thúc bằng generic “Suggested Next Steps” khi bước tiếp theo có thể được biểu diễn bằng subagent execution hoặc `HANDOFF.md`.
+- Không kết thúc bằng generic “Suggested Next Steps” khi bước tiếp theo có thể được biểu diễn bằng executor dispatch.
 
-## Runtime-Agnostic Subagent Execution Requirement
+## Role Execution
 
-Harness is agent-runtime agnostic.
+Harness uses orchestration, not handoff files, for role transitions.
 
-When the current runtime provides independent subagent or task execution, Harness production roles MUST be executed by role-specific executors.
+The top-level agent is the Orchestrator.
 
-The current top-level agent is the Orchestrator. The Orchestrator may coordinate lifecycle state, but must not replace role executors.
+The Orchestrator must spawn the required role-specific executor whenever the workflow enters a role-owned phase.
 
-Required role executors:
-- Planner Agent -> dispatch to `planner`
-- Contract Reviewer Agent -> dispatch to `contract-reviewer`
-- Generator Agent -> dispatch to `generator`
-- Evaluator Agent -> dispatch to `evaluator`
+Required executors:
 
-Do not simulate multiple production roles inside the same agent response when independent executors are available.
+- `planner`
+- `contract-reviewer`
+- `generator`
+- `evaluator`
 
-Do not create `HANDOFF.md` merely to cross a role boundary if an independent role executor can be started.
+The Orchestrator must not create `HANDOFF.md` to move between roles.
 
-Create `HANDOFF.md` only when the runtime cannot start an independent role executor.
+The Orchestrator must not simulate multiple production roles in one agent response.
+
+If the current runtime cannot start an independent role executor, the run must be blocked unless `fallback_single_session_allowed: true` is explicitly set in `run.yaml`.
 
 ## Execution Namespace
 

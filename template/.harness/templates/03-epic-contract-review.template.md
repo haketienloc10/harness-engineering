@@ -5,7 +5,7 @@
 ```yaml
 role: ContractReviewer
 runtime_mode: production_multi_executor
-executor_type: subagent | task_tool | external_agent_session | isolated_process | manual_handoff | fallback_single_session
+executor_type: subagent | task_tool | external_agent_session | isolated_process | fallback_single_session
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>

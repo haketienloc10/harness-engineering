@@ -36,7 +36,21 @@ role_executor_get() {
     in_roles == 1 {
       pattern = "^[[:space:]]+" role ":[[:space:]]*"
       if ($0 ~ pattern) {
-        sub(pattern, "", $0)
+        value = $0
+        sub(pattern, "", value)
+        gsub(/^"|"$/, "", value)
+        if (value != "") {
+          print value
+          exit
+        }
+        in_role = 1
+        next
+      }
+      if (in_role == 1 && $0 ~ /^[[:space:]]+[a-zA-Z_]+:[[:space:]]*$/) {
+        in_role = 0
+      }
+      if (in_role == 1 && $0 ~ /^[[:space:]]+executor_type:[[:space:]]*/) {
+        sub(/^[[:space:]]+executor_type:[[:space:]]*/, "", $0)
         gsub(/^"|"$/, "", $0)
         print $0
         exit
@@ -47,7 +61,7 @@ role_executor_get() {
 
 recognized_state() {
   case "$1" in
-    CREATED|PLANNING|CONTRACTING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF|FAILED_VERIFICATION|CANCELLED)
+    CREATED|PLANNING|CONTRACTING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
       return 0
       ;;
     *)
@@ -105,8 +119,8 @@ require_artifacts_for_state() {
       require_file "01-planner-brief.md"
       require_file "02-implementation-contract.md"
       ;;
-    BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF)
-      require_file "HANDOFF.md"
+    BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
+      [ -n "$(yaml_get blocked_reason)" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires blocked_reason"
       ;;
     FAILED_VERIFICATION)
       require_file "05-evaluator-report.md"

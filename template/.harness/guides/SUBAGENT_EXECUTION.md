@@ -2,15 +2,13 @@
 
 Harness is agent-runtime agnostic.
 
-Subagents, task tools, external agent sessions, or isolated role workers are treated as independent role executors.
+Role transitions are performed by spawning or dispatching independent role executors.
 
-Independent role executors are mandatory when the current runtime supports them.
-
-They are not the workflow state machine. `run.yaml` remains the authoritative state source.
+Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
 ## Runtime Capability Rule
 
-Before executing production role work, determine whether the current runtime supports any independent execution capability:
+Before executing production role work, determine whether the current runtime supports an independent role executor capability, such as:
 
 - subagent
 - task tool
@@ -19,11 +17,11 @@ Before executing production role work, determine whether the current runtime sup
 - isolated role executor
 - role-specific process
 
-If supported, the Orchestrator MUST dispatch the next lifecycle role to an independent role executor.
+If supported, the Orchestrator MUST dispatch the next lifecycle role to the corresponding independent executor.
 
-If unsupported, the Orchestrator MUST create `HANDOFF.md`, set state to `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, and stop.
+If unsupported, the Orchestrator MUST block the run unless `fallback_single_session_allowed: true` is explicitly set in `run.yaml`.
 
-## Required Executor Roles
+## Required Executors
 
 - `planner`
 - `contract-reviewer`
@@ -32,27 +30,29 @@ If unsupported, the Orchestrator MUST create `HANDOFF.md`, set state to `BLOCKED
 
 ## Hard Rules
 
-1. When independent role execution is available, the Orchestrator MUST dispatch the required role-specific executor.
+1. The Orchestrator controls lifecycle routing and state transitions only.
 2. The Orchestrator MUST NOT perform required role work directly.
-3. The Orchestrator controls lifecycle routing and state transitions only.
-4. `run.yaml` and required artifacts control the workflow state.
-5. Contract Reviewer must not implement code.
-6. Generator must not evaluate its own output.
-7. Evaluator must verify with real evidence and must not patch implementation to make tests pass.
-8. Evaluator must be independent from Generator.
-9. Contract Reviewer must be independent from Planner.
-10. If independent role execution is unavailable, create `HANDOFF.md`, set state to `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`, and stop.
-11. Do not create `HANDOFF.md` when the next role can be executed by an independent role executor.
+3. The Orchestrator MUST NOT create `HANDOFF.md` for normal role transitions.
+4. The Orchestrator MUST dispatch the next role-specific executor.
+5. `run.yaml` is the authoritative lifecycle state source.
+6. Contract Reviewer must not implement code.
+7. Generator must not evaluate its own output.
+8. Evaluator must not patch implementation to make tests pass.
+9. Evaluator must be independent from Generator.
+10. Contract Reviewer must be independent from Planner.
+11. Single-agent role simulation is not production-grade.
+12. If independent execution is unavailable and fallback is not explicitly allowed, set the run state to `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`.
 
 ## Orchestrator Duties
 
 - Read `run.yaml`.
-- Determine the next required state, role, and artifact.
-- Dispatch the correct role-specific executor when available.
-- Provide the executor only the visible inputs required for that role.
+- Determine the next required lifecycle state.
+- Determine the next required role.
+- Spawn or dispatch the correct role executor.
+- Provide only the required visible inputs for that role.
 - Refuse invalid transitions.
 - Update `run.yaml` only after the required artifact exists.
-- Never invent approval, implementation, or verification decisions.
+- Never invent role approval, implementation, or verification decisions.
 
 ## Role Dispatch Table
 
@@ -65,30 +65,26 @@ If unsupported, the Orchestrator MUST create `HANDOFF.md`, set state to `BLOCKED
 | `EVALUATING` | `evaluator` | `05-evaluator-report.md` |
 | `FAILED_VERIFICATION` | `generator`, then `evaluator` | `06-fix-report.md`, then updated `05-evaluator-report.md` |
 
-## Role Boundaries
-
-| Role | Owns | Must Not Do |
-|---|---|---|
-| `planner` | `01-planner-brief.md`, `02-implementation-contract.md` | Implement code, approve own contract |
-| `contract-reviewer` | `03-evaluator-contract-review.md` | Implement code, rewrite contract silently |
-| `generator` | Implementation changes, `04-generator-worklog.md`, fix notes for `06-fix-report.md` | Approve contract, evaluate own work |
-| `evaluator` | `05-evaluator-report.md`, verification evidence | Patch implementation, rely on hidden reasoning |
-
 ## Executor Type
 
-Artifacts and `run.yaml` should record the executor type:
+Record executor metadata in `run.yaml` and role artifacts.
+
+Allowed executor types:
 
 - `subagent`
 - `task_tool`
 - `external_agent_session`
 - `isolated_process`
-- `manual_handoff`
 - `fallback_single_session`
 
-`fallback_single_session` is not production-grade unless explicitly allowed by run policy.
+`fallback_single_session` is allowed only when explicitly enabled by run policy.
 
-## Handoff Rule
+## Removed Handoff Behavior
 
-`HANDOFF.md` is only for runtimes where the next independent executor cannot be started.
+Do not create `HANDOFF.md`.
 
-If an independent role executor can be started, use the next executor instead of creating `HANDOFF.md`.
+Do not ask the user to manually continue the next role if an executor can be started.
+
+Do not use handoff files as phase boundaries.
+
+Lifecycle role boundaries are enforced by executor dispatch and artifact ownership.

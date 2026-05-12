@@ -91,37 +91,35 @@ Outputs:
 ## lifecycle-orchestration
 
 Description:
-Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, role executors, independent review/evaluation, and handoff fallback.
+Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, role executors, independent review/evaluation, and executor dispatch.
 
 For non-trivial implementation work, `lifecycle-orchestration` is mandatory.
 
-Harness is agent-runtime agnostic.
-
-If the current agent runtime supports independent subagent or task execution, role-specific execution is mandatory, not optional.
-
-Use when:
-- Starting any non-trivial implementation run.
-- Reviewing or approving an implementation contract.
-- Handing work from planning to implementation or from implementation to evaluation.
-- A task might otherwise be handled by one agent/session playing multiple roles.
-- Independent sessions are unavailable and a role-boundary handoff is required.
+Harness role transitions are executed through role-specific executors, not handoff files.
 
 Load:
 - `.harness/guides/LIFECYCLE_ORCHESTRATION.md`
 - `.harness/guides/SUBAGENT_EXECUTION.md`
 
-The Orchestrator must not perform required role work directly when independent executors are available.
+The Orchestrator must dispatch to the next required executor:
 
-The Orchestrator must dispatch to the next role-specific executor:
 - `planner`
 - `contract-reviewer`
 - `generator`
 - `evaluator`
 
-Only use `HANDOFF.md` when no independent executor, subagent, task tool, or external agent session is available.
+Do not create `HANDOFF.md` for normal lifecycle transitions.
+
+If no independent role executor can be started, block the run unless fallback is explicitly allowed in `run.yaml`.
+
+Use when:
+- Starting any non-trivial implementation run.
+- Reviewing or approving an implementation contract.
+- Dispatching work from planning to implementation or from implementation to evaluation.
+- A task might otherwise be handled by one agent/session playing multiple roles.
+- Independent sessions are unavailable and the run must block or use explicit fallback.
 
 Outputs:
 - Correct `run.yaml` lifecycle state
 - Required role artifact for the current state
-- `HANDOFF.md` when the next independent executor cannot run
-- `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF` when production work cannot continue in the same session
+- `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` when production work cannot continue and fallback is not allowed

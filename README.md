@@ -36,7 +36,7 @@ Harness có ba lớp:
 
 1. **Artifact Protocol**: templates, run folders, evidence files, and `RUN_INDEX.md`.
 2. **Role Policy**: Planner, Contract Reviewer, Generator, and Evaluator responsibilities.
-3. **Lifecycle Orchestrator**: `run.yaml` state machine, gates, next-role detection, handoff, and validation.
+3. **Lifecycle Orchestrator**: `run.yaml` state machine, gates, next-role detection, executor dispatch, and validation.
 
 ## Runtime-Agnostic Role Execution
 
@@ -54,7 +54,7 @@ When the current runtime supports independent role execution through subagents, 
 
 The Orchestrator must dispatch role work to the required executor and must not simulate production role separation in one agent.
 
-`HANDOFF.md` is only used when no independent role executor can be started.
+If no independent role executor can be started, the run enters `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` unless `fallback_single_session_allowed: true` is explicitly set in `run.yaml`.
 
 Subagents, task tools, external agent sessions, and isolated role workers are executor types for lifecycle roles, not the workflow itself.
 
@@ -201,7 +201,6 @@ template/
       05-evaluator-report.template.md
       06-fix-report.template.md
       07-final-summary.template.md
-      HANDOFF.template.md
       00-epic-overview.template.md
       01-epic-roadmap.template.md
       02-epic-acceptance-matrix.template.md

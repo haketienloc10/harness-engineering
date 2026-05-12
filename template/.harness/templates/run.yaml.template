@@ -1,23 +1,25 @@
 id: <RUN-ID>
 parent_epic: <PARENT-EPIC>
 task: "<TASK>"
+
+runtime:
+  mode: production_multi_executor
+  agent_runtime: ""
+  independent_executors_required: true
+  fallback_single_session_allowed: false
+
 state: CREATED
-current_role: orchestrator
+current_role: Orchestrator
+next_required_role: Planner
+next_required_executor: planner
+next_required_artifact: 01-planner-brief.md
+
 created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 approved_for_implementation: false
 generator_allowed: false
 evaluator_required: true
 last_artifact: 00-input.md
-next_required_artifact: 01-planner-brief.md
-
-runtime:
-  mode: production_multi_executor
-  agent_runtime: ""
-  independent_executors_required_when_available: true
-  handoff_only_when_independent_executor_unavailable: true
-  fallback_single_session_allowed: false
-  supported_executor_types: []
 
 role_executors:
   orchestrator:
@@ -40,13 +42,25 @@ role_executors:
     executor_id:
     artifact:
 
+allowed_states:
+  - CREATED
+  - PLANNING
+  - CONTRACTING
+  - CONTRACT_REVIEW
+  - GENERATING
+  - EVALUATING
+  - FAILED_VERIFICATION
+  - COMPLETED
+  - BLOCKED_FOR_EXECUTOR_UNAVAILABLE
+
 allowed_executor_types:
   - subagent
   - task_tool
   - external_agent_session
   - isolated_process
-  - manual_handoff
   - fallback_single_session
+
+blocked_reason: ""
 
 scope:
   task_slug: <TASK-SLUG>
@@ -56,6 +70,7 @@ scope:
   protected_files:
     - .harness/guides/**
     - .harness/templates/**
+    - .harness/project-templates/**
     - .harness/scripts/**
 
 conflict_policy:

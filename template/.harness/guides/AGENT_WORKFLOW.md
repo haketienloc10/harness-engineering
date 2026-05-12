@@ -19,7 +19,11 @@ Single-agent simulation chỉ được dùng như degraded fallback cho local ex
 
 When independent role executors are available, each phase boundary is crossed by dispatching the next role-specific executor.
 
-Do not create a handoff file just because the next role is different.
+When a phase requires another role, dispatch the corresponding role executor.
+
+Do not create `HANDOFF.md`.
+
+Each role artifact may include a short "Next role" note for traceability, but this note is not a handoff file and must not replace executor dispatch.
 
 ## Bootstrap Run
 
@@ -52,7 +56,7 @@ Outputs:
 - `01-planner-brief.md`;
 - `02-implementation-contract.md`.
 
-Planner Agent phải kết thúc bằng handoff note cho Contract Reviewer Agent.
+Planner Agent có thể ghi "Next role" note cho Contract Reviewer Agent để traceability.
 Planner Agent phải dừng sau `02-implementation-contract.md`; không implement và không tự approve contract.
 
 ## Contract Review Phase
@@ -135,18 +139,20 @@ Outputs:
 Evaluator Agent phải là runtime session khác với Generator Agent trong production mode. Evaluation phải dựa trên visible artifacts, diff, command output, runtime evidence, browser/API evidence, logs, và acceptance criteria.
 Evaluator Agent phải dừng sau `05-evaluator-report.md` và `07-final-summary.md` nếu final summary được giao cho Evaluator.
 
-## Handoff Note Format
+## Next Role Note
 
-Each role artifact may end with a Handoff note for traceability.
+Each role artifact may include a short Next role note for traceability.
 
 This note is not the same as `HANDOFF.md`.
 
-`HANDOFF.md` is only created when the next independent executor cannot be started.
+Do not create `HANDOFF.md`.
+
+The note must not replace executor dispatch.
 
 Mỗi role có thể kết thúc bằng:
 
 ```md
-## Handoff
+## Next Role
 
 - Completed role:
 - Artifacts produced:
@@ -156,7 +162,7 @@ Mỗi role có thể kết thúc bằng:
 - Notes for next role:
 ```
 
-Nếu không có independent executor cho role tiếp theo trong production implementation, current agent phải dừng ở boundary, tạo `HANDOFF.md`, và ghi `BLOCKED_FOR_INDEPENDENT_ROLE_HANDOFF`.
+Nếu không có independent executor cho role tiếp theo trong production implementation, current agent phải dừng ở boundary và ghi `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` trừ khi `run.yaml` explicit cho phép `fallback_single_session_allowed: true`.
 
 ## Kỷ luật phạm vi
 

@@ -12,4 +12,4 @@ Ownership rules sau install:
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị overwrite nếu target đã có.
 - Kernel folders có thể được update khi chạy installer: `.harness/guides/`, `.harness/workflows/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
 - Lifecycle subagent definitions canonical nằm trong `.codex/agents/*.toml`; `.harness/subagents/` là deprecated và bị gỡ khi update.
-- Seeded Harness workflow skill files được copy vào `.harness/skills/` mà không xóa skill file local khác.
+- Harness workflow skills được cài vào `.codex/skills/harness-*/SKILL.md`; legacy `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*.md` không còn là install source.

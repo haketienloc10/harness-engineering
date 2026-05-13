@@ -10,11 +10,11 @@ Orchestrator -> Planner -> Contract Reviewer -> Generator -> Evaluator
 
 ## Codex Project-Scoped Subagent Dispatch Rule
 
-Harness uses `.harness/scripts/dispatch-role.sh` plus spawned subagents for role transitions.
+Harness uses named Codex project-scoped agents for role transitions. `.harness/scripts/dispatch-role.sh` creates deterministic routing metadata before invocation.
 
 The coordinator must call `.harness/scripts/dispatch-role.sh` for each required lifecycle role. The dispatch artifact binds the role to the Codex agent file in `.codex/agents/`.
 
-`dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn or execute the role. The runtime executor must consume that artifact and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
+`dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn or execute the role. Codex-native invocation of the named agent is the canonical execution path.
 
 The coordinator may pass task-specific inputs, but must not write free-form prompts for core roles or modify Codex agent responsibilities, output schema, evidence requirements, or pass/fail criteria.
 
@@ -25,7 +25,6 @@ For coordinator/orchestrator sessions, the workflow MUST run `.harness/scripts/v
 Required dispatch:
 
 - `PLANNING` -> `dispatch-role.sh <run> planner` -> invoke `harness_planner`
-- `CONTRACTING` -> `dispatch-role.sh <run> planner` -> invoke `harness_planner`
 - `CONTRACT_REVIEW` -> `dispatch-role.sh <run> contract_reviewer` -> invoke `harness_contract_reviewer`
 - `GENERATING` -> `dispatch-role.sh <run> generator` -> invoke `harness_generator`
 - `EVALUATING` -> `dispatch-role.sh <run> evaluator` -> invoke `harness_evaluator`
@@ -39,7 +38,7 @@ If runtime cannot spawn a required role subagent, stop with `BLOCKED_REQUIRED_SU
 
 If runtime cannot spawn the required Generator for implementation or rework, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 
-The same Planner subagent instance may continue from `PLANNING` into `CONTRACTING` when it is the same bounded run and the executor id is recorded for both phase outputs. If a new Planner instance is spawned for `CONTRACTING`, record the new executor id explicitly in the contract artifact and `run.yaml`.
+Planner writes both `01-planner-brief.md` and `02-implementation-contract.md` in one invocation.
 
 Required blocked message:
 
@@ -115,13 +114,12 @@ The coordinator MUST NOT convert itself into the missing role.
 | State | Required Input Artifacts | Required Role Executor | Allowed Actions | Forbidden Actions | Required Output Artifact | Allowed Next States |
 |---|---|---|---|---|---|---|
 | `CREATED` | `run.yaml`, `run-manifest.md`, `00-input.md` | Coordinator | Confirm task record, check subagent runtime, spawn Planner | Implement code, approve contract, evaluate, emulate Planner, inspect source for direct repair | Updated `run.yaml` and `run-manifest.md` | `PLANNING`, `CANCELLED`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` |
-| `PLANNING` | `00-input.md`, project/codebase context as needed | `planner` | Analyze scope, classify run, write plan | Implement code, approve own contract, evaluate | `01-planner-brief.md` | `CONTRACTING`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
-| `CONTRACTING` | `01-planner-brief.md` | `planner` | Write measurable implementation contract | Implement code, approve own contract, evaluate | `02-implementation-contract.md` | `CONTRACT_REVIEW`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
+| `PLANNING` | `00-input.md`, project/codebase context as needed | `planner` | Analyze scope, classify run, write plan and measurable implementation contract | Implement code, approve own contract, evaluate | `01-planner-brief.md` and `02-implementation-contract.md` | `CONTRACT_REVIEW`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `CONTRACT_REVIEW` | `02-implementation-contract.md` | `contract-reviewer` | Approve or reject contract, document gaps | Implement code, rewrite contract silently | `03-contract-review.md` | `APPROVED_FOR_IMPLEMENTATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `APPROVED_FOR_IMPLEMENTATION` | Approved `03-contract-review.md`, `approved_for_implementation: true`, `generator_allowed: true` | Coordinator | Spawn Generator | Start evaluation, claim implementation done, generate code directly, edit source/tests/config | Updated `run.yaml` and `run-manifest.md` | `GENERATING`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `GENERATING` | Approved contract and review artifacts | `generator` | Implement only the approved contract, record commands and diff summary | Change contract scope, self-evaluate, mark complete | `04-implementation-report.md` | `EVALUATING`, `FAILED_VERIFICATION`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `EVALUATING` | `04-implementation-report.md`, code diff, verification commands | `evaluator` | Verify with real evidence, pass/fail/block | Patch implementation to make tests pass, rely on hidden memory, be same executor as Generator | `05-evaluator-report.md` | `COMPLETED`, `FAILED_VERIFICATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
-| `COMPLETED` | Passing `05-evaluator-report.md` with command/evidence sections | Coordinator or Evaluator | Write final summary based on evaluator evidence | Claim completion without evaluator report, add new implementation evidence from memory | `06-final-summary.md` | None |
+| `COMPLETED` | Passing `05-evaluator-report.md` with command/evidence sections | Coordinator | Aggregate final summary from `05-evaluator-report.md`, `04-implementation-report.md`, and `run.yaml` | Claim completion without evaluator report, add new implementation evidence from memory | `06-final-summary.md` | None |
 | `REJECTED_FOR_REPLAN` | Rejection in contract review or evaluation | `planner` | Revise plan/contract within run scope | Implement before reapproval | Updated `01-planner-brief.md` and/or `02-implementation-contract.md` | `CONTRACT_REVIEW`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` | Current `run.yaml`, `run-manifest.md`, `blocked_reason` | Coordinator | Report missing subagent runtime | Use handoff files, continue required role work in same session, write role artifacts | Updated `run.yaml` and `run-manifest.md` with block reason | None until a runtime with subagent spawning is available |
 | `FAILED_VERIFICATION` | Failing `05-evaluator-report.md`; bounded Generator rework packet | `generator` for fixes, then `evaluator` for recheck | Generator fixes only verified failures and documents updated implementation report; Evaluator independently rechecks | Coordinator fixes code, Coordinator adds tests, Coordinator reads source for direct repair, Evaluator patches implementation, Generator approves own fix | Updated `04-implementation-report.md` then updated `05-evaluator-report.md` | `EVALUATING`, `COMPLETED`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |

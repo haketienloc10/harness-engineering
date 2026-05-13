@@ -2,7 +2,7 @@
 
 Harness core lifecycle execution requires Codex project-scoped subagents.
 
-Role transitions are performed through `.harness/scripts/dispatch-role.sh`, then by spawning independent subagents from Codex project-scoped agents.
+Role transitions are performed by invoking the named Codex project-scoped agent. `.harness/scripts/dispatch-role.sh` may be used first to create deterministic routing metadata.
 
 Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
@@ -12,7 +12,7 @@ Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 .harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md
 ```
 
-It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
+It does not spawn, execute, or emulate a subagent. Codex-native invocation of the named project-scoped agent is the canonical execution path.
 
 ## Runtime Capability Rule
 
@@ -20,7 +20,7 @@ Before executing lifecycle role work, determine whether the current runtime supp
 
 New runs start with `runtime.subagent_runtime_available: unknown` in `run.yaml` and `subagent_runtime_available: unknown` in `run-manifest.md`.
 
-If supported, the coordinator MUST mark runtime availability as true before Planner dispatch, then call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding named Codex agent in `.codex/agents/`.
+If supported, the coordinator MUST mark runtime availability as true before Planner dispatch, then call `.harness/scripts/dispatch-role.sh` for routing metadata and invoke the corresponding named Codex agent in `.codex/agents/`.
 
 If unsupported, the coordinator MUST mark runtime availability as false and block the run before Planner execution.
 
@@ -29,11 +29,11 @@ There is no degraded single-session fallback.
 Use the helper when available:
 
 ```bash
-bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
-bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
+bash .harness/scripts/set-runtime-capability.sh .harness/runs/<RUN_ID> true
+bash .harness/scripts/set-runtime-capability.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
 ```
 
-If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`.
+This helper records a manual assertion, not a runtime proof. If the current agent/runtime cannot spawn named Codex project-scoped agents, Harness lifecycle execution is blocked.
 
 If a required Codex agent file is missing, invalid, or unavailable, the coordinator MUST stop with:
 
@@ -153,8 +153,7 @@ The coordinator may summarize final results only from approved artifacts and eva
 
 | Lifecycle State | Required Executor | Required Output |
 |---|---|---|
-| `PLANNING` | `planner` | `01-planner-brief.md` |
-| `CONTRACTING` | `planner` | `02-implementation-contract.md` |
+| `PLANNING` | `planner` | `01-planner-brief.md` and `02-implementation-contract.md` |
 | `CONTRACT_REVIEW` | `contract-reviewer` | `03-contract-review.md` |
 | `GENERATING` | `generator` | code changes + `04-implementation-report.md` |
 | `EVALUATING` | `evaluator` | `05-evaluator-report.md` |
@@ -196,6 +195,12 @@ Allowed executor type:
 - `subagent`
 
 No other executor type is valid for core lifecycle roles.
+
+Use the helper after a role subagent finishes:
+
+```bash
+bash .harness/scripts/record-role-completion.sh .harness/runs/<RUN_ID> <role> <executor_id>
+```
 
 ## Removed Handoff Behavior
 

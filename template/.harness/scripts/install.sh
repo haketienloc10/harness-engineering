@@ -36,6 +36,7 @@ Ownership-safe rules:
   - Do not overwrite .harness/backlog/HARNESS_BACKLOG.md if it already exists.
   - Install .codex/config.toml safely: create if missing, merge missing [agents] defaults if present.
   - Install .codex/agents/*.toml as Harness-owned Codex custom agents; same-name files are backed up before overwrite.
+  - Install .codex/skills/harness-*/SKILL.md as Harness-owned Codex workflow skills; same-name skill directories are backed up before overwrite.
   - Kernel folders may be replaced on update:
     .harness/guides/
     .harness/workflows/
@@ -111,6 +112,24 @@ backup_file() {
   printf "%s" "$backup"
 }
 
+backup_path() {
+  local path="$1"
+  local stamp backup
+
+  stamp="$(date +%Y%m%d%H%M%S)"
+  backup="${path}.backup-${stamp}"
+  if [ -e "$backup" ]; then
+    backup="${backup}-$$"
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    planned "backup $path -> $backup"
+  else
+    cp -R "$path" "$backup"
+  fi
+  printf "%s" "$backup"
+}
+
 copy_dir_replace() {
   local source="$1"
   local dest="$2"
@@ -150,7 +169,6 @@ write_clean_run_index() {
 - active
 - CREATED
 - PLANNING
-- CONTRACTING
 - CONTRACT_REVIEW
 - APPROVED_FOR_IMPLEMENTATION
 - GENERATING
@@ -184,6 +202,7 @@ This target repository owns its installed \`.harness/\` tree.
 - \`.harness/backlog/HARNESS_BACKLOG.md\` belongs to this target repository. The installer does not overwrite it if it already exists.
 - \`.codex/config.toml\` is created if missing. If it exists, the installer backs it up and merges only missing Harness \`[agents]\` defaults.
 - \`.codex/agents/*.toml\` contains fixed Harness lifecycle Codex custom agents. Same-name files are backed up before overwrite.
+- \`.codex/skills/harness-*/SKILL.md\` contains Harness workflow skills. Same-name skill directories are backed up before overwrite.
 - Kernel folders may be replaced during an explicit update:
   - \`.harness/guides/\`
   - \`.harness/workflows/\`
@@ -191,15 +210,15 @@ This target repository owns its installed \`.harness/\` tree.
   - \`.harness/project-templates/\`
   - \`.harness/scripts/\`
 - Deprecated \`.harness/subagents/\` is removed during update; canonical lifecycle role definitions live in \`.codex/agents/*.toml\`.
-- Seeded Harness workflow skill files are copied into \`.harness/skills/\` without deleting other local skill files.
+- Deprecated \`.harness/HARNESS_SKILLS.md\` and seeded \`.harness/skills/*.md\` are removed during update; canonical workflow skills live in \`.codex/skills/harness-*/SKILL.md\`.
 
 ## Recommended Next Steps
 
 Ask your agent:
 
 \`\`\`txt
-Read \`.harness/HARNESS_SKILLS.md\` and run the \`project-sync\` Harness workflow skill.
-Then run \`codebase-sync\` if source-navigation or change-impact docs are missing or stale.
+Use \`.codex/skills/harness-project-sync/SKILL.md\` to refresh project context.
+Then use \`.codex/skills/harness-codebase-sync/SKILL.md\` if source-navigation or change-impact docs are missing or stale.
 \`\`\`
 
 Harness Codex lifecycle agents are installed in \`.codex/agents/*.toml\`.
@@ -420,13 +439,16 @@ install_codex_agents() {
   local source_codex="$SOURCE_TEMPLATE_DIR/.codex"
   local target_codex="$TARGET_DIR/.codex"
   local target_agents="$target_codex/agents"
-  local source_agent base dest backup
+  local target_skills="$target_codex/skills"
+  local source_agent source_skill base dest backup
 
   [ -f "$source_codex/config.toml" ] || die "Invalid template: missing $source_codex/config.toml"
   [ -d "$source_codex/agents" ] || die "Invalid template: missing $source_codex/agents"
+  [ -d "$source_codex/skills" ] || die "Invalid template: missing $source_codex/skills"
 
   run_mkdir "$target_codex"
   run_mkdir "$target_agents"
+  run_mkdir "$target_skills"
   merge_codex_config "$source_codex/config.toml" "$target_codex/config.toml"
 
   for source_agent in "$source_codex"/agents/*.toml; do
@@ -439,6 +461,20 @@ install_codex_agents() {
     fi
     run_cp "$source_agent" "$dest"
     info "Installed Codex agent: $dest"
+  done
+
+  for source_skill in "$source_codex"/skills/harness-*; do
+    [ -d "$source_skill" ] || continue
+    [ -f "$source_skill/SKILL.md" ] || die "Invalid Codex skill: missing $source_skill/SKILL.md"
+    base="$(basename "$source_skill")"
+    dest="$target_skills/$base"
+    if [ -e "$dest" ]; then
+      backup="$(backup_path "$dest")"
+      info "Backed up existing Codex skill $dest to $backup"
+      run_rm_rf "$dest"
+    fi
+    copy_dir_replace "$source_skill" "$dest"
+    info "Installed Codex skill: $dest"
   done
 }
 
@@ -457,8 +493,12 @@ install_harness_tree() {
 
   run_mkdir "$target_harness"
   run_cp "$SOURCE_HARNESS_DIR/README.md" "$target_harness/README.md"
-  run_cp "$SOURCE_HARNESS_DIR/HARNESS_SKILLS.md" "$target_harness/HARNESS_SKILLS.md"
   write_installation_note "$target_harness/INSTALLATION.md"
+
+  if [ -f "$target_harness/HARNESS_SKILLS.md" ]; then
+    run_rm_rf "$target_harness/HARNESS_SKILLS.md"
+    info "Removed deprecated .harness/HARNESS_SKILLS.md; Codex skills live in .codex/skills"
+  fi
 
   copy_dir_replace "$SOURCE_HARNESS_DIR/guides" "$target_harness/guides"
   if [ -d "$target_harness/subagents" ]; then
@@ -469,9 +509,14 @@ install_harness_tree() {
   copy_dir_replace "$SOURCE_HARNESS_DIR/templates" "$target_harness/templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/project-templates" "$target_harness/project-templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/scripts" "$target_harness/scripts"
-  run_mkdir "$target_harness/skills"
-  run_cp "$SOURCE_HARNESS_DIR/skills/project-sync.md" "$target_harness/skills/project-sync.md"
-  run_cp "$SOURCE_HARNESS_DIR/skills/codebase-sync.md" "$target_harness/skills/codebase-sync.md"
+  if [ -f "$target_harness/skills/project-sync.md" ]; then
+    run_rm_rf "$target_harness/skills/project-sync.md"
+    info "Removed deprecated .harness/skills/project-sync.md"
+  fi
+  if [ -f "$target_harness/skills/codebase-sync.md" ]; then
+    run_rm_rf "$target_harness/skills/codebase-sync.md"
+    info "Removed deprecated .harness/skills/codebase-sync.md"
+  fi
 
   if [ "$DRY_RUN" -eq 0 ]; then
     chmod +x "$target_harness/scripts"/*.sh 2>/dev/null || true
@@ -567,6 +612,9 @@ main() {
   [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-contract-reviewer.toml" ] || die "Invalid template: missing harness-contract-reviewer Codex agent"
   [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-generator.toml" ] || die "Invalid template: missing harness-generator Codex agent"
   [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-evaluator.toml" ] || die "Invalid template: missing harness-evaluator Codex agent"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/skills/harness-lifecycle/SKILL.md" ] || die "Invalid template: missing Harness lifecycle Codex skill"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/skills/harness-project-sync/SKILL.md" ] || die "Invalid template: missing Harness project sync Codex skill"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/skills/harness-codebase-sync/SKILL.md" ] || die "Invalid template: missing Harness codebase sync Codex skill"
   [ -d "$SOURCE_HARNESS_DIR/workflows" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/workflows"
   [ -d "$SOURCE_HARNESS_DIR/codebase" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/codebase"
   [ -f "$SOURCE_TEMPLATE_DIR/AGENTS.md" ] || die "Invalid template: missing $SOURCE_TEMPLATE_DIR/AGENTS.md"
@@ -599,8 +647,8 @@ Harness installed.
 Next steps:
   cd "$TARGET_DIR"
   Ask your agent:
-    Read .harness/HARNESS_SKILLS.md and run the project-sync Harness workflow skill.
-    Then run codebase-sync if source-navigation or change-impact docs are missing or stale.
+    Use .codex/skills/harness-project-sync/SKILL.md to refresh project context.
+    Then use .codex/skills/harness-codebase-sync/SKILL.md if source-navigation or change-impact docs are missing or stale.
   Harness Codex lifecycle agents are installed in .codex/agents/.
 
 If AGENTS.md was preserved, review AGENTS.harness.md and merge the parts you want into AGENTS.md.

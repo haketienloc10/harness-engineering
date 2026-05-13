@@ -248,7 +248,6 @@ write_run_index_if_missing() {
 - active
 - CREATED
 - PLANNING
-- CONTRACTING
 - CONTRACT_REVIEW
 - APPROVED_FOR_IMPLEMENTATION
 - GENERATING
@@ -401,6 +400,20 @@ set_related_epic_notes() {
   fi
 }
 
+write_baseline_files() {
+  local dest="$1"
+
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    {
+      git diff --name-only
+      git diff --cached --name-only
+      git ls-files --others --exclude-standard
+    } | sort -u > "$dest"
+  else
+    : > "$dest"
+  fi
+}
+
 parse_args "$@"
 
 slug="$(slugify "$raw_slug")"
@@ -444,6 +457,7 @@ else
 fi
 
 mkdir -p "$RUN_DIR"
+write_baseline_files "$RUN_DIR/baseline-files.txt"
 
 cp "$TEMPLATES_DIR/run.yaml.template" "$RUN_DIR/run.yaml"
 cp "$TEMPLATES_DIR/run-manifest.template.md" "$RUN_DIR/run-manifest.md"

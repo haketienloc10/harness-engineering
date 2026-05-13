@@ -137,7 +137,7 @@ role_executor_get() {
 
 recognized_state() {
   case "$1" in
-    CREATED|PLANNING|CONTRACTING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
+    CREATED|PLANNING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
       return 0
       ;;
     *)
@@ -168,7 +168,7 @@ artifact_to_role() {
 
 state_next_role() {
   case "$1" in
-    CREATED|PLANNING|CONTRACTING|REJECTED_FOR_REPLAN)
+    CREATED|PLANNING|REJECTED_FOR_REPLAN)
       printf "planner"
       ;;
     CONTRACT_REVIEW)
@@ -191,10 +191,7 @@ state_next_role() {
 
 state_required_artifact() {
   case "$1" in
-    CREATED|PLANNING)
-      printf "01-planner-brief.md"
-      ;;
-    CONTRACTING|REJECTED_FOR_REPLAN)
+    CREATED|PLANNING|REJECTED_FOR_REPLAN)
       printf "02-implementation-contract.md"
       ;;
     CONTRACT_REVIEW)
@@ -239,8 +236,8 @@ role_key_to_executor() {
 }
 
 block_for_executor_unavailable() {
-  if command -v bash >/dev/null 2>&1 && [ -f "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" ]; then
-    bash "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" "$RUN_DIR" false "Subagent runtime unavailable. Harness lifecycle requires Codex project-scoped subagents from .codex/agents/. This run is blocked. No lifecycle role may be executed in this session." >/dev/null
+  if command -v bash >/dev/null 2>&1 && [ -f "$HARNESS_DIR/scripts/set-runtime-capability.sh" ]; then
+    bash "$HARNESS_DIR/scripts/set-runtime-capability.sh" "$RUN_DIR" false "Subagent runtime unavailable. Harness lifecycle requires Codex project-scoped subagents from .codex/agents/. This run is blocked. No lifecycle role may be executed in this session." >/dev/null
     STATE="BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
     return
   fi

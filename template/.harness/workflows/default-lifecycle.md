@@ -1,112 +1,45 @@
 # Default Lifecycle
 
-## Required Execution Model
+This file defines state transitions only. Role policy lives in `.codex/agents/*.toml`; orchestration policy lives in `.harness/guides/SUBAGENT_EXECUTION.md`; workflow skills live in `.codex/skills/harness-*/SKILL.md`.
 
-Harness core lifecycle roles must run as separate spawned subagents from Codex project-scoped agents in `.codex/agents/`.
+## State Transitions
 
-There is no degraded single-session fallback.
+| State | Required Role | Inputs | Required Outputs | Next State |
+|---|---|---|---|---|
+| `CREATED` | coordinator | user request | `00-input.md`, baseline metadata | `PLANNING` |
+| `PLANNING` | `harness_planner` | `00-input.md`, relevant project/codebase context | `01-planner-brief.md`, `02-implementation-contract.md` | `CONTRACT_REVIEW` or `REJECTED_FOR_REPLAN` |
+| `CONTRACT_REVIEW` | `harness_contract_reviewer` | `01-planner-brief.md`, `02-implementation-contract.md` | `03-contract-review.md` | `APPROVED_FOR_IMPLEMENTATION` or `REJECTED_FOR_REPLAN` |
+| `REJECTED_FOR_REPLAN` | `harness_planner` | reviewer feedback and prior planning artifacts | updated `01-planner-brief.md`, `02-implementation-contract.md` | `CONTRACT_REVIEW` |
+| `APPROVED_FOR_IMPLEMENTATION` | coordinator | approved `03-contract-review.md` | generator dispatch metadata | `GENERATING` |
+| `GENERATING` | `harness_generator` | approved contract and review | code changes, `04-implementation-report.md` | `EVALUATING` |
+| `EVALUATING` | `harness_evaluator` | full artifact chain, diff, command/runtime evidence | `05-evaluator-report.md` | `COMPLETED` or `FAILED_VERIFICATION` |
+| `FAILED_VERIFICATION` | `harness_generator`, then `harness_evaluator` | evaluator decision summary and rework packet | updated `04-implementation-report.md`, updated `05-evaluator-report.md` | `COMPLETED` or `FAILED_VERIFICATION` |
+| `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` | none | runtime capability record | blocked reason | none |
+| `CANCELLED` | coordinator | cancellation reason | updated `run.yaml` | none |
 
-The Coordinator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
+## Required Final Summary
 
-`dispatch-role.sh` creates a dispatch artifact only. It does not spawn or execute a subagent. A runtime executor must consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md` and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
+After `05-evaluator-report.md` passes, coordinator may write `06-final-summary.md` only as an aggregate of:
 
-## Steps
+```txt
+05-evaluator-report.md
+04-implementation-report.md
+run.yaml
+```
 
-1. Coordinator starts run.
-2. Coordinator checks subagent runtime availability.
-3. If unavailable, set `runtime.subagent_runtime_available: false`, update `run-manifest.md`, and block run immediately.
-4. If available, set `runtime.subagent_runtime_available: true`, update `run-manifest.md`, call `dispatch-role.sh <run> planner`, and require the runtime executor to spawn Planner from `.codex/agents/harness-planner.toml`.
-5. Planner writes `01-planner-brief.md`.
-6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
-7. Call `dispatch-role.sh <run> contract_reviewer` and spawn Contract Reviewer from `.codex/agents/harness-contract-reviewer.toml`.
-8. Contract Reviewer writes `03-contract-review.md`.
-9. If contract rejected, return to Planner/contract revision.
-10. If approved, call `dispatch-role.sh <run> generator` and spawn Generator from `.codex/agents/harness-generator.toml`.
-11. Generator writes `04-implementation-report.md`.
-12. Call `dispatch-role.sh <run> evaluator` and spawn Evaluator from `.codex/agents/harness-evaluator.toml`.
-13. Evaluator writes `05-evaluator-report.md`.
-14. If Evaluator returns a non-passing result, Coordinator reads only the evaluator decision summary, creates a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawns Generator, then spawns Evaluator again.
-15. Run completes only if Evaluator result is `pass`.
+## Runtime Capability
 
-## Created Manifest State
-
-New runs start before executor availability has been checked. `run.yaml` starts with:
+New runs start with:
 
 ```yaml
 runtime:
   subagent_runtime_available: unknown
 ```
 
-`run-manifest.md` starts with:
-
-```md
-- mode: codex_project_subagents_required
-- dispatch_mode: codex_project_scoped
-- fallback_allowed: false
-- subagent_runtime_available: unknown
-- run_status: created_pending_executor_check
-```
-
-After a successful runtime check, update it before dispatching Planner:
-
-```yaml
-runtime:
-  subagent_runtime_available: true
-```
-
-```md
-- subagent_runtime_available: true
-- run_status: ready_for_planner_dispatch
-```
-
-Use the helper when available:
+Use:
 
 ```bash
-bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
+bash .harness/scripts/set-runtime-capability.sh .harness/runs/<RUN_ID> true
 ```
 
-## Block Rule
-
-If subagent runtime is unavailable, create or update `run-manifest.md`:
-
-```md
-# Run Manifest
-
-## Execution Mode
-
-- mode: codex_project_subagents_required
-- dispatch_mode: codex_project_scoped
-- fallback_allowed: false
-- subagent_runtime_available: false
-- run_status: blocked
-
-## Block Reason
-
-Subagent runtime is unavailable. Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`. This run cannot proceed.
-
-## Required Role Instances
-
-- planner: blocked
-- contract_reviewer: blocked
-- generator: blocked
-- evaluator: blocked
-```
-
-The coordinator must report:
-
-```text
-Subagent runtime unavailable.
-Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
-This run is blocked.
-No lifecycle role may be executed in this session.
-```
-
-## Rework Block Rule
-
-If implementation or rework is required and Generator cannot be spawned, the coordinator must stop with:
-
-```text
-BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
-```
-
-The coordinator must not fall back to direct implementation.
+This records a manual assertion. It is not proof that the runtime can spawn Codex agents.

@@ -105,7 +105,7 @@ require_role_spawned() {
 
 recognized_state() {
   case "$1" in
-    CREATED|PLANNING|CONTRACTING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
+    CREATED|PLANNING|CONTRACT_REVIEW|APPROVED_FOR_IMPLEMENTATION|GENERATING|EVALUATING|COMPLETED|REJECTED_FOR_REPLAN|BLOCKED_FOR_EXECUTOR_UNAVAILABLE|FAILED_VERIFICATION|CANCELLED)
       return 0
       ;;
     *)
@@ -373,11 +373,6 @@ require_artifacts_for_state() {
       ;;
     PLANNING)
       require_file "00-input.md"
-      ;;
-    CONTRACTING)
-      require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
-      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
       ;;
     CONTRACT_REVIEW)
       require_file "00-input.md"

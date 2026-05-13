@@ -7,7 +7,10 @@ executor_id:
 codex_agent_name:
 codex_agent_file:
 status: draft
-based_on_evaluator_report: 05-evaluator-report.md
+source_of_truth:
+  - 05-evaluator-report.md
+  - 04-implementation-report.md
+  - run.yaml
 ---
 
 # Final Summary

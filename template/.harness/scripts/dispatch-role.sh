@@ -65,8 +65,7 @@ role_output_for_state() {
   local state="$2"
 
   case "$role:$state" in
-    planner:CREATED|planner:PLANNING) printf "01-planner-brief.md" ;;
-    planner:CONTRACTING|planner:REJECTED_FOR_REPLAN) printf "02-implementation-contract.md" ;;
+    planner:CREATED|planner:PLANNING|planner:REJECTED_FOR_REPLAN) printf "02-implementation-contract.md" ;;
     contract_reviewer:CONTRACT_REVIEW) printf "03-contract-review.md" ;;
     generator:APPROVED_FOR_IMPLEMENTATION|generator:GENERATING|generator:FAILED_VERIFICATION) printf "04-implementation-report.md" ;;
     evaluator:EVALUATING) printf "05-evaluator-report.md" ;;
@@ -262,6 +261,8 @@ mkdir -p "$RUN_DIR/dispatch"
 DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
 CREATED_AT="$(date -Iseconds)"
 
+REQUIRED_INPUTS="$(required_inputs "$ROLE")"
+
 cat > "$DISPATCH_FILE" <<EOF
 ---
 run_id: $RUN_ID
@@ -269,6 +270,7 @@ role: $ROLE
 executor_type: subagent
 codex_agent_file: $CODEX_AGENT_FILE
 required_codex_agent_name: $CODEX_AGENT_NAME
+required_inputs: "$REQUIRED_INPUTS"
 required_output_artifact: $OUTPUT_ARTIFACT
 status: dispatched
 created_at: $CREATED_AT
@@ -276,60 +278,7 @@ created_at: $CREATED_AT
 
 # Role Dispatch: $ROLE
 
-## Required Input Artifacts
-
-$(for input in $(required_inputs "$ROLE"); do printf -- "- %s\n" "$input"; done)
-
-## Required Output Artifact
-
-- $OUTPUT_ARTIFACT
-
-## Dispatch Artifact Only
-
-This file is an instruction artifact for the runtime executor.
-\`dispatch-role.sh\` created this file only; it did not spawn, execute, or emulate the role subagent.
-
-The runtime executor MUST consume this dispatch artifact and spawn the role-specific subagent from the Codex agent file below.
-
-## Runtime Contract
-
-- executor_type: subagent
-- dispatch_mode: codex_project_scoped
-- free_form_role_prompt_allowed: false
-- fallback_allowed: false
-- runtime_must_spawn_codex_project_agent: true
-
-## Required Final Status Line
-
-$(case "$ROLE" in
-  contract_reviewer)
-    printf -- "- 03-contract-review.md must end with exactly one of:\n  - \\`- Status: approved\\`\n  - \\`- Status: rejected_requires_revision\\`\n"
-    ;;
-  evaluator)
-    printf -- "- 05-evaluator-report.md must end with exactly one of:\n  - \\`- Status: pass\\`\n  - \\`- Status: fail\\`\n  - \\`- Status: blocked_insufficient_evidence\\`\n"
-    ;;
-  *)
-    printf -- "- No terminal status line is required for this role artifact.\n"
-    ;;
-esac)
-
-## Codex Agent File
-
-The runtime executor MUST instantiate the subagent from:
-
-\`\`\`txt
-$CODEX_AGENT_FILE
-\`\`\`
-
-## Forbidden Actions
-
-- coordinator_implements_role_work
-- coordinator_writes_role_artifact
-- free_form_role_prompt
-- bypass_codex_agent
-- single_session_execution
-- fallback_execution
-- handoff_file_transition
+Dispatch metadata only. This script did not spawn, execute, or emulate the role subagent.
 EOF
 
 echo "Created dispatch artifact:"

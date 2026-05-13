@@ -32,7 +32,7 @@ state: CREATED
 current_role: Orchestrator
 next_required_role: Planner
 next_required_executor: planner
-next_required_artifact: 01-planner-brief.md
+next_required_artifact: 02-implementation-contract.md
 
 approved_for_implementation: false
 generator_allowed: false
@@ -68,7 +68,6 @@ role_executors:
 allowed_states:
   - CREATED
   - PLANNING
-  - CONTRACTING
   - CONTRACT_REVIEW
   - APPROVED_FOR_IMPLEMENTATION
   - GENERATING

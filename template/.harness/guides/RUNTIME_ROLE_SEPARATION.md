@@ -23,7 +23,7 @@ The coordinator may pass task-specific inputs to the selected named Codex agent,
 
 The coordinator must not create free-form prompts for these roles, modify role responsibilities, weaken evidence requirements, bypass role separation, or write role artifacts on behalf of subagents.
 
-`.harness/scripts/dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from the Codex agent file.
+`.harness/scripts/dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn, execute, or emulate a subagent. Codex-native invocation of the named project-scoped agent is the canonical execution path.
 
 ## Coordinator Non-Execution Policy
 
@@ -88,13 +88,13 @@ Core lifecycle execution requires real subagent spawning.
 New runs start with `runtime.subagent_runtime_available: unknown`. Before Planner dispatch, the coordinator must mark runtime availability:
 
 ```bash
-bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
+bash .harness/scripts/set-runtime-capability.sh .harness/runs/<RUN_ID> true
 ```
 
 If the runtime cannot spawn subagents, the coordinator must mark availability as false and block the run before Planner execution:
 
 ```bash
-bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
+bash .harness/scripts/set-runtime-capability.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
 ```
 
 Required blocked message:

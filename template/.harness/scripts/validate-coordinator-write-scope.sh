@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROLE="${HARNESS_EXECUTOR_ROLE:-}"
 RUN_DIR="${HARNESS_RUN_DIR:-}"
+BASE_REF="${HARNESS_BASE_REF:-}"
 RUN_DIR="${RUN_DIR#./}"
 RUN_DIR="${RUN_DIR%/}"
 
@@ -16,13 +17,35 @@ if [[ -z "$RUN_DIR" ]] || ! git rev-parse --is-inside-work-tree >/dev/null 2>&1;
   exit 2
 fi
 
-changed_files="$(
-  {
-    git diff --name-only
-    git diff --cached --name-only
-    git ls-files --others --exclude-standard
-  } | sort -u
-)"
+if [[ -n "$BASE_REF" ]]; then
+  changed_files="$(
+    {
+      git diff --name-only "$BASE_REF"
+      git diff --cached --name-only "$BASE_REF"
+      git ls-files --others --exclude-standard
+    } | sort -u
+  )"
+else
+  changed_files="$(
+    {
+      git diff --name-only
+      git diff --cached --name-only
+      git ls-files --others --exclude-standard
+    } | sort -u
+  )"
+fi
+
+baseline_file="$RUN_DIR/baseline-files.txt"
+if [[ -f "$baseline_file" && -n "$changed_files" ]]; then
+  filtered_files=""
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if ! grep -Fxq -- "$f" "$baseline_file"; then
+      filtered_files="${filtered_files}${f}"$'\n'
+    fi
+  done <<< "$changed_files"
+  changed_files="$(printf '%s' "$filtered_files" | sed '/^$/d')"
+fi
 
 if [[ -z "$changed_files" ]]; then
   echo "OK no_changes"
@@ -34,6 +57,7 @@ is_allowed() {
   case "$p" in
     "$RUN_DIR/run.yaml" | \
     "$RUN_DIR/run-manifest.md" | \
+    "$RUN_DIR/baseline-files.txt" | \
     "$RUN_DIR/routing-note.md" | \
     "$RUN_DIR/rework-packet.md" | \
     "$RUN_DIR/generator-rework-packet.md" | \

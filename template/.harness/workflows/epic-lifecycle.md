@@ -17,7 +17,7 @@ The Coordinator is orchestration-only. It must not implement, debug, repair, rev
 3. If unavailable, block run immediately.
 4. If available, spawn Planner from `.codex/agents/harness-planner.toml`.
 5. Planner writes `01-planner-brief.md`.
-6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
+6. Planner writes both `01-planner-brief.md` and `02-implementation-contract.md` in one planning invocation, then the child run enters `CONTRACT_REVIEW`.
 7. Spawn Contract Reviewer from `.codex/agents/harness-contract-reviewer.toml`.
 8. Contract Reviewer writes `03-contract-review.md`.
 9. If contract rejected, return to Planner/contract revision.

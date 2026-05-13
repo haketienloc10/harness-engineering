@@ -14,6 +14,7 @@ Repo này không phải application source code và không phải harness cứng
 
 ```txt
 template/.harness/
+template/.codex/
 template/AGENTS.md
 ```
 
@@ -23,9 +24,10 @@ Sau khi install, target repository sở hữu `.harness/` của chính nó và c
 
 - `scripts/install-harness.sh` là bootstrap installer để tải repo seed và gọi installer canonical.
 - `template/.harness/` là installed harness template.
+- `template/.codex/` là Codex config, project-scoped agents, và Harness workflow skills được cài vào target repo.
 - `template/AGENTS.md` là root agent instruction được cài vào target repo.
 - Root repo không được có `.harness/` cạnh tranh với `template/.harness/` như install source.
-- Codex project-scoped subagent orchestration policy lives in `template/AGENTS.md`, `template/.codex/agents/`, and `template/.harness/workflows/`.
+- Codex project-scoped subagent orchestration policy lives in `template/AGENTS.md`, `template/.codex/agents/`, `template/.codex/skills/`, and `template/.harness/workflows/`.
 
 ## Change Rules
 
@@ -42,8 +44,9 @@ Khi chỉnh installer/template:
 - không làm installer overwrite `.harness/project/*` trong target repo;
 - không reset `.harness/runs/RUN_INDEX.md` trong target repo;
 - không overwrite `.harness/backlog/HARNESS_BACKLOG.md` nếu target đã có;
-- chỉ replace kernel folders khi update: `.harness/guides/`, `.harness/workflows/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`.
+- chỉ replace kernel folders khi update: `.harness/guides/`, `.harness/workflows/`, `.harness/templates/`, `.harness/project-templates/`, `.harness/scripts/`, và Harness-owned `.codex/skills/harness-*`.
 - `.harness/subagents/` là deprecated; lifecycle subagent definitions canonical nằm trong `.codex/agents/*.toml`.
+- `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*.md` là deprecated; workflow skills canonical nằm trong `.codex/skills/harness-*/SKILL.md`.
 - khi thêm Harness kernel folder mới, installer và README phải liệt kê rõ folder đó.
 
 ## Verification

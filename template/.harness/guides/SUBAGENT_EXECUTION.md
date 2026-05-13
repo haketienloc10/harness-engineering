@@ -2,7 +2,7 @@
 
 Harness core lifecycle execution requires template-based spawned subagents.
 
-Role transitions are performed by spawning independent subagents from fixed templates.
+Role transitions are performed through `.harness/scripts/dispatch-role.sh`, then by spawning independent subagents from fixed templates.
 
 Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
@@ -10,7 +10,7 @@ Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
 Before executing lifecycle role work, determine whether the current runtime supports real subagent spawning.
 
-If supported, the coordinator MUST instantiate the next lifecycle role from the corresponding template under `.harness/subagents/`.
+If supported, the coordinator MUST call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding template under `.harness/subagents/`.
 
 If unsupported, the coordinator MUST block the run before Planner execution.
 
@@ -70,6 +70,7 @@ No lifecycle role may be executed in this session.
 16. The Orchestrator MUST NOT debug or repair implementation failures directly.
 17. The Orchestrator MUST NOT read implementation files for the purpose of direct repair after a role returns.
 18. The Orchestrator MUST route failed or rejected work back to the responsible template-based role.
+19. The Orchestrator MUST use `.harness/scripts/dispatch-role.sh`; free-form role prompts are forbidden.
 
 ## Orchestrator Duties
 
@@ -77,8 +78,8 @@ No lifecycle role may be executed in this session.
 - Read `run-manifest.md`.
 - Determine the next required lifecycle state.
 - Determine the next required role.
-- Load the correct role template.
-- Spawn the correct role subagent.
+- Call `.harness/scripts/dispatch-role.sh` for the correct role.
+- Ensure the runtime consumes the dispatch artifact and spawns the correct role subagent.
 - Provide only the required visible inputs for that role.
 - Refuse invalid transitions.
 - Update `run.yaml` only after the required artifact exists.
@@ -107,7 +108,7 @@ run-manifest.md
 routing-note.md
 rework-packet.md
 generator-rework-packet.md
-07-final-summary.md
+06-final-summary.md
 status.md
 routing/*.md
 packets/*.md
@@ -121,7 +122,6 @@ Coordinator MUST NOT write:
 03-contract-review.md
 04-implementation-report.md
 05-evaluator-report.md
-06-fix-report.md
 source code
 tests
 configs
@@ -139,7 +139,7 @@ The coordinator may summarize final results only from approved artifacts and eva
 | `CONTRACT_REVIEW` | `contract-reviewer` | `03-contract-review.md` |
 | `GENERATING` | `generator` | code changes + `04-implementation-report.md` |
 | `EVALUATING` | `evaluator` | `05-evaluator-report.md` |
-| `FAILED_VERIFICATION` | `generator`, then `evaluator` | `06-fix-report.md`, then updated `05-evaluator-report.md` |
+| `FAILED_VERIFICATION` | `generator`, then `evaluator` | updated `04-implementation-report.md`, then updated `05-evaluator-report.md` |
 
 ## Evaluator Failure Routing
 
@@ -148,22 +148,22 @@ When Evaluator returns `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_insufficient_ev
 1. Read the evaluator decision summary only.
 2. Create a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`.
 3. Spawn Generator from `.harness/subagents/generator.md`.
-4. Wait for `06-fix-report.md` or an updated implementation report.
+4. Wait for an updated `04-implementation-report.md`.
 5. Spawn Evaluator from `.harness/subagents/evaluator.md` again.
 
-The Orchestrator must not edit source, inspect implementation files for direct repair, add tests directly, run a fix loop, or write `06-fix-report.md`.
+The Orchestrator must not edit source, inspect implementation files for direct repair, add tests directly, run a fix loop, or write role artifacts.
 
 If Generator cannot be spawned, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 
-## Artifact-Only Handoff
+## Artifact-Only Role Inputs
 
 Roles communicate through written artifacts, not inherited raw conversation history.
 
-Allowed handoff chain:
+Allowed artifact input chain:
 
 - Planner -> `01-planner-brief.md` and `02-implementation-contract.md`;
 - Contract Reviewer -> `03-contract-review.md`;
-- Generator -> `04-implementation-report.md`, changed files summary, verification commands/results, and when applicable `06-fix-report.md`;
+- Generator -> `04-implementation-report.md`, changed files summary, and verification commands/results;
 - Evaluator -> `05-evaluator-report.md` and pass/fail decision.
 
 Do not pass full role transcripts, unrelated previous run artifacts, or coordinator memory as role inputs unless an approved artifact explicitly authorizes that input.
@@ -184,6 +184,6 @@ Do not create `HANDOFF.md`.
 
 Do not ask the user to manually continue the next role if an executor can be started.
 
-Do not use handoff files as phase boundaries.
+Do not use forbidden handoff files as phase boundaries.
 
 Lifecycle role boundaries are enforced by spawned subagents from fixed templates and artifact ownership.

@@ -51,7 +51,7 @@ Harness core lifecycle roles MUST be executed by separate spawned subagents inst
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-The top-level agent acts as coordinator/orchestrator only. It may select the required role, load the role template, pass task-specific inputs, collect the role artifact, and decide the next workflow step based on that artifact.
+The top-level agent acts as coordinator/orchestrator only. It must call `.harness/scripts/dispatch-role.sh` for each lifecycle role. The dispatch script selects only the fixed role template, writes a structured dispatch artifact, and never accepts a free-form role prompt.
 
 The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, edit source/tests/config, repair implementation failures directly, or continue when subagent spawning is unavailable.
 
@@ -72,7 +72,7 @@ Harness dùng một execution namespace:
 
 - `.harness/runs/RUN-*`: normal runs cho từng implementation unit.
 - `.harness/runs/EPIC-*`: Epic containers cho long-running tasks, giữ roadmap, acceptance matrix, decision log, và child run index.
-- `.harness/runs/EPIC-*/runs/RUN-*`: child runs, là nơi chứa implementation contract, evaluator report, worklog, và final summary.
+- `.harness/runs/EPIC-*/runs/RUN-*`: child runs, là nơi chứa implementation contract, contract review, implementation report, evaluator report, và final summary.
 
 Trước khi tạo normal run, Harness phải classify request. Multi-phase, broad, MVP, full feature, core loop, complete playable, hoặc task không verify gọn trong một run phải thành Epic và được chia thành child runs nhỏ.
 
@@ -220,9 +220,8 @@ template/
       03-contract-review.template.md
       04-implementation-report.template.md
       05-evaluator-report.template.md
-      06-fix-report.template.md
+      06-final-summary.template.md
       generator-rework-packet.template.md
-      07-final-summary.template.md
       00-epic-overview.template.md
       01-epic-roadmap.template.md
       02-epic-acceptance-matrix.template.md

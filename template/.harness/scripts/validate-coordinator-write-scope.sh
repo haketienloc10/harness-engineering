@@ -37,7 +37,7 @@ is_allowed() {
     "$RUN_DIR/routing-note.md" | \
     "$RUN_DIR/rework-packet.md" | \
     "$RUN_DIR/generator-rework-packet.md" | \
-    "$RUN_DIR/07-final-summary.md" | \
+    "$RUN_DIR/06-final-summary.md" | \
     "$RUN_DIR/status.md" | \
     "$RUN_DIR"/routing/*.md | \
     "$RUN_DIR"/packets/*.md)

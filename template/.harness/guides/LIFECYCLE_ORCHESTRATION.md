@@ -10,9 +10,9 @@ Orchestrator -> Planner -> Contract Reviewer -> Generator -> Evaluator
 
 ## Template-Based Subagent Dispatch Rule
 
-Harness uses spawned subagents for role transitions.
+Harness uses `.harness/scripts/dispatch-role.sh` plus spawned subagents for role transitions.
 
-The coordinator must instantiate each required lifecycle role from the fixed template in `.harness/subagents/`.
+The coordinator must call `.harness/scripts/dispatch-role.sh` for each required lifecycle role. The dispatch artifact binds the role to the fixed template in `.harness/subagents/`.
 
 The coordinator may pass task-specific inputs, but must not write free-form prompts for core roles or modify template responsibilities, output schema, evidence requirements, or pass/fail criteria.
 
@@ -22,11 +22,11 @@ For coordinator/orchestrator sessions, the workflow MUST run `.harness/scripts/v
 
 Required dispatch:
 
-- `PLANNING` -> spawn `.harness/subagents/planner.md`
-- `CONTRACTING` -> spawn `.harness/subagents/planner.md`
-- `CONTRACT_REVIEW` -> spawn `.harness/subagents/contract-reviewer.md`
-- `GENERATING` -> spawn `.harness/subagents/generator.md`
-- `EVALUATING` -> spawn `.harness/subagents/evaluator.md`
+- `PLANNING` -> `dispatch-role.sh <run> planner` -> spawn `.harness/subagents/planner.md`
+- `CONTRACTING` -> `dispatch-role.sh <run> planner` -> spawn `.harness/subagents/planner.md`
+- `CONTRACT_REVIEW` -> `dispatch-role.sh <run> contract_reviewer` -> spawn `.harness/subagents/contract-reviewer.md`
+- `GENERATING` -> `dispatch-role.sh <run> generator` -> spawn `.harness/subagents/generator.md`
+- `EVALUATING` -> `dispatch-role.sh <run> evaluator` -> spawn `.harness/subagents/evaluator.md`
 - `FAILED_VERIFICATION` -> read evaluator decision summary only, create a bounded Generator rework packet, spawn `.harness/subagents/generator.md`, then spawn `.harness/subagents/evaluator.md`
 
 If the runtime cannot spawn subagents, the run must enter `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` before Planner execution. There is no degraded single-session fallback.
@@ -119,11 +119,11 @@ The coordinator MUST NOT convert itself into the missing role.
 | `APPROVED_FOR_IMPLEMENTATION` | Approved `03-contract-review.md`, `approved_for_implementation: true`, `generator_allowed: true` | Coordinator | Spawn Generator | Start evaluation, claim implementation done, generate code directly, edit source/tests/config | Updated `run.yaml` and `run-manifest.md` | `GENERATING`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `GENERATING` | Approved contract and review artifacts | `generator` | Implement only the approved contract, record commands and diff summary | Change contract scope, self-evaluate, mark complete | `04-implementation-report.md` | `EVALUATING`, `FAILED_VERIFICATION`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `EVALUATING` | `04-implementation-report.md`, code diff, verification commands | `evaluator` | Verify with real evidence, pass/fail/block | Patch implementation to make tests pass, rely on hidden memory, be same executor as Generator | `05-evaluator-report.md` | `COMPLETED`, `FAILED_VERIFICATION`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
-| `COMPLETED` | Passing `05-evaluator-report.md` with command/evidence sections | Coordinator or Evaluator | Write final summary based on evaluator evidence | Claim completion without evaluator report, add new implementation evidence from memory | `07-final-summary.md` | None |
+| `COMPLETED` | Passing `05-evaluator-report.md` with command/evidence sections | Coordinator or Evaluator | Write final summary based on evaluator evidence | Claim completion without evaluator report, add new implementation evidence from memory | `06-final-summary.md` | None |
 | `REJECTED_FOR_REPLAN` | Rejection in contract review or evaluation | `planner` | Revise plan/contract within run scope | Implement before reapproval | Updated `01-planner-brief.md` and/or `02-implementation-contract.md` | `CONTRACT_REVIEW`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
 | `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` | Current `run.yaml`, `run-manifest.md`, `blocked_reason` | Coordinator | Report missing subagent runtime | Use handoff files, continue required role work in same session, write role artifacts | Updated `run.yaml` and `run-manifest.md` with block reason | None until a runtime with subagent spawning is available |
-| `FAILED_VERIFICATION` | Failing `05-evaluator-report.md`; bounded Generator rework packet | `generator` for fixes, then `evaluator` for recheck | Generator fixes only verified failures and documents fix; Evaluator independently rechecks | Coordinator fixes code, Coordinator adds tests, Coordinator reads source for direct repair, Evaluator patches implementation, Generator approves own fix | `06-fix-report.md` then updated `05-evaluator-report.md` | `EVALUATING`, `COMPLETED`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
-| `CANCELLED` | Cancellation reason | Orchestrator | Record cancellation | Continue implementation or evaluation | Updated `run.yaml` and optional note in `07-final-summary.md` | None |
+| `FAILED_VERIFICATION` | Failing `05-evaluator-report.md`; bounded Generator rework packet | `generator` for fixes, then `evaluator` for recheck | Generator fixes only verified failures and documents updated implementation report; Evaluator independently rechecks | Coordinator fixes code, Coordinator adds tests, Coordinator reads source for direct repair, Evaluator patches implementation, Generator approves own fix | Updated `04-implementation-report.md` then updated `05-evaluator-report.md` | `EVALUATING`, `COMPLETED`, `REJECTED_FOR_REPLAN`, `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`, `CANCELLED` |
+| `CANCELLED` | Cancellation reason | Orchestrator | Record cancellation | Continue implementation or evaluation | Updated `run.yaml` and optional note in `06-final-summary.md` | None |
 
 ## State Fields
 

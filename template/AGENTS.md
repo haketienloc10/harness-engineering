@@ -17,7 +17,7 @@ Repository này đã cài **Harness** để điều phối AI-assisted developme
 
 Harness core lifecycle roles MUST be executed by separate spawned subagents.
 
-The coordinator MUST instantiate each core role from its predefined template under `.harness/subagents/`.
+The coordinator MUST call `.harness/scripts/dispatch-role.sh` to dispatch each core role from its predefined template under `.harness/subagents/`.
 
 Core lifecycle roles are:
 
@@ -26,13 +26,13 @@ Core lifecycle roles are:
 3. Generator
 4. Evaluator
 
-The coordinator MUST NOT create free-form prompts for these roles.
+The coordinator MUST NOT create free-form prompts for these roles. `dispatch-role.sh` does not accept free-form role prompts.
 
 The coordinator MUST NOT execute these roles itself.
 
 The coordinator is orchestration-only. It MUST NOT perform implementation, review, verification, debugging, or repair work directly.
 
-The coordinator MAY pass task-specific inputs to the selected role template, including:
+The coordinator MAY make task-specific artifacts available to the selected role template, including:
 
 - original user request
 - project context summary
@@ -105,7 +105,13 @@ Harness uses template-based subagent orchestration, not handoff files, for role 
 
 The top-level agent is the coordinator/orchestrator.
 
-The coordinator must spawn the required role-specific subagent whenever the workflow enters a role-owned phase.
+The coordinator must run:
+
+```bash
+bash .harness/scripts/dispatch-role.sh .harness/runs/<RUN_ID> <role>
+```
+
+for the required role whenever the workflow enters a role-owned phase. The runtime executor must consume the dispatch artifact and spawn the required role-specific subagent.
 
 Required role templates:
 

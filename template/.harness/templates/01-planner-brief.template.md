@@ -1,19 +1,14 @@
-# Planner Brief
-
-## Executor Metadata
-
-```yaml
-role: Planner
-runtime_mode: template_subagents_required
-executor_type: subagent
-executor_id: <required>
-agent_runtime: <required>
-agent_session_id: <required>
+---
+artifact: 01-planner-brief
+run_id: <RUN-ID>
+role: planner
+executor_type:
+executor_id:
 template_source: .harness/subagents/planner.md
-started_at: <required>
-completed_at: <required>
-independence: independent
-```
+status: draft
+---
+
+# Planner Brief
 
 ## Classification Summary
 
@@ -27,11 +22,11 @@ None
 
 ## Goal
 
-<Mục tiêu cần đạt, viết lại rõ ràng>
+<Muc tieu can dat, viet lai ro rang>
 
 ## Context Summary
 
-<Tóm tắt context liên quan, không over-spec implementation>
+<Tom tat context lien quan, khong over-spec implementation>
 
 ## In Scope
 
@@ -41,12 +36,6 @@ None
 
 - ...
 
-## User / Business Flow
-
-1. ...
-2. ...
-3. ...
-
 ## Acceptance Criteria
 
 - [ ] AC1:
@@ -55,19 +44,10 @@ None
 
 ## Likely Impacted Areas
 
-> Chỉ ghi khu vực/module nghi ngờ liên quan, không ép implementation cụ thể.
-
 - Module:
 - Page/API:
 - Data model:
 - Test area:
-
-## Parallel Work Considerations
-
-- Can this run happen in parallel?
-- Depends on:
-- May conflict with:
-- Recommended branch/worktree:
 
 ## Risks / Unknowns
 
@@ -75,4 +55,4 @@ None
 
 ## Planner Notes for Generator
 
-<Những điều generator cần chú ý trước khi lập contract>
+<Nhung dieu generator can chu y truoc khi lap contract>

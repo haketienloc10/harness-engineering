@@ -19,7 +19,7 @@ Không có degraded single-session fallback.
 
 If subagent spawning is unavailable, block the run before Planner execution.
 
-When a phase requires another role, spawn the corresponding role subagent from its fixed template.
+When a phase requires another role, call `.harness/scripts/dispatch-role.sh` and spawn the corresponding role subagent from its fixed template.
 
 Coordinator chỉ được điều phối. Coordinator không được implement, debug, repair, review, verify, approve, edit source/tests/config, hoặc viết lifecycle role artifact thay subagent.
 
@@ -107,11 +107,10 @@ Forbidden:
 Outputs:
 
 - code changes;
-- `04-implementation-report.md`;
-- `06-fix-report.md` if applicable.
+- `04-implementation-report.md`.
 
 Generator Agent chỉ implement sau khi `03-contract-review.md` có `Status: approved`.
-Generator Agent phải dừng sau `04-implementation-report.md` hoặc `06-fix-report.md`; không tự evaluate.
+Generator Agent phải dừng sau `04-implementation-report.md`; không tự evaluate.
 
 ## Rework Routing Phase
 
@@ -120,10 +119,10 @@ Khi `05-evaluator-report.md` trả `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_ins
 1. Coordinator chỉ đọc evaluator decision summary.
 2. Coordinator tạo bounded Generator rework packet từ `.harness/templates/generator-rework-packet.template.md`.
 3. Coordinator spawn Generator từ `.harness/subagents/generator.md`.
-4. Generator sửa implementation và viết `06-fix-report.md`.
+4. Generator sửa implementation và cập nhật `04-implementation-report.md`.
 5. Coordinator spawn Evaluator từ `.harness/subagents/evaluator.md` lại.
 
-Coordinator không được đọc source để tự repair, không được edit source/tests/config, không được thêm test trực tiếp, không được chạy fix loop, và không được viết `06-fix-report.md`.
+Coordinator không được đọc source để tự repair, không được edit source/tests/config, không được thêm test trực tiếp, không được chạy fix loop, và không được viết role artifact thay Generator.
 
 Nếu không spawn được Generator, stop với:
 
@@ -155,10 +154,10 @@ Outputs:
 
 - `05-evaluator-report.md`;
 - final pass/fail decision;
-- `07-final-summary.md` after verified completion.
+- `06-final-summary.md` after verified completion.
 
 Evaluator must be a spawned subagent from `.harness/subagents/evaluator.md` and must be separate from Generator. Evaluation phải dựa trên visible artifacts, diff, command output, runtime evidence, browser/API evidence, logs, và acceptance criteria.
-Evaluator Agent phải dừng sau `05-evaluator-report.md` và `07-final-summary.md` nếu final summary được giao cho Evaluator.
+Evaluator Agent phải dừng sau `05-evaluator-report.md` và `06-final-summary.md` nếu final summary được giao cho Evaluator.
 
 ## Next Role Note
 

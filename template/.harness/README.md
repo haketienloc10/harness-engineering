@@ -52,7 +52,7 @@ Core lifecycle:
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-Coordinator chỉ được load template tương ứng trong `.harness/subagents/`, pass task-specific inputs, collect artifact, và route bước tiếp theo. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, không được viết artifact thay role subagent, không được edit source/tests/config, và không được tự repair implementation failure.
+Coordinator phải gọi `.harness/scripts/dispatch-role.sh` cho role tiếp theo để bind fixed template trong `.harness/subagents/`, rồi runtime executor spawn subagent tương ứng. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, không được viết artifact thay role subagent, không được edit source/tests/config, và không được tự repair implementation failure.
 
 Nếu runtime không thể spawn subagent, run phải block trước Planner execution. Không có degraded single-session fallback.
 

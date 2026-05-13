@@ -448,6 +448,12 @@ mkdir -p "$RUN_DIR"
 cp "$TEMPLATES_DIR/run.yaml.template" "$RUN_DIR/run.yaml"
 cp "$TEMPLATES_DIR/run-manifest.template.md" "$RUN_DIR/run-manifest.md"
 cp "$TEMPLATES_DIR/00-input.template.md" "$RUN_DIR/00-input.md"
+cp "$TEMPLATES_DIR/01-planner-brief.template.md" "$RUN_DIR/01-planner-brief.md"
+cp "$TEMPLATES_DIR/02-implementation-contract.template.md" "$RUN_DIR/02-implementation-contract.md"
+cp "$TEMPLATES_DIR/03-contract-review.template.md" "$RUN_DIR/03-contract-review.md"
+cp "$TEMPLATES_DIR/04-implementation-report.template.md" "$RUN_DIR/04-implementation-report.md"
+cp "$TEMPLATES_DIR/05-evaluator-report.template.md" "$RUN_DIR/05-evaluator-report.md"
+cp "$TEMPLATES_DIR/06-final-summary.template.md" "$RUN_DIR/06-final-summary.md"
 
 for f in "$RUN_DIR"/*; do
   if [ -f "$f" ]; then

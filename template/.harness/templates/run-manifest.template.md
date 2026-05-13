@@ -3,6 +3,7 @@
 ## Execution Mode
 
 - mode: template_subagents_required
+- dispatch_mode: template_based
 - fallback_allowed: false
 - subagent_runtime_available: unknown
 - run_status: created_pending_executor_check

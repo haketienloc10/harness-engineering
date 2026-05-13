@@ -36,11 +36,7 @@ Write:
 .harness/runs/<RUN_ID>/04-implementation-report.md
 ```
 
-For rework after a non-passing Evaluator or reviewer decision, write:
-
-```txt
-.harness/runs/<RUN_ID>/06-fix-report.md
-```
+For rework after a non-passing Evaluator or reviewer decision, update the implementation report with the new changes and verification evidence.
 
 ## Evidence Requirements
 

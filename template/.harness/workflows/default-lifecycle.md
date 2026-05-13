@@ -13,15 +13,15 @@ The Coordinator is orchestration-only. It must not implement, debug, repair, rev
 1. Coordinator starts run.
 2. Coordinator checks subagent runtime availability.
 3. If unavailable, block run immediately.
-4. If available, spawn Planner from `.harness/subagents/planner.md`.
+4. If available, call `dispatch-role.sh <run> planner` and spawn Planner from `.harness/subagents/planner.md`.
 5. Planner writes `01-planner-brief.md`.
 6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
-7. Spawn Contract Reviewer from `.harness/subagents/contract-reviewer.md`.
+7. Call `dispatch-role.sh <run> contract_reviewer` and spawn Contract Reviewer from `.harness/subagents/contract-reviewer.md`.
 8. Contract Reviewer writes `03-contract-review.md`.
 9. If contract rejected, return to Planner/contract revision.
-10. If approved, spawn Generator from `.harness/subagents/generator.md`.
+10. If approved, call `dispatch-role.sh <run> generator` and spawn Generator from `.harness/subagents/generator.md`.
 11. Generator writes `04-implementation-report.md`.
-12. Spawn Evaluator from `.harness/subagents/evaluator.md`.
+12. Call `dispatch-role.sh <run> evaluator` and spawn Evaluator from `.harness/subagents/evaluator.md`.
 13. Evaluator writes `05-evaluator-report.md`.
 14. If Evaluator returns a non-passing result, Coordinator reads only the evaluator decision summary, creates a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawns Generator, then spawns Evaluator again.
 15. Run completes only if Evaluator result is `pass`.
@@ -32,6 +32,7 @@ New runs start before executor availability has been checked:
 
 ```md
 - mode: template_subagents_required
+- dispatch_mode: template_based
 - fallback_allowed: false
 - subagent_runtime_available: unknown
 - run_status: created_pending_executor_check
@@ -54,6 +55,7 @@ If subagent runtime is unavailable, create or update `run-manifest.md`:
 ## Execution Mode
 
 - mode: template_subagents_required
+- dispatch_mode: template_based
 - fallback_allowed: false
 - subagent_runtime_available: false
 - run_status: blocked

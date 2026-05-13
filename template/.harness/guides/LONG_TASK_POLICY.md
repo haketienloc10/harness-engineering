@@ -11,7 +11,7 @@ Harness dùng một execution namespace:
 - `Run`: đơn vị thực thi nhỏ, có contract và verification riêng.
 - `Epic`: run container để điều phối task dài hơi, giữ mục tiêu tổng, roadmap, decision log, acceptance matrix, và index của các child runs.
 
-Epic không phải implementation run và không phải metadata folder độc lập. Chỉ child runs trong `EPIC-.../runs/` mới chứa implementation contract, generator worklog, evaluator report, fix report, và final summary.
+Epic không phải implementation run và không phải metadata folder độc lập. Chỉ child runs trong `EPIC-.../runs/` mới chứa implementation contract, contract review, implementation report, evaluator report, và final summary.
 
 ## Layout
 
@@ -107,7 +107,7 @@ Không tạo run có contract quá rộng, ví dụ:
 - nhiều UI flow không thể smoke test cùng lúc;
 - nhiều module có dependency chưa rõ;
 - verification phải chờ toàn bộ project hoàn tất;
-- worklog/final summary dự kiến quá dài để resume an toàn.
+- implementation report/final summary dự kiến quá dài để resume an toàn.
 
 Nếu contract bắt đầu phình to, dừng lại và chuyển task sang Epic chỉ khi xác định được ít nhất hai child runs. Nếu chưa xác định được, đóng phạm vi run hiện tại và ghi follow-up.
 

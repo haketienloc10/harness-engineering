@@ -48,6 +48,7 @@ write_blocked_manifest() {
 ## Execution Mode
 
 - mode: template_subagents_required
+- dispatch_mode: template_based
 - fallback_allowed: false
 - subagent_runtime_available: false
 - run_status: blocked
@@ -114,7 +115,7 @@ role_executor_get() {
         in_role = 1
         next
       }
-      if (in_role == 1 && $0 ~ /^[[:space:]]+[a-zA-Z_]+:[[:space:]]*$/) {
+      if (in_role == 1 && $0 ~ /^  [a-zA-Z_]+:[[:space:]]*$/) {
         in_role = 0
       }
       if (in_role == 1 && $0 ~ /^[[:space:]]+executor_type:[[:space:]]*/) {
@@ -146,7 +147,7 @@ artifact_to_role() {
     03-contract-review.md)
       printf "contract_reviewer"
       ;;
-    04-implementation-report.md|06-fix-report.md)
+    04-implementation-report.md)
       printf "generator"
       ;;
     05-evaluator-report.md)
@@ -199,7 +200,7 @@ state_required_artifact() {
       printf "05-evaluator-report.md"
       ;;
     FAILED_VERIFICATION)
-      printf "06-fix-report.md"
+      printf "04-implementation-report.md"
       ;;
     BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
       printf "%s" "${NEXT_REQUIRED_ARTIFACT:-none}"
@@ -255,6 +256,8 @@ CURRENT_ROLE="$(yaml_get current_role)"
 PARENT_EPIC="$(yaml_get parent_epic)"
 NEXT_REQUIRED_ARTIFACT="$(yaml_get next_required_artifact)"
 SUBAGENT_RUNTIME_AVAILABLE="$(runtime_get subagent_runtime_available)"
+DISPATCH_MODE="$(runtime_get dispatch_mode)"
+FALLBACK_ALLOWED="$(runtime_get fallback_allowed)"
 APPROVED_FOR_IMPLEMENTATION="$(yaml_get approved_for_implementation)"
 GENERATOR_ALLOWED="$(yaml_get generator_allowed)"
 
@@ -272,13 +275,15 @@ REQUIRED_ARTIFACT="$(state_required_artifact "$STATE")"
 BLOCKED="false"
 
 if [ "$NEXT_ROLE" != "none" ]; then
-  EXECUTOR_VALUE="$(role_executor_get "$NEXT_ROLE")"
   if [ "$STATE" = "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ]; then
     BLOCKED="true"
-  elif [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
+  elif [ "$DISPATCH_MODE" != "template_based" ]; then
     block_for_executor_unavailable
     BLOCKED="true"
-  elif [ "$EXECUTOR_VALUE" != "subagent" ]; then
+  elif [ "$FALLBACK_ALLOWED" != "false" ]; then
+    block_for_executor_unavailable
+    BLOCKED="true"
+  elif [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
     block_for_executor_unavailable
     BLOCKED="true"
   fi

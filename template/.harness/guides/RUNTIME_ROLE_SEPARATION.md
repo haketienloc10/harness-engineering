@@ -141,13 +141,13 @@ A Harness run is invalid if any of the following is true:
 - The coordinator modified source, tests, production config, or implementation artifacts.
 - The coordinator repaired rejected work directly instead of routing to the responsible role.
 
-## Artifact-Only Role Handoff
+## Artifact-Only Role Inputs
 
 Roles communicate through written artifacts, not inherited raw conversation history.
 
 A downstream role may read only the approved upstream artifact and the explicitly allowed input artifacts.
 
-Forbidden handoff:
+Forbidden transcript transfer:
 
 - passing full Planner transcript to Contract Reviewer;
 - passing full Reviewer transcript to Generator;
@@ -155,7 +155,7 @@ Forbidden handoff:
 - passing unrelated previous run artifacts by default;
 - coordinator summarizing raw implementation details from memory instead of using artifacts.
 
-Allowed handoff chain:
+Allowed artifact input chain:
 
 - Planner -> planner brief and contract;
 - Contract Reviewer -> contract review decision;
@@ -192,6 +192,6 @@ Required recovery:
 |---|---|---|---|
 | Planner | `01-planner-brief.md`, `02-implementation-contract.md` | user request, project context, relevant guides, relevant source/tests for planning | implement application code, approve contract, approve final evaluation |
 | Contract Reviewer | `03-contract-review.md` | `00-input.md`, `01-planner-brief.md`, `02-implementation-contract.md`, project rules/verification notes | implement, rewrite contract silently, approve vague or untestable contracts |
-| Generator | code changes, `04-implementation-report.md`, `06-fix-report.md` | approved contract, contract review, relevant source/tests | approve own work, broaden scope, weaken verification criteria |
-| Evaluator | `05-evaluator-report.md`, maybe `07-final-summary.md` | all visible artifacts, git diff, command output, runtime/browser/API evidence, logs | implement, approve without evidence, rely on Generator statements without verification |
+| Generator | code changes, `04-implementation-report.md` | approved contract, contract review, relevant source/tests | approve own work, broaden scope, weaken verification criteria |
+| Evaluator | `05-evaluator-report.md`, maybe `06-final-summary.md` | all visible artifacts, git diff, command output, runtime/browser/API evidence, logs | implement, approve without evidence, rely on Generator statements without verification |
 | Coordinator | orchestration status, routing notes, role/rework packets, final summary from approved artifacts | run state, manifests, role status, decision summaries, approved artifacts | source edits, test edits, production config edits, debugging, implementation repair, role artifact authorship |

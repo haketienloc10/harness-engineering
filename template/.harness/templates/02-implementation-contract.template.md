@@ -1,26 +1,20 @@
-# Implementation Contract
-
-## Executor Metadata
-
-```yaml
-role: Planner
-runtime_mode: template_subagents_required
-executor_type: subagent
-executor_id: <required>
-agent_runtime: <required>
-agent_session_id: <required>
+---
+artifact: 02-implementation-contract
+run_id: <RUN-ID>
+role: planner
+executor_type:
+executor_id:
 template_source: .harness/subagents/planner.md
-started_at: <required>
-completed_at: <required>
-independence: independent
-```
+status: draft
+---
+
+# Implementation Contract
 
 ## Classification Guard
 
 - Task classification: Normal Run | Epic Child Run
 - Normal run is bounded: yes | no
 - Oversized/Epic signals present: no | yes
-- If oversized/Epic signals are present, this contract must be rejected unless scoped down:
 
 ## Contract Status
 
@@ -28,7 +22,7 @@ Draft
 
 ## Goal
 
-<Generator hiểu task này cần làm gì>
+<Generator hieu task nay can lam gi>
 
 ## Planned Change
 
@@ -44,22 +38,7 @@ Draft
 |---|---|---|---|
 |  |  |  | Low/Medium/High |
 
-## Conflict Check
-
-Active runs checked:
-
-- [ ] Yes
-- [ ] No
-
-Potential conflicts:
-
-| Run ID | File/Area | Conflict | Decision |
-|---|---|---|---|
-|  |  |  | Continue / Sequence / Worktree / Block |
-
 ## Behaviour Contract
-
-Sau khi implement, hệ thống phải có các hành vi sau:
 
 - [ ] Behaviour 1:
 - [ ] Behaviour 2:
@@ -67,37 +46,15 @@ Sau khi implement, hệ thống phải có các hành vi sau:
 
 ## Verification Plan
 
-Evaluator có thể kiểm chứng bằng:
-
 ```bash
 # Build
-...
 
 # Unit tests
-...
 
 # Integration tests
-...
 
 # Smoke test
-...
 ```
-
-## Manual / Runtime Checks
-
-Nếu cần chạy app thật:
-
-```bash
-# Start app
-...
-
-# Check endpoint/page
-...
-```
-
-## Rollback / Safety Notes
-
-- ...
 
 ## Questions / Assumptions
 

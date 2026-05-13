@@ -84,7 +84,7 @@ bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child tas
 
 `--epic` có thể tồn tại như alias tương thích, nhưng docs và workflow mới phải dùng `--within`.
 
-Mỗi child run vẫn giữ lifecycle template-based subagent orchestration:
+Mỗi child run vẫn giữ lifecycle Codex project-scoped subagent orchestration:
 
 ```txt
 Planner -> Contract Reviewer -> Generator -> Evaluator -> Final Summary

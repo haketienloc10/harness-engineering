@@ -3,6 +3,10 @@ set -euo pipefail
 
 echo "== Harness Verify =="
 
+if [[ -x ".harness/scripts/validate-codex-subagents.sh" ]]; then
+  .harness/scripts/validate-codex-subagents.sh
+fi
+
 if [[ -x ".harness/scripts/validate-coordinator-write-scope.sh" ]]; then
   .harness/scripts/validate-coordinator-write-scope.sh
 fi

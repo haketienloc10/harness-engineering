@@ -2,9 +2,9 @@
 
 ## Required Execution Model
 
-Epic planning and child runs use the same strict template-based subagent orchestration rules as the default lifecycle.
+Epic planning and child runs use the same strict Codex project-scoped subagent orchestration rules as the default lifecycle.
 
-Core lifecycle roles must run as separate spawned subagents from fixed templates under `.harness/subagents/`.
+Core lifecycle roles must run as separate spawned subagents from Codex project-scoped agents in `.codex/agents/`.
 
 There is no degraded single-session fallback.
 
@@ -15,15 +15,15 @@ The Coordinator is orchestration-only. It must not implement, debug, repair, rev
 1. Coordinator starts run.
 2. Coordinator checks subagent runtime availability.
 3. If unavailable, block run immediately.
-4. If available, spawn Planner from `.harness/subagents/planner.md`.
+4. If available, spawn Planner from `.codex/agents/harness-planner.toml`.
 5. Planner writes `01-planner-brief.md`.
 6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
-7. Spawn Contract Reviewer from `.harness/subagents/contract-reviewer.md`.
+7. Spawn Contract Reviewer from `.codex/agents/harness-contract-reviewer.toml`.
 8. Contract Reviewer writes `03-contract-review.md`.
 9. If contract rejected, return to Planner/contract revision.
-10. If approved, spawn Generator from `.harness/subagents/generator.md`.
+10. If approved, spawn Generator from `.codex/agents/harness-generator.toml`.
 11. Generator writes `04-implementation-report.md`.
-12. Spawn Evaluator from `.harness/subagents/evaluator.md`.
+12. Spawn Evaluator from `.codex/agents/harness-evaluator.toml`.
 13. Evaluator writes `05-evaluator-report.md`.
 14. If Evaluator returns a non-passing result, Coordinator reads only the evaluator decision summary, creates a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawns Generator, then spawns Evaluator again.
 15. Run completes only if Evaluator result is `pass`.

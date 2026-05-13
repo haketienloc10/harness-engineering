@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Harness uses strict template-based subagent orchestration to prevent self-approval, context contamination, and implementation bias.
+Harness uses strict Codex project-scoped subagent orchestration to prevent self-approval, context contamination, and implementation bias.
 
 The top-level agent is the coordinator/orchestrator. The coordinator routes lifecycle state, but must not execute Planner, Contract Reviewer, Generator, or Evaluator work.
 
@@ -12,18 +12,18 @@ The top-level agent is the coordinator/orchestrator. The coordinator routes life
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-Each core lifecycle role must be a separate spawned subagent instantiated from its fixed template:
+Each core lifecycle role must be a separate spawned subagent instantiated from its Codex agent file:
 
-- Planner: `.harness/subagents/planner.md`
-- Contract Reviewer: `.harness/subagents/contract-reviewer.md`
-- Generator: `.harness/subagents/generator.md`
-- Evaluator: `.harness/subagents/evaluator.md`
+- Planner: `.codex/agents/harness-planner.toml`
+- Contract Reviewer: `.codex/agents/harness-contract-reviewer.toml`
+- Generator: `.codex/agents/harness-generator.toml`
+- Evaluator: `.codex/agents/harness-evaluator.toml`
 
-The coordinator may pass task-specific inputs to the selected template, including original request, project context, relevant files, previous artifacts, acceptance criteria, verification commands, and constraints.
+The coordinator may pass task-specific inputs to the selected named Codex agent, including original request, project context, relevant files, previous artifacts, acceptance criteria, verification commands, and constraints.
 
 The coordinator must not create free-form prompts for these roles, modify role responsibilities, weaken evidence requirements, bypass role separation, or write role artifacts on behalf of subagents.
 
-`.harness/scripts/dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from the fixed template.
+`.harness/scripts/dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from the Codex agent file.
 
 ## Coordinator Non-Execution Policy
 
@@ -50,7 +50,7 @@ Allowed coordinator actions:
 - classify the request;
 - create or update run/epic structure;
 - build bounded role packets;
-- spawn the required template-based subagent;
+- spawn the required Codex project-scoped subagent;
 - wait for role completion;
 - inspect role status, decision summaries, and required role artifacts;
 - update Harness orchestration status;
@@ -101,17 +101,17 @@ Required blocked message:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```
 
 There is no degraded single-session fallback.
 
-If a required role template is missing, invalid, or unavailable, stop with:
+If a required Codex agent file is missing, invalid, or unavailable, stop with:
 
 ```text
-BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE
+BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE
 ```
 
 If the runtime cannot spawn required subagents, stop with:
@@ -128,11 +128,11 @@ New role artifacts must include runtime metadata near the top:
 role: planner | contract_reviewer | generator | evaluator
 executor_type: subagent
 executor_id: <required>
-template_source: .harness/subagents/<role>.md
+codex_agent_file: .codex/agents/<required-agent-file>.toml
 status: completed
 ```
 
-New role artifacts must use `template_source` for validator checks. `role_template` may exist only as legacy context.
+New role artifacts must use `codex_agent_file` for validator checks. `role_template` may exist only as legacy context.
 
 Existing old runs may not have this metadata. New runs should include it. Old runs should not be rewritten unless explicitly requested.
 
@@ -142,7 +142,7 @@ A Harness run is invalid if any of the following is true:
 
 - Planner, Contract Reviewer, Generator, and Evaluator were performed by the same session.
 - The coordinator wrote lifecycle artifacts on behalf of role subagents.
-- A core role was executed from a free-form prompt instead of a role template.
+- A core role was executed from a free-form prompt instead of a Codex agent file.
 - The run continued after detecting unavailable subagent runtime.
 - Evaluator approved without independent evidence.
 - The coordinator modified source, tests, production config, or implementation artifacts.

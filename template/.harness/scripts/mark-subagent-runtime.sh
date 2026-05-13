@@ -7,8 +7,8 @@ Usage:
   bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/RUN-... true
   bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/RUN-... false "reason"
 
-Mark whether the current runtime can consume dispatch artifacts and spawn
-template-based Harness role subagents.
+Mark whether the current runtime can consume dispatch artifacts and invoke
+Codex project-scoped Harness role subagents from .codex/agents/.
 EOF
 }
 
@@ -103,7 +103,7 @@ else
   if [ -n "$REASON" ]; then
     replace_root_yaml_field "blocked_reason" "\"$REASON\""
   else
-    replace_root_yaml_field "blocked_reason" "\"Subagent runtime unavailable\""
+    replace_root_yaml_field "blocked_reason" "\"Subagent runtime unavailable. Harness lifecycle requires Codex project-scoped subagents from .codex/agents/. This run is blocked. No lifecycle role may be executed in this session.\""
   fi
   echo "OK subagent_runtime_available=false"
 fi

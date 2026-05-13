@@ -4,7 +4,8 @@ run_id: <RUN-ID>
 role: evaluator
 executor_type:
 executor_id:
-template_source: .harness/subagents/evaluator.md
+codex_agent_name: harness_evaluator
+codex_agent_file: .codex/agents/harness-evaluator.toml
 status: draft
 generator_executor_id:
 evaluator_executor_id:
@@ -16,8 +17,8 @@ same_executor_as_generator: false
 ## Independence Check
 
 - Evaluator executor is separate from Generator executor: yes | no
-- Evaluator was spawned from `.harness/subagents/evaluator.md`: yes | no
-- Decision if not independent or not template-based: fail
+- Evaluator was spawned from `.codex/agents/harness-evaluator.toml`: yes | no
+- Decision if not independent or not Codex-agent-based: fail
 
 ## Coordinator-Readable Decision Summary
 

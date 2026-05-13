@@ -1,6 +1,6 @@
 # Lifecycle Orchestration
 
-Harness workflow is a strict template-based subagent lifecycle, not a generic summary protocol:
+Harness workflow is a strict Codex project-scoped subagent lifecycle, not a generic summary protocol:
 
 ```txt
 Orchestrator -> Planner -> Contract Reviewer -> Generator -> Evaluator
@@ -8,32 +8,32 @@ Orchestrator -> Planner -> Contract Reviewer -> Generator -> Evaluator
 
 `run.yaml` and `run-manifest.md` are the authoritative state and audit sources. Markdown artifacts are evidence for state transitions.
 
-## Template-Based Subagent Dispatch Rule
+## Codex Project-Scoped Subagent Dispatch Rule
 
 Harness uses `.harness/scripts/dispatch-role.sh` plus spawned subagents for role transitions.
 
-The coordinator must call `.harness/scripts/dispatch-role.sh` for each required lifecycle role. The dispatch artifact binds the role to the fixed template in `.harness/subagents/`.
+The coordinator must call `.harness/scripts/dispatch-role.sh` for each required lifecycle role. The dispatch artifact binds the role to the Codex agent file in `.codex/agents/`.
 
-`dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn or execute the role. The runtime executor must consume that artifact and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+`dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn or execute the role. The runtime executor must consume that artifact and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
 
-The coordinator may pass task-specific inputs, but must not write free-form prompts for core roles or modify template responsibilities, output schema, evidence requirements, or pass/fail criteria.
+The coordinator may pass task-specific inputs, but must not write free-form prompts for core roles or modify Codex agent responsibilities, output schema, evidence requirements, or pass/fail criteria.
 
-The coordinator is orchestration-only. It may route state, build bounded packets, spawn template-based subagents, wait for completion, inspect role status and decision summaries, update Harness metadata, and summarize from approved artifacts. It must not implement, debug, verify, review, repair, test, or approve role work directly.
+The coordinator is orchestration-only. It may route state, build bounded packets, invoke named Codex project-scoped agents, wait for completion, inspect role status and decision summaries, update Harness metadata, and summarize from approved artifacts. It must not implement, debug, verify, review, repair, test, or approve role work directly.
 
 For coordinator/orchestrator sessions, the workflow MUST run `.harness/scripts/validate-coordinator-write-scope.sh` with `HARNESS_EXECUTOR_ROLE` and `HARNESS_RUN_DIR` set. The allowlist and forbidden role-owned artifacts are defined in `.harness/guides/SUBAGENT_EXECUTION.md#coordinator-write-scope-validator`. A failure blocks the workflow with `BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION`.
 
 Required dispatch:
 
-- `PLANNING` -> `dispatch-role.sh <run> planner` -> spawn `.harness/subagents/planner.md`
-- `CONTRACTING` -> `dispatch-role.sh <run> planner` -> spawn `.harness/subagents/planner.md`
-- `CONTRACT_REVIEW` -> `dispatch-role.sh <run> contract_reviewer` -> spawn `.harness/subagents/contract-reviewer.md`
-- `GENERATING` -> `dispatch-role.sh <run> generator` -> spawn `.harness/subagents/generator.md`
-- `EVALUATING` -> `dispatch-role.sh <run> evaluator` -> spawn `.harness/subagents/evaluator.md`
-- `FAILED_VERIFICATION` -> read evaluator decision summary only, create a bounded Generator rework packet, spawn `.harness/subagents/generator.md`, then spawn `.harness/subagents/evaluator.md`
+- `PLANNING` -> `dispatch-role.sh <run> planner` -> invoke `harness_planner`
+- `CONTRACTING` -> `dispatch-role.sh <run> planner` -> invoke `harness_planner`
+- `CONTRACT_REVIEW` -> `dispatch-role.sh <run> contract_reviewer` -> invoke `harness_contract_reviewer`
+- `GENERATING` -> `dispatch-role.sh <run> generator` -> invoke `harness_generator`
+- `EVALUATING` -> `dispatch-role.sh <run> evaluator` -> invoke `harness_evaluator`
+- `FAILED_VERIFICATION` -> read evaluator decision summary only, create a bounded Generator rework packet, invoke `harness_generator`, then invoke `harness_evaluator`
 
 New runs start with `runtime.subagent_runtime_available: unknown`. Before Planner dispatch, the coordinator must set it to `true` after confirming native subagent spawning, or set it to `false` and enter `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`. There is no degraded single-session fallback.
 
-If a required template is missing, invalid, or unavailable, stop with `BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE`.
+If a required Codex agent file is missing, invalid, or unavailable, stop with `BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE`.
 
 If runtime cannot spawn a required role subagent, stop with `BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE`.
 
@@ -45,7 +45,7 @@ Required blocked message:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```

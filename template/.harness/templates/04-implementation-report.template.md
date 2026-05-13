@@ -4,7 +4,8 @@ run_id: <RUN-ID>
 role: generator
 executor_type:
 executor_id:
-template_source: .harness/subagents/generator.md
+codex_agent_name: harness_generator
+codex_agent_file: .codex/agents/harness-generator.toml
 status: draft
 ---
 

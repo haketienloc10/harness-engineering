@@ -8,7 +8,7 @@ Nếu task đủ lớn để thành Epic nhưng mới biết một child run, Pl
 
 ## Planner Brief
 
-Planner subagent là role duy nhất authored `01-planner-brief.md`. Planner subagent phải được spawned từ `.harness/subagents/planner.md` và không được implement application code, approve contract, hoặc approve evaluation của chính run đó.
+Planner subagent là role duy nhất authored `01-planner-brief.md`. Planner subagent phải được spawned từ `.codex/agents/harness-planner.toml` và không được implement application code, approve contract, hoặc approve evaluation của chính run đó.
 
 `01-planner-brief.md` phải làm rõ:
 
@@ -49,7 +49,7 @@ Nếu contract mơ hồ, không đo được, hoặc không test được, revis
 
 ## Contract Review
 
-`03-contract-review.md` chỉ được authored bởi Contract Reviewer subagent spawned từ `.harness/subagents/contract-reviewer.md`. Contract Reviewer phải output `approved` hoặc `rejected_requires_revision` rõ ràng. Không sửa application code trước khi contract được approve.
+`03-contract-review.md` chỉ được authored bởi Contract Reviewer subagent spawned từ `.codex/agents/harness-contract-reviewer.toml`. Contract Reviewer phải output `approved` hoặc `rejected_requires_revision` rõ ràng. Không sửa application code trước khi contract được approve.
 
 The Contract Reviewer must not be the same runtime session that authored the contract.
 

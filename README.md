@@ -36,22 +36,29 @@ Harness có ba lớp:
 
 1. **Artifact Protocol**: templates, run folders, evidence files, and `RUN_INDEX.md`.
 2. **Role Policy**: Planner, Contract Reviewer, Generator, and Evaluator responsibilities.
-3. **Lifecycle Orchestrator**: `run.yaml`, `run-manifest.md`, state machine, gates, template-based subagent spawning, and validation.
+3. **Lifecycle Orchestrator**: `run.yaml`, `run-manifest.md`, state machine, gates, Codex project-scoped subagent spawning, and validation.
 
-## Template-Based Subagent Orchestration
+## Codex Project-Scoped Subagent Orchestration
 
-Harness core lifecycle roles MUST be executed by separate spawned subagents instantiated from fixed templates:
+Harness core lifecycle roles MUST be executed by named Codex project-scoped custom agents installed in `.codex/agents/`:
 
-- `template/.harness/subagents/planner.md`
-- `template/.harness/subagents/contract-reviewer.md`
-- `template/.harness/subagents/generator.md`
-- `template/.harness/subagents/evaluator.md`
+- `template/.codex/agents/harness-planner.toml`
+- `template/.codex/agents/harness-contract-reviewer.toml`
+- `template/.codex/agents/harness-generator.toml`
+- `template/.codex/agents/harness-evaluator.toml`
 
 ```txt
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-The top-level agent acts as coordinator/orchestrator only. It must call `.harness/scripts/dispatch-role.sh` for each lifecycle role. The dispatch script selects only the fixed role template, writes `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`, and never accepts a free-form role prompt. It does not spawn or execute a subagent; the runtime executor must consume the dispatch artifact and spawn the role-specific subagent.
+The coordinator/orchestrator may only invoke these exact Codex agent names:
+
+1. `harness_planner`
+2. `harness_contract_reviewer`
+3. `harness_generator`
+4. `harness_evaluator`
+
+The top-level agent acts as coordinator/orchestrator only. It must call `.harness/scripts/dispatch-role.sh` for each lifecycle role. The dispatch script writes routing metadata with the required Codex agent name and `.codex/agents/*.toml` file, and never accepts a free-form role prompt. It does not spawn or execute a subagent; the runtime executor must consume the dispatch artifact and invoke the named Codex project-scoped agent.
 
 The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, edit source/tests/config, repair implementation failures directly, or continue when subagent spawning is unavailable.
 
@@ -63,7 +70,7 @@ Required blocked message:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```
@@ -104,6 +111,8 @@ Preview trước khi ghi file:
 bash template/.harness/scripts/install.sh --target /path/to/your-repo --agents-mode merge --dry-run
 ```
 
+Dry-run chỉ in planned operations: tạo `.codex/`, merge hoặc copy `.codex/config.toml`, backup/overwrite planned cho same-name `.codex/agents/*.toml`, update `.harness/`, và gỡ deprecated `.harness/subagents/` nếu đang tồn tại.
+
 Không hỏi lại:
 
 ```bash
@@ -127,12 +136,18 @@ Nếu dùng `--yes` mà không truyền `--agents-mode`, khi target đã có `AG
 ```txt
 target-repo/
   AGENTS.md hoặc AGENTS.harness.md
+  .codex/
+    config.toml
+    agents/
+      harness-planner.toml
+      harness-contract-reviewer.toml
+      harness-generator.toml
+      harness-evaluator.toml
   .harness/
     README.md
     INSTALLATION.md
     HARNESS_SKILLS.md
     guides/
-    subagents/
     workflows/
     skills/
     templates/
@@ -151,8 +166,10 @@ Các vùng ownership-safe:
 - `.harness/runs/*` không bị reset khi update. Thư mục này chứa normal runs, Epic containers, và child runs.
 - Legacy `.harness/epics/*`, nếu có từ Harness cũ, không bị xóa khi update.
 - `.harness/backlog/HARNESS_BACKLOG.md` không bị đè nếu đã tồn tại.
+- `.codex/config.toml` được tạo nếu thiếu; nếu đã có, installer backup rồi merge các `[agents]` defaults còn thiếu.
+- `.codex/agents/*.toml` là canonical lifecycle subagent definitions; same-name files được backup trước khi overwrite.
 - `.harness/guides/*`, `.harness/templates/*`, `.harness/scripts/*`, `.harness/project-templates/*` là kernel/template layer có thể được update có chủ đích.
-- `.harness/subagents/*` và `.harness/workflows/*` là kernel layer cho template-based subagent orchestration.
+- `.harness/subagents/` là deprecated và bị gỡ khi update; `.harness/workflows/*` chỉ chứa lifecycle routing policy.
 - `.harness/HARNESS_SKILLS.md` và seeded `.harness/skills/*` là Harness workflow skill layer được cài vào target repo; installer không xóa skill file local khác.
 
 ## Sau khi cài
@@ -164,7 +181,7 @@ Read `.harness/HARNESS_SKILLS.md` and run the `project-sync` Harness workflow sk
 Then run `codebase-sync` if `.harness/codebase/*` is missing or stale.
 ```
 
-Không cần cài native-agent skills.
+Harness lifecycle agents đã được cài vào `.codex/agents/*.toml`. Coordinator phải invoke `harness_planner`, `harness_contract_reviewer`, `harness_generator`, và `harness_evaluator`; nếu Codex subagent runtime không sẵn sàng thì run phải block trước Planner.
 
 Nếu app có runtime UI hoặc API:
 
@@ -177,6 +194,13 @@ APP_URL=http://localhost:5173 bash .harness/scripts/smoke.sh
 ```txt
 template/
   AGENTS.md
+  .codex/
+    config.toml
+    agents/
+      harness-planner.toml
+      harness-contract-reviewer.toml
+      harness-generator.toml
+      harness-evaluator.toml
   .harness/
     README.md
     INSTALLATION.md
@@ -194,11 +218,6 @@ template/
       BACKLOG_POLICY.md
       LANGUAGE_POLICY.md
       LONG_TASK_POLICY.md
-    subagents/
-      planner.md
-      contract-reviewer.md
-      generator.md
-      evaluator.md
     workflows/
       default-lifecycle.md
       epic-lifecycle.md

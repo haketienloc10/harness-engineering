@@ -47,8 +47,8 @@ write_blocked_manifest() {
 
 ## Execution Mode
 
-- mode: template_subagents_required
-- dispatch_mode: template_based
+- mode: codex_project_subagents_required
+- dispatch_mode: codex_project_scoped
 - fallback_allowed: false
 - subagent_runtime_available: false
 - run_status: blocked
@@ -57,7 +57,10 @@ write_blocked_manifest() {
 
 ## Block Reason
 
-Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.
+Subagent runtime unavailable.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
+This run is blocked.
+No lifecycle role may be executed in this session.
 
 ## Required Role Instances
 
@@ -66,16 +69,20 @@ Subagent runtime is unavailable. Harness requires template-based subagent orches
 - generator: blocked
 - evaluator: blocked
 
-## Role Template Sources
+## Role Codex Agent Files
 
-- planner_template: .harness/subagents/planner.md
-- contract_reviewer_template: .harness/subagents/contract-reviewer.md
-- generator_template: .harness/subagents/generator.md
-- evaluator_template: .harness/subagents/evaluator.md
+- planner_agent_name: harness_planner
+- planner_agent_file: .codex/agents/harness-planner.toml
+- contract_reviewer_agent_name: harness_contract_reviewer
+- contract_reviewer_agent_file: .codex/agents/harness-contract-reviewer.toml
+- generator_agent_name: harness_generator
+- generator_agent_file: .codex/agents/harness-generator.toml
+- evaluator_agent_name: harness_evaluator
+- evaluator_agent_file: .codex/agents/harness-evaluator.toml
 
 ## Required Block Codes
 
-- required_subagent_template_unavailable: BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE
+- required_codex_agent_unavailable: BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE
 - required_subagent_unavailable: BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE
 - required_generator_unavailable: BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
 - coordinator_context_over_budget: BLOCKED_COORDINATOR_CONTEXT_OVER_BUDGET
@@ -233,13 +240,13 @@ role_key_to_executor() {
 
 block_for_executor_unavailable() {
   if command -v bash >/dev/null 2>&1 && [ -f "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" ]; then
-    bash "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" "$RUN_DIR" false "Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed." >/dev/null
+    bash "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" "$RUN_DIR" false "Subagent runtime unavailable. Harness lifecycle requires Codex project-scoped subagents from .codex/agents/. This run is blocked. No lifecycle role may be executed in this session." >/dev/null
     STATE="BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
     return
   fi
 
   set_yaml_field "state" "BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
-  set_yaml_field "blocked_reason" "\"Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.\""
+  set_yaml_field "blocked_reason" "\"Subagent runtime unavailable. Harness lifecycle requires Codex project-scoped subagents from .codex/agents/. This run is blocked. No lifecycle role may be executed in this session.\""
   write_blocked_manifest
   STATE="BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
 }
@@ -283,7 +290,7 @@ BLOCKED="false"
 if [ "$NEXT_ROLE" != "none" ]; then
   if [ "$STATE" = "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ]; then
     BLOCKED="true"
-  elif [ "$DISPATCH_MODE" != "template_based" ]; then
+  elif [ "$DISPATCH_MODE" != "codex_project_scoped" ]; then
     block_for_executor_unavailable
     BLOCKED="true"
   elif [ "$FALLBACK_ALLOWED" != "false" ]; then
@@ -304,7 +311,7 @@ printf "BLOCKED=%s\n" "$BLOCKED"
 if [ "$BLOCKED" = "true" ]; then
   cat <<'EOF'
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 EOF

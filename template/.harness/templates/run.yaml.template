@@ -10,7 +10,7 @@ status: initialized
 runtime:
   subagent_runtime_available: unknown
   subagent_runtime_name:
-  dispatch_mode: template_based
+  dispatch_mode: codex_project_scoped
   fallback_allowed: false
 
 coordinator:
@@ -25,7 +25,7 @@ coordinator:
     - implement_application_code
     - review_own_work
     - evaluate_implementation
-    - bypass_subagent_template
+    - bypass_codex_agent
     - write_lifecycle_role_artifact
 
 state: CREATED
@@ -43,22 +43,26 @@ role_executors:
   planner:
     executor_type:
     executor_id:
-    template_source: .harness/subagents/planner.md
+    codex_agent_name: harness_planner
+    codex_agent_file: .codex/agents/harness-planner.toml
     status: pending
   contract_reviewer:
     executor_type:
     executor_id:
-    template_source: .harness/subagents/contract-reviewer.md
+    codex_agent_name: harness_contract_reviewer
+    codex_agent_file: .codex/agents/harness-contract-reviewer.toml
     status: pending
   generator:
     executor_type:
     executor_id:
-    template_source: .harness/subagents/generator.md
+    codex_agent_name: harness_generator
+    codex_agent_file: .codex/agents/harness-generator.toml
     status: pending
   evaluator:
     executor_type:
     executor_id:
-    template_source: .harness/subagents/evaluator.md
+    codex_agent_name: harness_evaluator
+    codex_agent_file: .codex/agents/harness-evaluator.toml
     status: pending
 
 allowed_states:
@@ -87,7 +91,6 @@ scope:
   oversized_normal_run_status: ""
   protected_files:
     - .harness/guides/**
-    - .harness/subagents/**
     - .harness/workflows/**
     - .harness/templates/**
     - .harness/project-templates/**

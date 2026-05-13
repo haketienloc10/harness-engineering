@@ -4,7 +4,8 @@ run_id: <RUN-ID>
 role: coordinator
 executor_type:
 executor_id:
-template_source:
+codex_agent_name:
+codex_agent_file:
 status: draft
 based_on_evaluator_report: 05-evaluator-report.md
 ---

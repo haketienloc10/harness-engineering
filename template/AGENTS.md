@@ -1,14 +1,14 @@
 # AGENTS.md
 
-Repository này đã cài **Harness** để điều phối AI-assisted development bằng artifact, role policy, lifecycle state, và template-based subagent orchestration.
+Repository này đã cài **Harness** để điều phối AI-assisted development bằng artifact, role policy, lifecycle state, và Codex project-scoped subagent orchestration.
 
-File này là bootstrap instruction của target repository. Quy trình chi tiết nằm trong `.harness/guides/*`, `.harness/workflows/*`, `.harness/subagents/*`, và `.harness/scripts/*`. Chỉ load tài liệu liên quan đến task hiện tại.
+File này là bootstrap instruction của target repository. Quy trình chi tiết nằm trong `.harness/guides/*`, `.harness/workflows/*`, `.codex/agents/*.toml`, và `.harness/scripts/*`. Chỉ load tài liệu liên quan đến task hiện tại.
 
 ## Bootstrap Rules
 
 - Reply theo ngôn ngữ người dùng; giữ code, command, path, API name, logs, schema keys, package names, và identifiers ở dạng gốc.
 - Trước non-trivial work, đọc `.harness/HARNESS_SKILLS.md`, chọn skill/guide liên quan theo name, description, trigger conditions, và chỉ load phần cần thiết.
-- Không load toàn bộ `.harness/guides/*`, `.harness/subagents/*`, hoặc `.harness/codebase/*` theo mặc định.
+- Không load toàn bộ `.harness/guides/*`, `.codex/agents/*.toml`, hoặc `.harness/codebase/*` theo mặc định.
 - Dùng `run.yaml` làm authoritative lifecycle state.
 - Không sửa application code trước khi Contract Reviewer approve contract và `run.yaml` cho phép Generator.
 - Evaluator phải độc lập với Generator và phải có evidence thật.
@@ -16,7 +16,7 @@ File này là bootstrap instruction của target repository. Quy trình chi ti�
 
 ## Repository Boundary
 
-`.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, codebase cache, subagent templates, workflows, và backlog cho AI-assisted development.
+`.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, codebase cache, workflows, và backlog cho AI-assisted development. Lifecycle role definitions canonical nằm trong `.codex/agents/*.toml`.
 
 `.harness/` không phải application source tree.
 
@@ -91,24 +91,24 @@ Detailed classification and Epic rules live in:
 .harness/guides/LONG_TASK_POLICY.md
 ```
 
-## Template-Based Subagent Orchestration
+## Codex Project-Scoped Subagent Orchestration
 
-Harness core lifecycle roles MUST be executed by separate spawned subagents from fixed templates.
+Harness core lifecycle roles MUST be executed by separate spawned Codex project-scoped agents.
 
-Core lifecycle roles:
+Coordinator must invoke these exact named Codex agents:
 
-1. `planner`
-2. `contract_reviewer`
-3. `generator`
-4. `evaluator`
+1. `harness_planner`
+2. `harness_contract_reviewer`
+3. `harness_generator`
+4. `harness_evaluator`
 
-Required templates:
+Required agent files:
 
 ```txt
-.harness/subagents/planner.md
-.harness/subagents/contract-reviewer.md
-.harness/subagents/generator.md
-.harness/subagents/evaluator.md
+.codex/agents/harness-planner.toml
+.codex/agents/harness-contract-reviewer.toml
+.codex/agents/harness-generator.toml
+.codex/agents/harness-evaluator.toml
 ```
 
 The coordinator/orchestrator is orchestration-only.
@@ -127,7 +127,7 @@ The coordinator MUST NOT:
 
 There is no degraded single-session fallback.
 
-If required template subagents cannot be spawned, block the run before lifecycle role execution.
+If required Codex project-scoped subagents cannot be spawned, block the run before lifecycle role execution.
 
 ## Dispatch Semantics
 
@@ -145,7 +145,7 @@ bash .harness/scripts/dispatch-role.sh .harness/runs/<RUN_ID> <role>
 
 It does not spawn, execute, or emulate a subagent.
 
-The runtime executor MUST consume the dispatch artifact and spawn the role-specific subagent from the fixed template.
+The runtime executor MUST consume the dispatch artifact and spawn the role-specific subagent from the Codex agent file.
 
 If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume dispatch artifacts.
 
@@ -165,7 +165,7 @@ Required blocked message:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```
@@ -398,6 +398,6 @@ When instructions conflict, follow this order:
 5. `run.yaml` and current run artifacts.
 6. Relevant `.harness/guides/*`.
 7. Relevant `.harness/workflows/*`.
-8. Relevant `.harness/subagents/*`.
+8. Relevant `.codex/agents/*.toml`.
 9. Templates/scripts in `.harness/`.
 10. Agent defaults or assumptions.

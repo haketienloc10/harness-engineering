@@ -2,28 +2,28 @@
 
 ## Required Execution Model
 
-Harness core lifecycle roles must run as separate spawned subagents from fixed templates under `.harness/subagents/`.
+Harness core lifecycle roles must run as separate spawned subagents from Codex project-scoped agents in `.codex/agents/`.
 
 There is no degraded single-session fallback.
 
 The Coordinator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
 
-`dispatch-role.sh` creates a dispatch artifact only. It does not spawn or execute a subagent. A runtime executor must consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md` and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+`dispatch-role.sh` creates a dispatch artifact only. It does not spawn or execute a subagent. A runtime executor must consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md` and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
 
 ## Steps
 
 1. Coordinator starts run.
 2. Coordinator checks subagent runtime availability.
 3. If unavailable, set `runtime.subagent_runtime_available: false`, update `run-manifest.md`, and block run immediately.
-4. If available, set `runtime.subagent_runtime_available: true`, update `run-manifest.md`, call `dispatch-role.sh <run> planner`, and require the runtime executor to spawn Planner from `.harness/subagents/planner.md`.
+4. If available, set `runtime.subagent_runtime_available: true`, update `run-manifest.md`, call `dispatch-role.sh <run> planner`, and require the runtime executor to spawn Planner from `.codex/agents/harness-planner.toml`.
 5. Planner writes `01-planner-brief.md`.
 6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
-7. Call `dispatch-role.sh <run> contract_reviewer` and spawn Contract Reviewer from `.harness/subagents/contract-reviewer.md`.
+7. Call `dispatch-role.sh <run> contract_reviewer` and spawn Contract Reviewer from `.codex/agents/harness-contract-reviewer.toml`.
 8. Contract Reviewer writes `03-contract-review.md`.
 9. If contract rejected, return to Planner/contract revision.
-10. If approved, call `dispatch-role.sh <run> generator` and spawn Generator from `.harness/subagents/generator.md`.
+10. If approved, call `dispatch-role.sh <run> generator` and spawn Generator from `.codex/agents/harness-generator.toml`.
 11. Generator writes `04-implementation-report.md`.
-12. Call `dispatch-role.sh <run> evaluator` and spawn Evaluator from `.harness/subagents/evaluator.md`.
+12. Call `dispatch-role.sh <run> evaluator` and spawn Evaluator from `.codex/agents/harness-evaluator.toml`.
 13. Evaluator writes `05-evaluator-report.md`.
 14. If Evaluator returns a non-passing result, Coordinator reads only the evaluator decision summary, creates a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawns Generator, then spawns Evaluator again.
 15. Run completes only if Evaluator result is `pass`.
@@ -40,8 +40,8 @@ runtime:
 `run-manifest.md` starts with:
 
 ```md
-- mode: template_subagents_required
-- dispatch_mode: template_based
+- mode: codex_project_subagents_required
+- dispatch_mode: codex_project_scoped
 - fallback_allowed: false
 - subagent_runtime_available: unknown
 - run_status: created_pending_executor_check
@@ -74,15 +74,15 @@ If subagent runtime is unavailable, create or update `run-manifest.md`:
 
 ## Execution Mode
 
-- mode: template_subagents_required
-- dispatch_mode: template_based
+- mode: codex_project_subagents_required
+- dispatch_mode: codex_project_scoped
 - fallback_allowed: false
 - subagent_runtime_available: false
 - run_status: blocked
 
 ## Block Reason
 
-Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.
+Subagent runtime is unavailable. Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`. This run cannot proceed.
 
 ## Required Role Instances
 
@@ -96,7 +96,7 @@ The coordinator must report:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```

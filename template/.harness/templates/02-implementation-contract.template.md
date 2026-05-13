@@ -4,7 +4,8 @@ run_id: <RUN-ID>
 role: planner
 executor_type:
 executor_id:
-template_source: .harness/subagents/planner.md
+codex_agent_name: harness_planner
+codex_agent_file: .codex/agents/harness-planner.toml
 status: draft
 ---
 

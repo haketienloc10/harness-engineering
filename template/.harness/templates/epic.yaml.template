@@ -7,12 +7,12 @@ created_at: <CREATED-AT>
 updated_at: <UPDATED-AT>
 
 runtime:
-  mode: template_subagents_required
+  mode: codex_project_subagents_required
   agent_runtime: ""
   subagent_runtime_available: unknown
   fallback_allowed: false
   independence: independent
-  child_run_template_subagents_required: true
+  child_run_codex_project_subagents_required: true
 
 goal: ""
 non_goals: []

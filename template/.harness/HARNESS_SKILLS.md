@@ -99,11 +99,11 @@ Outputs:
 ## lifecycle-orchestration
 
 Description:
-Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, template-based subagent spawning, independent review/evaluation, and manifest audit.
+Use the Lifecycle Orchestration and Subagent Execution guides before non-trivial implementation to enforce run states, gates, Codex project-scoped subagent spawning, independent review/evaluation, and manifest audit.
 
 For non-trivial implementation work, `lifecycle-orchestration` is mandatory.
 
-Harness role transitions are executed through spawned subagents from fixed templates.
+Harness role transitions are executed through spawned subagents from Codex project-scoped agents.
 
 The Orchestrator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
 

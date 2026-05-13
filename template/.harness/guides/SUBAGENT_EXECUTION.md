@@ -1,8 +1,8 @@
 # Subagent Execution
 
-Harness core lifecycle execution requires template-based spawned subagents.
+Harness core lifecycle execution requires Codex project-scoped subagents.
 
-Role transitions are performed through `.harness/scripts/dispatch-role.sh`, then by spawning independent subagents from fixed templates.
+Role transitions are performed through `.harness/scripts/dispatch-role.sh`, then by spawning independent subagents from Codex project-scoped agents.
 
 Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
@@ -12,7 +12,7 @@ Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 .harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md
 ```
 
-It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from `.codex/agents/<required-agent-file>.toml`.
 
 ## Runtime Capability Rule
 
@@ -20,7 +20,7 @@ Before executing lifecycle role work, determine whether the current runtime supp
 
 New runs start with `runtime.subagent_runtime_available: unknown` in `run.yaml` and `subagent_runtime_available: unknown` in `run-manifest.md`.
 
-If supported, the coordinator MUST mark runtime availability as true before Planner dispatch, then call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding template under `.harness/subagents/`.
+If supported, the coordinator MUST mark runtime availability as true before Planner dispatch, then call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding named Codex agent in `.codex/agents/`.
 
 If unsupported, the coordinator MUST mark runtime availability as false and block the run before Planner execution.
 
@@ -35,10 +35,10 @@ bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Sub
 
 If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`.
 
-If a required role template is missing, invalid, or unavailable, the coordinator MUST stop with:
+If a required Codex agent file is missing, invalid, or unavailable, the coordinator MUST stop with:
 
 ```text
-BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE
+BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE
 ```
 
 If a required subagent cannot be spawned, the coordinator MUST stop with:
@@ -57,24 +57,24 @@ Required blocked message:
 
 ```text
 Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
+Harness lifecycle requires Codex project-scoped subagents from `.codex/agents/`.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```
 
-## Required Templates
+## Required Codex Agents
 
-- `.harness/subagents/planner.md`
-- `.harness/subagents/contract-reviewer.md`
-- `.harness/subagents/generator.md`
-- `.harness/subagents/evaluator.md`
+- `harness_planner` -> `.codex/agents/harness-planner.toml`
+- `harness_contract_reviewer` -> `.codex/agents/harness-contract-reviewer.toml`
+- `harness_generator` -> `.codex/agents/harness-generator.toml`
+- `harness_evaluator` -> `.codex/agents/harness-evaluator.toml`
 
 ## Hard Rules
 
 1. The Orchestrator controls lifecycle routing and state transitions only.
 2. The Orchestrator MUST NOT perform required role work directly.
 3. The Orchestrator MUST NOT create `HANDOFF.md` for normal role transitions.
-4. The Orchestrator MUST spawn the next role-specific subagent from its template.
+4. The Orchestrator MUST invoke the next named Codex project-scoped subagent.
 5. `run.yaml` is the authoritative lifecycle state source.
 6. Contract Reviewer must not implement code.
 7. Generator must not evaluate its own output.
@@ -84,11 +84,11 @@ No lifecycle role may be executed in this session.
 11. Single-agent role execution is invalid.
 12. If subagent spawning is unavailable, set the run state to `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` and update `run-manifest.md`.
 13. The Orchestrator MUST NOT create free-form prompts for core lifecycle roles.
-14. The Orchestrator MUST NOT modify template responsibilities, forbidden actions, required artifacts, evidence requirements, or pass/fail criteria.
+14. The Orchestrator MUST NOT modify Codex agent responsibilities, forbidden actions, required artifacts, evidence requirements, or pass/fail criteria.
 15. The Orchestrator MUST NOT edit application source, tests, production configuration, generated production artifacts, or project implementation files.
 16. The Orchestrator MUST NOT debug or repair implementation failures directly.
 17. The Orchestrator MUST NOT read implementation files for the purpose of direct repair after a role returns.
-18. The Orchestrator MUST route failed or rejected work back to the responsible template-based role.
+18. The Orchestrator MUST route failed or rejected work back to the responsible Codex project-scoped role.
 19. The Orchestrator MUST use `.harness/scripts/dispatch-role.sh`; free-form role prompts are forbidden.
 
 ## Orchestrator Duties
@@ -166,9 +166,9 @@ When Evaluator returns `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_insufficient_ev
 
 1. Read the evaluator decision summary only.
 2. Create a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`.
-3. Spawn Generator from `.harness/subagents/generator.md`.
+3. Invoke `harness_generator`.
 4. Wait for an updated `04-implementation-report.md`.
-5. Spawn Evaluator from `.harness/subagents/evaluator.md` again.
+5. Invoke `harness_evaluator` again.
 
 The Orchestrator must not edit source, inspect implementation files for direct repair, add tests directly, run a fix loop, or write role artifacts.
 
@@ -187,7 +187,7 @@ Allowed artifact input chain:
 
 Do not pass full role transcripts, unrelated previous run artifacts, or coordinator memory as role inputs unless an approved artifact explicitly authorizes that input.
 
-## Role Template Sources
+## Role Codex Agent Files
 
 Record subagent metadata in `run.yaml`, `run-manifest.md`, and role artifacts.
 
@@ -205,4 +205,4 @@ Do not ask the user to manually continue the next role if an executor can be sta
 
 Do not use forbidden handoff files as phase boundaries.
 
-Lifecycle role boundaries are enforced by spawned subagents from fixed templates and artifact ownership.
+Lifecycle role boundaries are enforced by spawned subagents from Codex project-scoped agents and artifact ownership.

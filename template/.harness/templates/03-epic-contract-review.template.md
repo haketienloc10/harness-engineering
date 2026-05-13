@@ -4,12 +4,13 @@
 
 ```yaml
 role: ContractReviewer
-runtime_mode: template_subagents_required
+runtime_mode: codex_project_subagents_required
 executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/contract-reviewer.md
+role_agent_name: harness_contract_reviewer
+role_agent_file: .codex/agents/harness-contract-reviewer.toml
 independence: independent
 epic_planner_executor_id: <required>
 ```
@@ -21,8 +22,8 @@ epic_planner_executor_id: <required>
 ## Independence Check
 
 - Reviewer executor is separate from Epic planner/coordinator executor: yes | no
-- Reviewer was spawned from `.harness/subagents/contract-reviewer.md`: yes | no
-- Decision if not independent or not template-based: REJECTED
+- Reviewer was spawned from `.codex/agents/harness-contract-reviewer.toml`: yes | no
+- Decision if not independent or not Codex-agent-based: REJECTED
 
 ## Decision
 

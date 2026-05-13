@@ -6,12 +6,13 @@ This artifact is the Epic breakdown. Each row should become a bounded child run 
 
 ```yaml
 role: Planner
-runtime_mode: template_subagents_required
+runtime_mode: codex_project_subagents_required
 executor_type: subagent
 executor_id: <required>
 agent_runtime: <required>
 agent_session_id: <required>
-role_template: .harness/subagents/planner.md
+role_agent_name: harness_planner
+role_agent_file: .codex/agents/harness-planner.toml
 independence: independent
 ```
 

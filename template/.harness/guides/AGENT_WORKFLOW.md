@@ -2,16 +2,16 @@
 
 ## Luồng mặc định
 
-Default workflow là strict template-based subagent orchestration:
+Default workflow là strict Codex project-scoped subagent orchestration:
 
 ```txt
 User Request
   -> Classify Request
   -> Epic or Normal Run
-  -> Planner subagent from `.harness/subagents/planner.md`
-  -> Contract Reviewer subagent from `.harness/subagents/contract-reviewer.md`
-  -> Generator subagent from `.harness/subagents/generator.md`
-  -> Evaluator subagent from `.harness/subagents/evaluator.md`
+  -> Planner subagent from `.codex/agents/harness-planner.toml`
+  -> Contract Reviewer subagent from `.codex/agents/harness-contract-reviewer.toml`
+  -> Generator subagent from `.codex/agents/harness-generator.toml`
+  -> Evaluator subagent from `.codex/agents/harness-evaluator.toml`
   -> Final Summary
 ```
 
@@ -19,7 +19,7 @@ Không có degraded single-session fallback.
 
 If subagent spawning is unavailable, block the run before Planner execution.
 
-When a phase requires another role, call `.harness/scripts/dispatch-role.sh` and spawn the corresponding role subagent from its fixed template.
+When a phase requires another role, call `.harness/scripts/dispatch-role.sh` and spawn the corresponding role subagent from its Codex agent file.
 
 Coordinator chỉ được điều phối. Coordinator không được implement, debug, repair, review, verify, approve, edit source/tests/config, hoặc viết lifecycle role artifact thay subagent.
 
@@ -87,7 +87,7 @@ Decision:
 - `approved`: Generator may start.
 - `rejected_requires_revision`: Planner must revise contract before implementation.
 
-Contract Reviewer must be a spawned subagent from `.harness/subagents/contract-reviewer.md`.
+Contract Reviewer must be a spawned subagent from `.codex/agents/harness-contract-reviewer.toml`.
 Contract Reviewer Agent phải dừng sau `03-contract-review.md`.
 
 ## Generator Phase
@@ -118,9 +118,9 @@ Khi `05-evaluator-report.md` trả `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_ins
 
 1. Coordinator chỉ đọc evaluator decision summary.
 2. Coordinator tạo bounded Generator rework packet từ `.harness/templates/generator-rework-packet.template.md`.
-3. Coordinator spawn Generator từ `.harness/subagents/generator.md`.
+3. Coordinator spawn Generator từ `.codex/agents/harness-generator.toml`.
 4. Generator sửa implementation và cập nhật `04-implementation-report.md`.
-5. Coordinator spawn Evaluator từ `.harness/subagents/evaluator.md` lại.
+5. Coordinator spawn Evaluator từ `.codex/agents/harness-evaluator.toml` lại.
 
 Coordinator không được đọc source để tự repair, không được edit source/tests/config, không được thêm test trực tiếp, không được chạy fix loop, và không được viết role artifact thay Generator.
 
@@ -156,7 +156,7 @@ Outputs:
 - final pass/fail decision;
 - `06-final-summary.md` after verified completion.
 
-Evaluator must be a spawned subagent from `.harness/subagents/evaluator.md` and must be separate from Generator. Evaluation phải dựa trên visible artifacts, diff, command output, runtime evidence, browser/API evidence, logs, và acceptance criteria.
+Evaluator must be a spawned subagent from `.codex/agents/harness-evaluator.toml` and must be separate from Generator. Evaluation phải dựa trên visible artifacts, diff, command output, runtime evidence, browser/API evidence, logs, và acceptance criteria.
 Evaluator Agent phải dừng sau `05-evaluator-report.md` và `06-final-summary.md` nếu final summary được giao cho Evaluator.
 
 ## Next Role Note

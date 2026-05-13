@@ -4,7 +4,8 @@ run_id: <RUN-ID>
 role: contract_reviewer
 executor_type:
 executor_id:
-template_source: .harness/subagents/contract-reviewer.md
+codex_agent_name: harness_contract_reviewer
+codex_agent_file: .codex/agents/harness-contract-reviewer.toml
 status: draft
 ---
 
@@ -13,8 +14,8 @@ status: draft
 ## Independence Check
 
 - Reviewer executor is separate from planner executor: yes | no
-- Reviewer was spawned from `.harness/subagents/contract-reviewer.md`: yes | no
-- Decision if not independent or not template-based: rejected_requires_revision
+- Reviewer was spawned from `.codex/agents/harness-contract-reviewer.toml`: yes | no
+- Decision if not independent or not Codex-agent-based: rejected_requires_revision
 
 ## Decision
 

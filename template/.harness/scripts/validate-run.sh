@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUNS_DIR="$ROOT_DIR/.harness/runs"
+CODEX_AGENTS_DIR="$ROOT_DIR/.codex/agents"
 
 usage() {
   cat <<'EOF'
@@ -80,20 +81,24 @@ role_executor_field_get() {
 
 require_role_spawned() {
   local role="$1"
-  local template_source="$2"
+  local codex_agent_name="$2"
+  local codex_agent_file="$3"
   local executor_type
   local executor_id
-  local actual_template_source
+  local actual_codex_agent_name
+  local actual_codex_agent_file
   local status
 
   executor_type="$(role_executor_field_get "$role" executor_type)"
   executor_id="$(role_executor_field_get "$role" executor_id)"
-  actual_template_source="$(role_executor_field_get "$role" template_source)"
+  actual_codex_agent_name="$(role_executor_field_get "$role" codex_agent_name)"
+  actual_codex_agent_file="$(role_executor_field_get "$role" codex_agent_file)"
   status="$(role_executor_field_get "$role" status)"
 
   [ "$executor_type" = "subagent" ] || die "$role must use executor_type: subagent"
   [ -n "$executor_id" ] || die "$role requires a spawned subagent executor_id"
-  [ "$actual_template_source" = "$template_source" ] || die "$role must use template_source: $template_source"
+  [ "$actual_codex_agent_name" = "$codex_agent_name" ] || die "$role must use codex_agent_name: $codex_agent_name"
+  [ "$actual_codex_agent_file" = "$codex_agent_file" ] || die "$role must use codex_agent_file: $codex_agent_file"
   [ "$status" = "completed" ] || die "$role must set status: completed"
   [ "$executor_id" != "coordinator" ] || die "Coordinator cannot be executor_id for $role"
 }
@@ -172,26 +177,31 @@ require_artifact_metadata_field() {
 require_role_artifact_metadata() {
   local file="$1"
   local role="$2"
-  local template_source="$3"
+  local codex_agent_name="$3"
+  local codex_agent_file="$4"
   local executor_type
   local executor_id
-  local actual_template_source
+  local actual_codex_agent_name
+  local actual_codex_agent_file
 
   require_artifact_metadata_field "$file" role
   require_artifact_metadata_field "$file" executor_type
   require_artifact_metadata_field "$file" executor_id
-  require_artifact_metadata_field "$file" template_source
+  require_artifact_metadata_field "$file" codex_agent_name
+  require_artifact_metadata_field "$file" codex_agent_file
   require_artifact_metadata_field "$file" status
 
   executor_type="$(artifact_metadata_field_get "$file" executor_type)"
   executor_id="$(artifact_metadata_field_get "$file" executor_id)"
-  actual_template_source="$(artifact_metadata_field_get "$file" template_source)"
+  actual_codex_agent_name="$(artifact_metadata_field_get "$file" codex_agent_name)"
+  actual_codex_agent_file="$(artifact_metadata_field_get "$file" codex_agent_file)"
 
   [ "$(artifact_metadata_field_get "$file" role)" = "$role" ] || die "$file must set role: $role"
   [ "$executor_type" = "subagent" ] || die "$file must set executor_type: subagent"
   [ -n "$executor_id" ] || die "$file requires executor_id"
   [ "$executor_id" != "coordinator" ] || die "$file cannot use coordinator as lifecycle role executor_id"
-  [ "$actual_template_source" = "$template_source" ] || die "$file must set template_source: $template_source"
+  [ "$actual_codex_agent_name" = "$codex_agent_name" ] || die "$file must set codex_agent_name: $codex_agent_name"
+  [ "$actual_codex_agent_file" = "$codex_agent_file" ] || die "$file must set codex_agent_file: $codex_agent_file"
   [ "$(artifact_metadata_field_get "$file" status)" = "completed" ] || die "$file must set status: completed"
 }
 
@@ -203,15 +213,19 @@ require_contract_review_approved() {
 
 require_manifest() {
   require_file "run-manifest.md"
-  grep -qF -- "- mode: template_subagents_required" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set mode: template_subagents_required"
-  grep -qF -- "- dispatch_mode: template_based" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set dispatch_mode: template_based"
+  grep -qF -- "- mode: codex_project_subagents_required" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set mode: codex_project_subagents_required"
+  grep -qF -- "- dispatch_mode: codex_project_scoped" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set dispatch_mode: codex_project_scoped"
   grep -qF -- "- fallback_allowed: false" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set fallback_allowed: false"
   grep -qF -- "- coordinator_source_edits_allowed: true" "$RUN_DIR/run-manifest.md" && die "Coordinator source edits are forbidden"
   grep -qF -- "- coordinator_role_work_allowed: true" "$RUN_DIR/run-manifest.md" && die "Coordinator role work is forbidden"
-  grep -qF "planner_template: .harness/subagents/planner.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing planner template source"
-  grep -qF "contract_reviewer_template: .harness/subagents/contract-reviewer.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer template source"
-  grep -qF "generator_template: .harness/subagents/generator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator template source"
-  grep -qF "evaluator_template: .harness/subagents/evaluator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing evaluator template source"
+  grep -qF "planner_agent_name: harness_planner" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing planner Codex agent name"
+  grep -qF "planner_agent_file: .codex/agents/harness-planner.toml" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing planner Codex agent file"
+  grep -qF "contract_reviewer_agent_name: harness_contract_reviewer" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer Codex agent name"
+  grep -qF "contract_reviewer_agent_file: .codex/agents/harness-contract-reviewer.toml" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer Codex agent file"
+  grep -qF "generator_agent_name: harness_generator" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator Codex agent name"
+  grep -qF "generator_agent_file: .codex/agents/harness-generator.toml" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator Codex agent file"
+  grep -qF "evaluator_agent_name: harness_evaluator" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing evaluator Codex agent name"
+  grep -qF "evaluator_agent_file: .codex/agents/harness-evaluator.toml" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing evaluator Codex agent file"
 
   if [ "$STATE" != "CREATED" ] && [ "$STATE" != "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ] && [ "$STATE" != "CANCELLED" ]; then
     case "$(manifest_field_get subagent_runtime_available)" in
@@ -231,7 +245,7 @@ require_runtime_schema() {
   local runtime_available
   local manifest_runtime_available
 
-  [ "$(runtime_get dispatch_mode)" = "template_based" ] || die "runtime.dispatch_mode must be template_based"
+  [ "$(runtime_get dispatch_mode)" = "codex_project_scoped" ] || die "runtime.dispatch_mode must be codex_project_scoped"
   [ "$(runtime_get fallback_allowed)" = "false" ] || die "runtime.fallback_allowed must be false"
 
   runtime_available="$(runtime_get subagent_runtime_available)"
@@ -255,10 +269,18 @@ require_runtime_schema() {
 }
 
 require_role_executor_templates() {
-  [ "$(role_executor_field_get planner template_source)" = ".harness/subagents/planner.md" ] || die "planner template_source mismatch"
-  [ "$(role_executor_field_get contract_reviewer template_source)" = ".harness/subagents/contract-reviewer.md" ] || die "contract_reviewer template_source mismatch"
-  [ "$(role_executor_field_get generator template_source)" = ".harness/subagents/generator.md" ] || die "generator template_source mismatch"
-  [ "$(role_executor_field_get evaluator template_source)" = ".harness/subagents/evaluator.md" ] || die "evaluator template_source mismatch"
+  [ -f "$CODEX_AGENTS_DIR/harness-planner.toml" ] || die "missing .codex/agents/harness-planner.toml"
+  [ -f "$CODEX_AGENTS_DIR/harness-contract-reviewer.toml" ] || die "missing .codex/agents/harness-contract-reviewer.toml"
+  [ -f "$CODEX_AGENTS_DIR/harness-generator.toml" ] || die "missing .codex/agents/harness-generator.toml"
+  [ -f "$CODEX_AGENTS_DIR/harness-evaluator.toml" ] || die "missing .codex/agents/harness-evaluator.toml"
+  [ "$(role_executor_field_get planner codex_agent_name)" = "harness_planner" ] || die "planner codex_agent_name mismatch"
+  [ "$(role_executor_field_get planner codex_agent_file)" = ".codex/agents/harness-planner.toml" ] || die "planner codex_agent_file mismatch"
+  [ "$(role_executor_field_get contract_reviewer codex_agent_name)" = "harness_contract_reviewer" ] || die "contract_reviewer codex_agent_name mismatch"
+  [ "$(role_executor_field_get contract_reviewer codex_agent_file)" = ".codex/agents/harness-contract-reviewer.toml" ] || die "contract_reviewer codex_agent_file mismatch"
+  [ "$(role_executor_field_get generator codex_agent_name)" = "harness_generator" ] || die "generator codex_agent_name mismatch"
+  [ "$(role_executor_field_get generator codex_agent_file)" = ".codex/agents/harness-generator.toml" ] || die "generator codex_agent_file mismatch"
+  [ "$(role_executor_field_get evaluator codex_agent_name)" = "harness_evaluator" ] || die "evaluator codex_agent_name mismatch"
+  [ "$(role_executor_field_get evaluator codex_agent_file)" = ".codex/agents/harness-evaluator.toml" ] || die "evaluator codex_agent_file mismatch"
 }
 
 require_no_legacy_artifacts_or_text() {
@@ -322,10 +344,11 @@ require_completed_artifact() {
 require_completed_role_artifact() {
   local file="$1"
   local role="$2"
-  local template_source="$3"
+  local codex_agent_name="$3"
+  local codex_agent_file="$4"
 
   require_completed_artifact "$file"
-  require_role_artifact_metadata "$file" "$role" "$template_source"
+  require_role_artifact_metadata "$file" "$role" "$codex_agent_name" "$codex_agent_file"
 
   case "$file" in
     03-contract-review.md)
@@ -353,50 +376,50 @@ require_artifacts_for_state() {
       ;;
     CONTRACTING)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_role_spawned "planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
       ;;
     CONTRACT_REVIEW)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "02-implementation-contract.md" "planner" ".harness/subagents/planner.md"
-      require_role_spawned "planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "02-implementation-contract.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
       ;;
     APPROVED_FOR_IMPLEMENTATION|GENERATING)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "02-implementation-contract.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" ".harness/subagents/contract-reviewer.md"
-      require_role_spawned "planner" ".harness/subagents/planner.md"
-      require_role_spawned "contract_reviewer" ".harness/subagents/contract-reviewer.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "02-implementation-contract.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
+      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_role_spawned "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
       ;;
     EVALUATING)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "02-implementation-contract.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" ".harness/subagents/contract-reviewer.md"
-      require_completed_role_artifact "04-implementation-report.md" "generator" ".harness/subagents/generator.md"
-      require_role_spawned "planner" ".harness/subagents/planner.md"
-      require_role_spawned "contract_reviewer" ".harness/subagents/contract-reviewer.md"
-      require_role_spawned "generator" ".harness/subagents/generator.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "02-implementation-contract.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
+      require_completed_role_artifact "04-implementation-report.md" "generator" "harness_generator" ".codex/agents/harness-generator.toml"
+      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_role_spawned "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
+      require_role_spawned "generator" "harness_generator" ".codex/agents/harness-generator.toml"
       ;;
     COMPLETED)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "02-implementation-contract.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" ".harness/subagents/contract-reviewer.md"
-      require_completed_role_artifact "04-implementation-report.md" "generator" ".harness/subagents/generator.md"
-      require_completed_role_artifact "05-evaluator-report.md" "evaluator" ".harness/subagents/evaluator.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "02-implementation-contract.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "03-contract-review.md" "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
+      require_completed_role_artifact "04-implementation-report.md" "generator" "harness_generator" ".codex/agents/harness-generator.toml"
+      require_completed_role_artifact "05-evaluator-report.md" "evaluator" "harness_evaluator" ".codex/agents/harness-evaluator.toml"
       require_completed_artifact "06-final-summary.md"
-      require_role_spawned "planner" ".harness/subagents/planner.md"
-      require_role_spawned "contract_reviewer" ".harness/subagents/contract-reviewer.md"
-      require_role_spawned "generator" ".harness/subagents/generator.md"
-      require_role_spawned "evaluator" ".harness/subagents/evaluator.md"
+      require_role_spawned "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_role_spawned "contract_reviewer" "harness_contract_reviewer" ".codex/agents/harness-contract-reviewer.toml"
+      require_role_spawned "generator" "harness_generator" ".codex/agents/harness-generator.toml"
+      require_role_spawned "evaluator" "harness_evaluator" ".codex/agents/harness-evaluator.toml"
       ;;
     REJECTED_FOR_REPLAN)
       require_file "00-input.md"
-      require_completed_role_artifact "01-planner-brief.md" "planner" ".harness/subagents/planner.md"
-      require_completed_role_artifact "02-implementation-contract.md" "planner" ".harness/subagents/planner.md"
+      require_completed_role_artifact "01-planner-brief.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
+      require_completed_role_artifact "02-implementation-contract.md" "planner" "harness_planner" ".codex/agents/harness-planner.toml"
       ;;
     BLOCKED_FOR_EXECUTOR_UNAVAILABLE)
       [ -n "$(yaml_get blocked_reason)" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires blocked_reason"
@@ -404,7 +427,7 @@ require_artifacts_for_state() {
       grep -qF -- "- subagent_runtime_available: false" "$RUN_DIR/run-manifest.md" || die "Blocked run requires subagent_runtime_available: false"
       ;;
     FAILED_VERIFICATION)
-      require_completed_role_artifact "05-evaluator-report.md" "evaluator" ".harness/subagents/evaluator.md"
+      require_completed_role_artifact "05-evaluator-report.md" "evaluator" "harness_evaluator" ".codex/agents/harness-evaluator.toml"
       ;;
     CANCELLED)
       require_file "00-input.md"

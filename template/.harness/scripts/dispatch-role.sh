@@ -12,7 +12,7 @@ Usage:
   bash .harness/scripts/dispatch-role.sh RUN-YYYYMMDD-NNN-task generator
   bash .harness/scripts/dispatch-role.sh --reset .harness/runs/RUN-... evaluator
 
-Create the template-based dispatch artifact for the next lifecycle role.
+Create routing metadata for the next Harness lifecycle role.
 The coordinator must not pass a free-form role prompt to this script.
 This script only writes .harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md.
 It does not spawn or execute the role subagent.
@@ -40,12 +40,22 @@ fi
 RUN_INPUT="$1"
 ROLE="$2"
 
-role_template() {
+role_agent_file() {
   case "$1" in
-    planner) printf ".harness/subagents/planner.md" ;;
-    contract_reviewer) printf ".harness/subagents/contract-reviewer.md" ;;
-    generator) printf ".harness/subagents/generator.md" ;;
-    evaluator) printf ".harness/subagents/evaluator.md" ;;
+    planner) printf ".codex/agents/harness-planner.toml" ;;
+    contract_reviewer) printf ".codex/agents/harness-contract-reviewer.toml" ;;
+    generator) printf ".codex/agents/harness-generator.toml" ;;
+    evaluator) printf ".codex/agents/harness-evaluator.toml" ;;
+    *) return 1 ;;
+  esac
+}
+
+role_agent_name() {
+  case "$1" in
+    planner) printf "harness_planner" ;;
+    contract_reviewer) printf "harness_contract_reviewer" ;;
+    generator) printf "harness_generator" ;;
+    evaluator) printf "harness_evaluator" ;;
     *) return 1 ;;
   esac
 }
@@ -150,9 +160,9 @@ resolve_run_dir() {
   cd "$found" && pwd -P
 }
 
-TEMPLATE_SOURCE="$(role_template "$ROLE")" || die "Invalid role: $ROLE"
-TEMPLATE_PATH="$ROOT_DIR/$TEMPLATE_SOURCE"
-[ -f "$TEMPLATE_PATH" ] || die "Role template not found: $TEMPLATE_SOURCE"
+CODEX_AGENT_FILE="$(role_agent_file "$ROLE")" || die "Invalid role: $ROLE"
+CODEX_AGENT_NAME="$(role_agent_name "$ROLE")" || die "Invalid role: $ROLE"
+CODEX_AGENT_PATH="$ROOT_DIR/$CODEX_AGENT_FILE"
 
 RUN_DIR="$(resolve_run_dir)"
 RUN_YAML="$RUN_DIR/run.yaml"
@@ -169,15 +179,66 @@ DISPATCH_MODE="$(runtime_get dispatch_mode)"
 FALLBACK_ALLOWED="$(runtime_get fallback_allowed)"
 SUBAGENT_RUNTIME_AVAILABLE="$(runtime_get subagent_runtime_available)"
 
-[ "$DISPATCH_MODE" = "template_based" ] || die "runtime.dispatch_mode must be template_based"
+[ "$DISPATCH_MODE" = "codex_project_scoped" ] || die "runtime.dispatch_mode must be codex_project_scoped"
 [ "$FALLBACK_ALLOWED" = "false" ] || die "runtime.fallback_allowed must be false"
-[ "$SUBAGENT_RUNTIME_AVAILABLE" = "true" ] || die "Subagent runtime unavailable. Harness lifecycle requires template-based subagent orchestration."
+if [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
+  mkdir -p "$RUN_DIR/dispatch"
+  DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
+  CREATED_AT="$(date -Iseconds)"
+  cat > "$DISPATCH_FILE" <<EOF
+---
+run_id: $RUN_ID
+role: $ROLE
+executor_type: subagent
+required_codex_agent_name: $CODEX_AGENT_NAME
+codex_agent_file: $CODEX_AGENT_FILE
+status: blocked
+blocked_reason: subagent_runtime_unavailable
+created_at: $CREATED_AT
+---
+
+# Role Dispatch Blocked: $ROLE
+
+Subagent runtime unavailable.
+Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
+This run is blocked.
+No lifecycle role may be executed in this session.
+EOF
+  die "Subagent runtime unavailable.
+Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
+This run is blocked.
+No lifecycle role may be executed in this session."
+fi
+
+if [ ! -f "$CODEX_AGENT_PATH" ]; then
+  mkdir -p "$RUN_DIR/dispatch"
+  DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
+  CREATED_AT="$(date -Iseconds)"
+  cat > "$DISPATCH_FILE" <<EOF
+---
+run_id: $RUN_ID
+role: $ROLE
+executor_type: subagent
+required_codex_agent_name: $CODEX_AGENT_NAME
+codex_agent_file: $CODEX_AGENT_FILE
+status: blocked
+blocked_reason: required_codex_agent_file_missing
+created_at: $CREATED_AT
+---
+
+# Role Dispatch Blocked: $ROLE
+
+Required Codex agent file is missing: \`$CODEX_AGENT_FILE\`.
+EOF
+  die "Required Codex agent file not found: $CODEX_AGENT_FILE"
+fi
 
 if [ -n "$NEXT_REQUIRED_ROLE" ] && [ "$NEXT_REQUIRED_ROLE" != "$ROLE" ]; then
   die "Role $ROLE does not match next_required_role: $NEXT_REQUIRED_ROLE"
 fi
 
-[ "$(role_field_get "$ROLE" template_source)" = "$TEMPLATE_SOURCE" ] || die "role_executors.$ROLE.template_source must be $TEMPLATE_SOURCE"
+[ "$(role_field_get "$ROLE" codex_agent_name)" = "$CODEX_AGENT_NAME" ] || die "role_executors.$ROLE.codex_agent_name must be $CODEX_AGENT_NAME"
+[ "$(role_field_get "$ROLE" codex_agent_file)" = "$CODEX_AGENT_FILE" ] || die "role_executors.$ROLE.codex_agent_file must be $CODEX_AGENT_FILE"
 
 OUTPUT_ARTIFACT="$(role_output_for_state "$ROLE" "$STATE")" || die "Role $ROLE is not dispatchable from state $STATE"
 OUTPUT_PATH="$RUN_DIR/$OUTPUT_ARTIFACT"
@@ -206,7 +267,8 @@ cat > "$DISPATCH_FILE" <<EOF
 run_id: $RUN_ID
 role: $ROLE
 executor_type: subagent
-template_source: $TEMPLATE_SOURCE
+codex_agent_file: $CODEX_AGENT_FILE
+required_codex_agent_name: $CODEX_AGENT_NAME
 required_output_artifact: $OUTPUT_ARTIFACT
 status: dispatched
 created_at: $CREATED_AT
@@ -227,15 +289,15 @@ $(for input in $(required_inputs "$ROLE"); do printf -- "- %s\n" "$input"; done)
 This file is an instruction artifact for the runtime executor.
 \`dispatch-role.sh\` created this file only; it did not spawn, execute, or emulate the role subagent.
 
-The runtime executor MUST consume this dispatch artifact and spawn the role-specific subagent from the template source below.
+The runtime executor MUST consume this dispatch artifact and spawn the role-specific subagent from the Codex agent file below.
 
 ## Runtime Contract
 
 - executor_type: subagent
-- dispatch_mode: template_based
+- dispatch_mode: codex_project_scoped
 - free_form_role_prompt_allowed: false
 - fallback_allowed: false
-- runtime_must_spawn_template_subagent: true
+- runtime_must_spawn_codex_project_agent: true
 
 ## Required Final Status Line
 
@@ -251,12 +313,12 @@ $(case "$ROLE" in
     ;;
 esac)
 
-## Template Source
+## Codex Agent File
 
 The runtime executor MUST instantiate the subagent from:
 
 \`\`\`txt
-$TEMPLATE_SOURCE
+$CODEX_AGENT_FILE
 \`\`\`
 
 ## Forbidden Actions
@@ -264,7 +326,7 @@ $TEMPLATE_SOURCE
 - coordinator_implements_role_work
 - coordinator_writes_role_artifact
 - free_form_role_prompt
-- bypass_subagent_template
+- bypass_codex_agent
 - single_session_execution
 - fallback_execution
 - handoff_file_transition

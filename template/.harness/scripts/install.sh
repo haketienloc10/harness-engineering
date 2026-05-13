@@ -34,13 +34,15 @@ Ownership-safe rules:
   - Do not copy run history from the template.
   - Do not delete legacy .harness/epics/ if it already exists.
   - Do not overwrite .harness/backlog/HARNESS_BACKLOG.md if it already exists.
+  - Install .codex/config.toml safely: create if missing, merge missing [agents] defaults if present.
+  - Install .codex/agents/*.toml as Harness-owned Codex custom agents; same-name files are backed up before overwrite.
   - Kernel folders may be replaced on update:
     .harness/guides/
-    .harness/subagents/
     .harness/workflows/
     .harness/templates/
     .harness/project-templates/
     .harness/scripts/
+  - Deprecated .harness/subagents/ is removed during update; canonical role definitions live in .codex/agents/.
 EOF
 }
 
@@ -124,6 +126,16 @@ copy_dir_replace() {
   fi
 }
 
+run_rm_rf() {
+  local path="$1"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    planned "remove deprecated path $path"
+  else
+    rm -rf "$path"
+  fi
+}
+
 write_clean_run_index() {
   local dest="$1"
 
@@ -170,13 +182,15 @@ This target repository owns its installed \`.harness/\` tree.
 - \`.harness/runs/RUN_INDEX.md\`, root runs, Epic containers, and child runs belong to this target repository. The installer does not reset existing run history.
 - Legacy \`.harness/epics/*\`, if present from older Harness installs, belongs to this target repository and is never deleted by the installer.
 - \`.harness/backlog/HARNESS_BACKLOG.md\` belongs to this target repository. The installer does not overwrite it if it already exists.
+- \`.codex/config.toml\` is created if missing. If it exists, the installer backs it up and merges only missing Harness \`[agents]\` defaults.
+- \`.codex/agents/*.toml\` contains fixed Harness lifecycle Codex custom agents. Same-name files are backed up before overwrite.
 - Kernel folders may be replaced during an explicit update:
   - \`.harness/guides/\`
-  - \`.harness/subagents/\`
   - \`.harness/workflows/\`
   - \`.harness/templates/\`
   - \`.harness/project-templates/\`
   - \`.harness/scripts/\`
+- Deprecated \`.harness/subagents/\` is removed during update; canonical lifecycle role definitions live in \`.codex/agents/*.toml\`.
 - Seeded Harness workflow skill files are copied into \`.harness/skills/\` without deleting other local skill files.
 
 ## Recommended Next Steps
@@ -188,7 +202,7 @@ Read \`.harness/HARNESS_SKILLS.md\` and run the \`project-sync\` Harness workflo
 Then run \`codebase-sync\` if source-navigation or change-impact docs are missing or stale.
 \`\`\`
 
-No native-agent skill installation is required.
+Harness Codex lifecycle agents are installed in \`.codex/agents/*.toml\`.
 EOF
 }
 
@@ -329,6 +343,105 @@ install_codebase_docs() {
   done
 }
 
+codex_config_has_agents_key() {
+  local file="$1"
+  local key="$2"
+
+  awk -v key="$key" '
+    /^\[agents\][[:space:]]*$/ { in_agents = 1; next }
+    in_agents == 1 && /^\[/ { in_agents = 0 }
+    in_agents == 1 {
+      pattern = "^[[:space:]]*" key "[[:space:]]*="
+      if ($0 ~ pattern) {
+        found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
+codex_config_has_agents_table() {
+  grep -qE '^\[agents\][[:space:]]*$' "$1"
+}
+
+merge_codex_config() {
+  local source_config="$1"
+  local target_config="$2"
+  local backup add_max_threads add_max_depth
+
+  if [ ! -e "$target_config" ]; then
+    run_cp "$source_config" "$target_config"
+    info "Installed .codex/config.toml"
+    return
+  fi
+
+  backup="$(backup_file "$target_config")"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    planned "merge missing Harness [agents] defaults from $source_config into $target_config"
+    info "Merged .codex/config.toml and backed up the original to $backup"
+    return
+  fi
+
+  if ! codex_config_has_agents_table "$target_config"; then
+    {
+      cat "$target_config"
+      printf "\n# Harness Codex project-scoped agents\n"
+      cat "$source_config"
+    } > "$target_config.tmp.$$"
+    mv "$target_config.tmp.$$" "$target_config"
+    info "Merged .codex/config.toml and backed up the original to $backup"
+    return
+  fi
+
+  add_max_threads=1
+  add_max_depth=1
+  codex_config_has_agents_key "$target_config" "max_threads" && add_max_threads=0
+  codex_config_has_agents_key "$target_config" "max_depth" && add_max_depth=0
+
+  awk -v add_max_threads="$add_max_threads" -v add_max_depth="$add_max_depth" '
+    {
+      print
+      if ($0 ~ /^\[agents\][[:space:]]*$/) {
+        if (add_max_threads == 1) {
+          print "max_threads = 4"
+        }
+        if (add_max_depth == 1) {
+          print "max_depth = 1"
+        }
+      }
+    }
+  ' "$target_config" > "$target_config.tmp.$$"
+  mv "$target_config.tmp.$$" "$target_config"
+  info "Merged .codex/config.toml and backed up the original to $backup"
+}
+
+install_codex_agents() {
+  local source_codex="$SOURCE_TEMPLATE_DIR/.codex"
+  local target_codex="$TARGET_DIR/.codex"
+  local target_agents="$target_codex/agents"
+  local source_agent base dest backup
+
+  [ -f "$source_codex/config.toml" ] || die "Invalid template: missing $source_codex/config.toml"
+  [ -d "$source_codex/agents" ] || die "Invalid template: missing $source_codex/agents"
+
+  run_mkdir "$target_codex"
+  run_mkdir "$target_agents"
+  merge_codex_config "$source_codex/config.toml" "$target_codex/config.toml"
+
+  for source_agent in "$source_codex"/agents/*.toml; do
+    [ -f "$source_agent" ] || continue
+    base="$(basename "$source_agent")"
+    dest="$target_agents/$base"
+    if [ -e "$dest" ]; then
+      backup="$(backup_file "$dest")"
+      info "Backed up existing Codex agent $dest to $backup"
+    fi
+    run_cp "$source_agent" "$dest"
+    info "Installed Codex agent: $dest"
+  done
+}
+
 install_harness_tree() {
   local target_harness="$TARGET_DIR/.harness"
 
@@ -348,7 +461,10 @@ install_harness_tree() {
   write_installation_note "$target_harness/INSTALLATION.md"
 
   copy_dir_replace "$SOURCE_HARNESS_DIR/guides" "$target_harness/guides"
-  copy_dir_replace "$SOURCE_HARNESS_DIR/subagents" "$target_harness/subagents"
+  if [ -d "$target_harness/subagents" ]; then
+    run_rm_rf "$target_harness/subagents"
+    info "Removed deprecated .harness/subagents; Codex agents live in .codex/agents"
+  fi
   copy_dir_replace "$SOURCE_HARNESS_DIR/workflows" "$target_harness/workflows"
   copy_dir_replace "$SOURCE_HARNESS_DIR/templates" "$target_harness/templates"
   copy_dir_replace "$SOURCE_HARNESS_DIR/project-templates" "$target_harness/project-templates"
@@ -446,7 +562,11 @@ main() {
   esac
 
   [ -d "$SOURCE_HARNESS_DIR/guides" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/guides"
-  [ -d "$SOURCE_HARNESS_DIR/subagents" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/subagents"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/config.toml" ] || die "Invalid template: missing $SOURCE_TEMPLATE_DIR/.codex/config.toml"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-planner.toml" ] || die "Invalid template: missing harness-planner Codex agent"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-contract-reviewer.toml" ] || die "Invalid template: missing harness-contract-reviewer Codex agent"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-generator.toml" ] || die "Invalid template: missing harness-generator Codex agent"
+  [ -f "$SOURCE_TEMPLATE_DIR/.codex/agents/harness-evaluator.toml" ] || die "Invalid template: missing harness-evaluator Codex agent"
   [ -d "$SOURCE_HARNESS_DIR/workflows" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/workflows"
   [ -d "$SOURCE_HARNESS_DIR/codebase" ] || die "Invalid template: missing $SOURCE_HARNESS_DIR/codebase"
   [ -f "$SOURCE_TEMPLATE_DIR/AGENTS.md" ] || die "Invalid template: missing $SOURCE_TEMPLATE_DIR/AGENTS.md"
@@ -469,6 +589,7 @@ main() {
   info "Target: $TARGET_DIR"
 
   install_harness_tree
+  install_codex_agents
   install_agents
 
   cat <<EOF
@@ -480,7 +601,7 @@ Next steps:
   Ask your agent:
     Read .harness/HARNESS_SKILLS.md and run the project-sync Harness workflow skill.
     Then run codebase-sync if source-navigation or change-impact docs are missing or stale.
-  No native-agent skill installation is required.
+  Harness Codex lifecycle agents are installed in .codex/agents/.
 
 If AGENTS.md was preserved, review AGENTS.harness.md and merge the parts you want into AGENTS.md.
 EOF

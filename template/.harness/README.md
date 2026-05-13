@@ -52,9 +52,11 @@ Core lifecycle:
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-Coordinator chỉ được load template tương ứng trong `.harness/subagents/`, pass task-specific inputs, collect artifact, và route bước tiếp theo. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, và không được viết artifact thay role subagent.
+Coordinator chỉ được load template tương ứng trong `.harness/subagents/`, pass task-specific inputs, collect artifact, và route bước tiếp theo. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, không được viết artifact thay role subagent, không được edit source/tests/config, và không được tự repair implementation failure.
 
 Nếu runtime không thể spawn subagent, run phải block trước Planner execution. Không có degraded single-session fallback.
+
+Nếu Evaluator trả kết quả không pass, Coordinator phải route qua bounded Generator rework packet rồi spawn Generator lại. Nếu không spawn được Generator, stop với `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 
 ## Sau khi install
 

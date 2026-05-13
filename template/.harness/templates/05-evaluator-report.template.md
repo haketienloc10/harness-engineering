@@ -30,6 +30,16 @@ same_executor_as_generator: false
 - [ ] fail
 - [ ] blocked_insufficient_evidence
 
+## Coordinator-Readable Decision Summary
+
+This section is the only evaluator content the coordinator may read when routing failed work.
+
+- Status: pass | fail | blocked_insufficient_evidence
+- Failed acceptance criteria:
+- Required responsible role: Planner | Generator | Evaluator
+- Required rework summary:
+- Required recheck:
+
 ## What Was Evaluated
 
 - Planner brief:

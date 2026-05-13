@@ -6,6 +6,8 @@ Harness core lifecycle roles must run as separate spawned subagents from fixed t
 
 There is no degraded single-session fallback.
 
+The Coordinator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
+
 ## Steps
 
 1. Coordinator starts run.
@@ -21,7 +23,8 @@ There is no degraded single-session fallback.
 11. Generator writes `04-implementation-report.md`.
 12. Spawn Evaluator from `.harness/subagents/evaluator.md`.
 13. Evaluator writes `05-evaluator-report.md`.
-14. Run completes only if Evaluator result is `pass`.
+14. If Evaluator returns a non-passing result, Coordinator reads only the evaluator decision summary, creates a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawns Generator, then spawns Evaluator again.
+15. Run completes only if Evaluator result is `pass`.
 
 ## Created Manifest State
 
@@ -75,3 +78,13 @@ Harness lifecycle requires template-based subagent orchestration.
 This run is blocked.
 No lifecycle role may be executed in this session.
 ```
+
+## Rework Block Rule
+
+If implementation or rework is required and Generator cannot be spawned, the coordinator must stop with:
+
+```text
+BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
+```
+
+The coordinator must not fall back to direct implementation.

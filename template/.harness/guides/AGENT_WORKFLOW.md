@@ -21,6 +21,8 @@ If subagent spawning is unavailable, block the run before Planner execution.
 
 When a phase requires another role, spawn the corresponding role subagent from its fixed template.
 
+Coordinator chỉ được điều phối. Coordinator không được implement, debug, repair, review, verify, approve, edit source/tests/config, hoặc viết lifecycle role artifact thay subagent.
+
 Do not create `HANDOFF.md`.
 
 Each role artifact may include a short "Next role" note for traceability, but this note is not a handoff file and must not replace subagent spawning.
@@ -110,6 +112,24 @@ Outputs:
 
 Generator Agent chỉ implement sau khi `03-contract-review.md` có `Status: approved`.
 Generator Agent phải dừng sau `04-implementation-report.md` hoặc `06-fix-report.md`; không tự evaluate.
+
+## Rework Routing Phase
+
+Khi `05-evaluator-report.md` trả `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_insufficient_evidence`, hoặc kết quả không pass tương đương:
+
+1. Coordinator chỉ đọc evaluator decision summary.
+2. Coordinator tạo bounded Generator rework packet từ `.harness/templates/generator-rework-packet.template.md`.
+3. Coordinator spawn Generator từ `.harness/subagents/generator.md`.
+4. Generator sửa implementation và viết `06-fix-report.md`.
+5. Coordinator spawn Evaluator từ `.harness/subagents/evaluator.md` lại.
+
+Coordinator không được đọc source để tự repair, không được edit source/tests/config, không được thêm test trực tiếp, không được chạy fix loop, và không được viết `06-fix-report.md`.
+
+Nếu không spawn được Generator, stop với:
+
+```text
+BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
+```
 
 ## Evaluator Phase
 

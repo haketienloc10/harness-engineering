@@ -162,6 +162,8 @@ require_manifest() {
   require_file "run-manifest.md"
   grep -qF -- "- mode: template_subagents_required" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set mode: template_subagents_required"
   grep -qF -- "- fallback_allowed: false" "$RUN_DIR/run-manifest.md" || die "run-manifest.md must set fallback_allowed: false"
+  grep -qF -- "- coordinator_source_edits_allowed: true" "$RUN_DIR/run-manifest.md" && die "Coordinator source edits are forbidden"
+  grep -qF -- "- coordinator_role_work_allowed: true" "$RUN_DIR/run-manifest.md" && die "Coordinator role work is forbidden"
   grep -qF "planner_template: .harness/subagents/planner.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing planner template source"
   grep -qF "contract_reviewer_template: .harness/subagents/contract-reviewer.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing contract reviewer template source"
   grep -qF "generator_template: .harness/subagents/generator.md" "$RUN_DIR/run-manifest.md" || die "run-manifest.md missing generator template source"

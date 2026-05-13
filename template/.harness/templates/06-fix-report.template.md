@@ -14,6 +14,7 @@ started_at: <required>
 completed_at: <required>
 independence: independent
 evaluator_report_addressed: <path>
+rework_packet: <path>
 ```
 
 ## Evaluator Issues Addressed
@@ -21,6 +22,13 @@ evaluator_report_addressed: <path>
 | Issue | Fix | Files Changed | Verification |
 |---|---|---|---|
 |  |  |  |  |
+
+## Rework Packet Compliance
+
+- Rework packet followed: yes | no
+- Scope limited to listed failure(s): yes | no
+- Unrelated files changed: no | yes
+- Notes:
 
 ## Commands Re-run
 

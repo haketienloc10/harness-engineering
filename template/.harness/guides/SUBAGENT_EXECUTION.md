@@ -16,6 +16,24 @@ If unsupported, the coordinator MUST block the run before Planner execution.
 
 There is no degraded single-session fallback.
 
+If a required role template is missing, invalid, or unavailable, the coordinator MUST stop with:
+
+```text
+BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE
+```
+
+If a required subagent cannot be spawned, the coordinator MUST stop with:
+
+```text
+BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE
+```
+
+If the missing role is Generator and implementation or rework is required, the coordinator MUST stop with:
+
+```text
+BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
+```
+
 Required blocked message:
 
 ```text
@@ -48,6 +66,10 @@ No lifecycle role may be executed in this session.
 12. If subagent spawning is unavailable, set the run state to `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` and update `run-manifest.md`.
 13. The Orchestrator MUST NOT create free-form prompts for core lifecycle roles.
 14. The Orchestrator MUST NOT modify template responsibilities, forbidden actions, required artifacts, evidence requirements, or pass/fail criteria.
+15. The Orchestrator MUST NOT edit application source, tests, production configuration, generated production artifacts, or project implementation files.
+16. The Orchestrator MUST NOT debug or repair implementation failures directly.
+17. The Orchestrator MUST NOT read implementation files for the purpose of direct repair after a role returns.
+18. The Orchestrator MUST route failed or rejected work back to the responsible template-based role.
 
 ## Orchestrator Duties
 
@@ -62,6 +84,8 @@ No lifecycle role may be executed in this session.
 - Update `run.yaml` only after the required artifact exists.
 - Update `run-manifest.md` for role instance status and runtime availability.
 - Never invent role approval, implementation, or verification decisions.
+- Read only role status, decision summaries, and approved artifacts when routing after delegation.
+- Create bounded role/rework packets when a role must repeat work.
 
 ## Role Dispatch Table
 
@@ -73,6 +97,33 @@ No lifecycle role may be executed in this session.
 | `GENERATING` | `generator` | code changes + `04-implementation-report.md` |
 | `EVALUATING` | `evaluator` | `05-evaluator-report.md` |
 | `FAILED_VERIFICATION` | `generator`, then `evaluator` | `06-fix-report.md`, then updated `05-evaluator-report.md` |
+
+## Evaluator Failure Routing
+
+When Evaluator returns `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_insufficient_evidence`, or any equivalent non-passing result, the Orchestrator must:
+
+1. Read the evaluator decision summary only.
+2. Create a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`.
+3. Spawn Generator from `.harness/subagents/generator.md`.
+4. Wait for `06-fix-report.md` or an updated implementation report.
+5. Spawn Evaluator from `.harness/subagents/evaluator.md` again.
+
+The Orchestrator must not edit source, inspect implementation files for direct repair, add tests directly, run a fix loop, or write `06-fix-report.md`.
+
+If Generator cannot be spawned, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
+
+## Artifact-Only Handoff
+
+Roles communicate through written artifacts, not inherited raw conversation history.
+
+Allowed handoff chain:
+
+- Planner -> `01-planner-brief.md` and `02-implementation-contract.md`;
+- Contract Reviewer -> `03-contract-review.md`;
+- Generator -> `04-implementation-report.md`, changed files summary, verification commands/results, and when applicable `06-fix-report.md`;
+- Evaluator -> `05-evaluator-report.md` and pass/fail decision.
+
+Do not pass full role transcripts, unrelated previous run artifacts, or coordinator memory as role inputs unless an approved artifact explicitly authorizes that input.
 
 ## Role Template Sources
 

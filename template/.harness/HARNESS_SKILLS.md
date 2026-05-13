@@ -105,6 +105,8 @@ For non-trivial implementation work, `lifecycle-orchestration` is mandatory.
 
 Harness role transitions are executed through spawned subagents from fixed templates.
 
+The Orchestrator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
+
 Load:
 - `.harness/guides/LIFECYCLE_ORCHESTRATION.md`
 - `.harness/guides/SUBAGENT_EXECUTION.md`
@@ -121,6 +123,8 @@ Do not create `HANDOFF.md` for normal lifecycle transitions.
 
 If no subagent runtime can be started, block the run. There is no single-session fallback.
 
+When Evaluator returns a non-passing result, route through a bounded Generator rework packet and spawn Generator again. If Generator cannot be spawned, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
+
 Use when:
 - Starting any non-trivial implementation run.
 - Reviewing or approving an implementation contract.
@@ -133,3 +137,4 @@ Outputs:
 - Correct `run-manifest.md` execution mode and role status
 - Required role artifact for the current state
 - `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` when subagent spawning is unavailable
+- `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE` when implementation or rework requires Generator but Generator cannot be spawned

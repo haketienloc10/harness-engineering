@@ -53,9 +53,11 @@ Planner -> Contract Reviewer -> Generator -> Evaluator
 
 The top-level agent acts as coordinator/orchestrator only. It may select the required role, load the role template, pass task-specific inputs, collect the role artifact, and decide the next workflow step based on that artifact.
 
-The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, or continue when subagent spawning is unavailable.
+The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, edit source/tests/config, repair implementation failures directly, or continue when subagent spawning is unavailable.
 
 If no spawned subagent runtime is available, the run is blocked before Planner execution. There is no degraded single-session fallback.
+
+If Evaluator returns a non-passing result, the coordinator routes through a bounded Generator rework packet and spawns Generator again. If Generator cannot be spawned, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 
 Required blocked message:
 
@@ -219,6 +221,7 @@ template/
       04-implementation-report.template.md
       05-evaluator-report.template.md
       06-fix-report.template.md
+      generator-rework-packet.template.md
       07-final-summary.template.md
       00-epic-overview.template.md
       01-epic-roadmap.template.md

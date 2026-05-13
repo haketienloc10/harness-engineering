@@ -29,6 +29,9 @@ Read only the relevant parts of:
   - `harness_generator`
   - `harness_evaluator`
 - `dispatch-role.sh` creates routing metadata only; Codex-native agent invocation is the execution path.
+- After a subagent writes its required artifact, record completion with:
+  `bash .harness/scripts/record-role-completion.sh .harness/runs/<RUN_ID> <role> <executor_id>`
+- `record-role-completion.sh` is the canonical way to update `run.yaml`, `run-manifest.md`, and role artifact runtime metadata after role completion.
 - No degraded single-session fallback.
 - If Generator or Evaluator must re-run, route through the lifecycle instead of patching directly as Coordinator.
 

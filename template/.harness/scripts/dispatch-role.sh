@@ -10,12 +10,15 @@ usage() {
 Usage:
   bash .harness/scripts/dispatch-role.sh .harness/runs/RUN-... planner
   bash .harness/scripts/dispatch-role.sh RUN-YYYYMMDD-NNN-task generator
-  bash .harness/scripts/dispatch-role.sh --reset .harness/runs/RUN-... evaluator
+  bash .harness/scripts/dispatch-role.sh --reset .harness/runs/RUN-... planner
+  bash .harness/scripts/dispatch-role.sh --reset .harness/runs/RUN-... generator
 
 Create routing metadata for the next Harness lifecycle role.
 The coordinator must not pass a free-form role prompt to this script.
 This script only writes .harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md.
 It does not spawn or execute the role subagent.
+Use --reset only to redispatch Planner from REJECTED_FOR_REPLAN or Generator
+from FAILED_VERIFICATION when the prior completed role artifact already exists.
 EOF
 }
 
@@ -159,6 +162,10 @@ resolve_run_dir() {
   cd "$found" && pwd -P
 }
 
+reset_command() {
+  printf "bash .harness/scripts/dispatch-role.sh --reset %s %s" "$RUN_DIR" "$ROLE"
+}
+
 CODEX_AGENT_FILE="$(role_agent_file "$ROLE")" || die "Invalid role: $ROLE"
 CODEX_AGENT_NAME="$(role_agent_name "$ROLE")" || die "Invalid role: $ROLE"
 CODEX_AGENT_PATH="$ROOT_DIR/$CODEX_AGENT_FILE"
@@ -180,35 +187,6 @@ SUBAGENT_RUNTIME_AVAILABLE="$(runtime_get subagent_runtime_available)"
 
 [ "$DISPATCH_MODE" = "codex_project_scoped" ] || die "runtime.dispatch_mode must be codex_project_scoped"
 [ "$FALLBACK_ALLOWED" = "false" ] || die "runtime.fallback_allowed must be false"
-if [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
-  mkdir -p "$RUN_DIR/dispatch"
-  DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
-  CREATED_AT="$(date -Iseconds)"
-  cat > "$DISPATCH_FILE" <<EOF
----
-run_id: $RUN_ID
-role: $ROLE
-executor_type: subagent
-required_codex_agent_name: $CODEX_AGENT_NAME
-codex_agent_file: $CODEX_AGENT_FILE
-status: blocked
-blocked_reason: subagent_runtime_unavailable
-created_at: $CREATED_AT
----
-
-# Role Dispatch Blocked: $ROLE
-
-Subagent runtime unavailable.
-Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
-This run is blocked.
-No lifecycle role may be executed in this session.
-EOF
-  die "Subagent runtime unavailable.
-Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
-This run is blocked.
-No lifecycle role may be executed in this session."
-fi
-
 if [ ! -f "$CODEX_AGENT_PATH" ]; then
   mkdir -p "$RUN_DIR/dispatch"
   DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
@@ -221,6 +199,7 @@ executor_type: subagent
 required_codex_agent_name: $CODEX_AGENT_NAME
 codex_agent_file: $CODEX_AGENT_FILE
 status: blocked
+block_code: BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE
 blocked_reason: required_codex_agent_file_missing
 created_at: $CREATED_AT
 ---
@@ -229,7 +208,37 @@ created_at: $CREATED_AT
 
 Required Codex agent file is missing: \`$CODEX_AGENT_FILE\`.
 EOF
-  die "Required Codex agent file not found: $CODEX_AGENT_FILE"
+  die "BLOCKED_REQUIRED_CODEX_AGENT_UNAVAILABLE: Required Codex agent file not found: $CODEX_AGENT_FILE"
+fi
+
+if [ "$SUBAGENT_RUNTIME_AVAILABLE" != "true" ]; then
+  mkdir -p "$RUN_DIR/dispatch"
+  DISPATCH_FILE="$RUN_DIR/dispatch/$ROLE.dispatch.md"
+  CREATED_AT="$(date -Iseconds)"
+  cat > "$DISPATCH_FILE" <<EOF
+---
+run_id: $RUN_ID
+role: $ROLE
+executor_type: subagent
+required_codex_agent_name: $CODEX_AGENT_NAME
+codex_agent_file: $CODEX_AGENT_FILE
+status: blocked
+block_code: BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE
+blocked_reason: subagent_runtime_unavailable
+created_at: $CREATED_AT
+---
+
+# Role Dispatch Blocked: $ROLE
+
+Subagent runtime unavailable.
+Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
+This run is blocked.
+No lifecycle role may be executed in this session.
+EOF
+  die "BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE: Subagent runtime unavailable.
+Harness lifecycle requires Codex project-scoped subagents from \`.codex/agents/\`.
+This run is blocked.
+No lifecycle role may be executed in this session."
 fi
 
 if [ -n "$NEXT_REQUIRED_ROLE" ] && [ "$NEXT_REQUIRED_ROLE" != "$ROLE" ]; then
@@ -253,7 +262,18 @@ fi
 if [ -f "$OUTPUT_PATH" ]; then
   ARTIFACT_STATUS="$(artifact_field_get "$OUTPUT_PATH" status)"
   if [ "$RESET" -ne 1 ] && [ "$ARTIFACT_STATUS" != "draft" ]; then
-    die "Output artifact already exists and is not reset to status: draft: $OUTPUT_ARTIFACT"
+    die "Output artifact already exists with status: $ARTIFACT_STATUS: $OUTPUT_ARTIFACT
+To redispatch this lifecycle role, run exactly:
+$(reset_command)"
+  fi
+  if [ "$RESET" -eq 1 ]; then
+    case "$ROLE:$STATE" in
+      planner:REJECTED_FOR_REPLAN|generator:FAILED_VERIFICATION)
+        ;;
+      *)
+        die "--reset is only supported for planner in REJECTED_FOR_REPLAN or generator in FAILED_VERIFICATION"
+        ;;
+    esac
   fi
 fi
 

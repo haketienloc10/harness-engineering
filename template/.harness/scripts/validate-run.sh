@@ -197,7 +197,8 @@ require_role_artifact_metadata() {
 
 require_contract_review_approved() {
   require_completed_artifact "03-contract-review.md"
-  grep -qE '^- Status:[[:space:]]*approved[[:space:]]*$' "$RUN_DIR/03-contract-review.md" || die "generator_allowed: true requires 03-contract-review.md Status: approved"
+  require_exact_final_status "03-contract-review.md" "approved rejected_requires_revision"
+  tail -n 1 "$RUN_DIR/03-contract-review.md" | grep -qE '^- Status:[[:space:]]*approved[[:space:]]*$' || die "generator_allowed: true requires 03-contract-review.md final Status: approved"
 }
 
 require_manifest() {
@@ -227,11 +228,29 @@ require_manifest() {
 }
 
 require_runtime_schema() {
+  local runtime_available
+  local manifest_runtime_available
+
   [ "$(runtime_get dispatch_mode)" = "template_based" ] || die "runtime.dispatch_mode must be template_based"
   [ "$(runtime_get fallback_allowed)" = "false" ] || die "runtime.fallback_allowed must be false"
 
+  runtime_available="$(runtime_get subagent_runtime_available)"
+  manifest_runtime_available="$(manifest_field_get subagent_runtime_available)"
+
+  case "$runtime_available" in
+    true|false|unknown)
+      ;;
+    *)
+      die "runtime.subagent_runtime_available must be true, false, or unknown"
+      ;;
+  esac
+
+  [ "$manifest_runtime_available" = "$runtime_available" ] || die "run.yaml and run-manifest.md disagree on subagent_runtime_available"
+
   if [ "$STATE" != "CREATED" ] && [ "$STATE" != "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ] && [ "$STATE" != "CANCELLED" ]; then
-    [ "$(runtime_get subagent_runtime_available)" = "true" ] || die "runtime.subagent_runtime_available must be true after lifecycle role execution begins"
+    [ "$runtime_available" = "true" ] || die "runtime.subagent_runtime_available must be true after lifecycle role execution begins"
+  elif [ "$STATE" = "BLOCKED_FOR_EXECUTOR_UNAVAILABLE" ]; then
+    [ "$runtime_available" = "false" ] || die "BLOCKED_FOR_EXECUTOR_UNAVAILABLE requires runtime.subagent_runtime_available: false"
   fi
 }
 
@@ -246,9 +265,35 @@ require_no_legacy_artifacts_or_text() {
   [ ! -f "$RUN_DIR/HANDOFF.md" ] || die "Legacy HANDOFF.md is forbidden"
   [ ! -f "$RUN_DIR/03-evaluator-contract-review.md" ] || die "Legacy 03-evaluator-contract-review.md is forbidden"
   [ ! -f "$RUN_DIR/04-generator-worklog.md" ] || die "Legacy 04-generator-worklog.md is forbidden"
+  [ ! -f "$RUN_DIR/06-fix-report.md" ] || die "Legacy 06-fix-report.md is forbidden"
+  [ ! -f "$RUN_DIR/07-final-summary.md" ] || die "Legacy 07-final-summary.md is forbidden"
 
-  if grep -RniE 'runtime_mode:[[:space:]]*production_multi_session|fallback explicitly allowed|single-session degraded|03-evaluator-contract-review|04-generator-worklog' "$RUN_DIR" >/dev/null 2>&1; then
+  if grep -RniE 'runtime_mode:[[:space:]]*production_multi_session|fallback explicitly allowed|single-session degraded|03-evaluator-contract-review|04-generator-worklog|06-fix-report|07-final-summary' "$RUN_DIR" >/dev/null 2>&1; then
     die "Run contains forbidden legacy workflow text"
+  fi
+}
+
+require_exact_final_status() {
+  local file="$1"
+  local allowed_statuses="$2"
+  local final_line
+  local status
+  local matched=0
+
+  final_line="$(tail -n 1 "$RUN_DIR/$file")"
+  status="$(printf "%s\n" "$final_line" | sed -n -E 's/^- Status:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p')"
+  [ -n "$status" ] || die "$file must end with exactly one '- Status: ...' line"
+
+  for allowed in $allowed_statuses; do
+    if [ "$status" = "$allowed" ]; then
+      matched=1
+    fi
+  done
+
+  [ "$matched" -eq 1 ] || die "$file has invalid final status: $status"
+
+  if [ "$(grep -cE '^- Status:' "$RUN_DIR/$file")" -ne 1 ]; then
+    die "$file must contain exactly one '- Status:' line"
   fi
 }
 
@@ -281,6 +326,15 @@ require_completed_role_artifact() {
 
   require_completed_artifact "$file"
   require_role_artifact_metadata "$file" "$role" "$template_source"
+
+  case "$file" in
+    03-contract-review.md)
+      require_exact_final_status "$file" "approved rejected_requires_revision"
+      ;;
+    05-evaluator-report.md)
+      require_exact_final_status "$file" "pass fail blocked_insufficient_evidence"
+      ;;
+  esac
 }
 
 require_artifacts_for_state() {
@@ -396,7 +450,8 @@ validate_evaluator_report() {
   [ -f "$report" ] || die "COMPLETED requires 05-evaluator-report.md"
   grep -qE '^## Commands Executed' "$report" || die "Evaluator report must include a Commands Executed section"
   grep -qE '^## Evidence' "$report" || die "Evaluator report must include an Evidence section"
-  grep -qE '^- Status:[[:space:]]*pass[[:space:]]*$' "$report" || die "COMPLETED requires 05-evaluator-report.md Decision Status: pass"
+  require_exact_final_status "05-evaluator-report.md" "pass fail blocked_insufficient_evidence"
+  tail -n 1 "$report" | grep -qE '^- Status:[[:space:]]*pass[[:space:]]*$' || die "COMPLETED requires 05-evaluator-report.md final Status: pass"
 
   if grep -q '<command>' "$report"; then
     die "Evaluator report still contains placeholder command evidence"

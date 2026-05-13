@@ -14,6 +14,8 @@ Usage:
 
 Create the template-based dispatch artifact for the next lifecycle role.
 The coordinator must not pass a free-form role prompt to this script.
+This script only writes .harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md.
+It does not spawn or execute the role subagent.
 EOF
 }
 
@@ -220,12 +222,34 @@ $(for input in $(required_inputs "$ROLE"); do printf -- "- %s\n" "$input"; done)
 
 - $OUTPUT_ARTIFACT
 
+## Dispatch Artifact Only
+
+This file is an instruction artifact for the runtime executor.
+\`dispatch-role.sh\` created this file only; it did not spawn, execute, or emulate the role subagent.
+
+The runtime executor MUST consume this dispatch artifact and spawn the role-specific subagent from the template source below.
+
 ## Runtime Contract
 
 - executor_type: subagent
 - dispatch_mode: template_based
 - free_form_role_prompt_allowed: false
 - fallback_allowed: false
+- runtime_must_spawn_template_subagent: true
+
+## Required Final Status Line
+
+$(case "$ROLE" in
+  contract_reviewer)
+    printf -- "- 03-contract-review.md must end with exactly one of:\n  - \\`- Status: approved\\`\n  - \\`- Status: rejected_requires_revision\\`\n"
+    ;;
+  evaluator)
+    printf -- "- 05-evaluator-report.md must end with exactly one of:\n  - \\`- Status: pass\\`\n  - \\`- Status: fail\\`\n  - \\`- Status: blocked_insufficient_evidence\\`\n"
+    ;;
+  *)
+    printf -- "- No terminal status line is required for this role artifact.\n"
+    ;;
+esac)
 
 ## Template Source
 

@@ -41,7 +41,7 @@ Path:
 - implementation diff summary;
 - commands executed;
 - test results;
-- updated Generator rework report (`06-fix-report.md`).
+- updated Generator implementation report (`04-implementation-report.md`).
 
 ## After Completion
 

@@ -18,7 +18,6 @@ status: draft
 
 ## Decision
 
-- Status: approved | rejected_requires_revision
 - Reason:
 
 ## Contract Quality Checklist
@@ -42,3 +41,5 @@ status: draft
 - Required next executor:
 - Required next state:
 - Reason:
+
+- Status: <required: approved or rejected_requires_revision>

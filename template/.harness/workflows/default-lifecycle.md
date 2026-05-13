@@ -8,12 +8,14 @@ There is no degraded single-session fallback.
 
 The Coordinator is orchestration-only. It must not implement, debug, repair, review, verify, approve, edit source/tests/config, or write role artifacts directly.
 
+`dispatch-role.sh` creates a dispatch artifact only. It does not spawn or execute a subagent. A runtime executor must consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md` and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+
 ## Steps
 
 1. Coordinator starts run.
 2. Coordinator checks subagent runtime availability.
-3. If unavailable, block run immediately.
-4. If available, call `dispatch-role.sh <run> planner` and spawn Planner from `.harness/subagents/planner.md`.
+3. If unavailable, set `runtime.subagent_runtime_available: false`, update `run-manifest.md`, and block run immediately.
+4. If available, set `runtime.subagent_runtime_available: true`, update `run-manifest.md`, call `dispatch-role.sh <run> planner`, and require the runtime executor to spawn Planner from `.harness/subagents/planner.md`.
 5. Planner writes `01-planner-brief.md`.
 6. Coordinator prepares implementation contract routing; Planner writes `02-implementation-contract.md` when the workflow enters `CONTRACTING`.
 7. Call `dispatch-role.sh <run> contract_reviewer` and spawn Contract Reviewer from `.harness/subagents/contract-reviewer.md`.
@@ -28,7 +30,14 @@ The Coordinator is orchestration-only. It must not implement, debug, repair, rev
 
 ## Created Manifest State
 
-New runs start before executor availability has been checked:
+New runs start before executor availability has been checked. `run.yaml` starts with:
+
+```yaml
+runtime:
+  subagent_runtime_available: unknown
+```
+
+`run-manifest.md` starts with:
 
 ```md
 - mode: template_subagents_required
@@ -40,9 +49,20 @@ New runs start before executor availability has been checked:
 
 After a successful runtime check, update it before dispatching Planner:
 
+```yaml
+runtime:
+  subagent_runtime_available: true
+```
+
 ```md
 - subagent_runtime_available: true
 - run_status: ready_for_planner_dispatch
+```
+
+Use the helper when available:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
 ```
 
 ## Block Rule

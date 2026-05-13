@@ -39,11 +39,11 @@ Write:
 
 ## Required Decision
 
-Output exactly one of:
+The final line of `05-evaluator-report.md` MUST be exactly one of:
 
-- `pass`
-- `fail`
-- `blocked_insufficient_evidence`
+- `- Status: pass`
+- `- Status: fail`
+- `- Status: blocked_insufficient_evidence`
 
 ## Evidence Requirements
 

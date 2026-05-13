@@ -21,7 +21,6 @@ same_executor_as_generator: false
 
 ## Coordinator-Readable Decision Summary
 
-- Status: pass | fail | blocked_insufficient_evidence
 - Failed acceptance criteria:
 - Required responsible role: planner | generator | evaluator
 - Required recheck:
@@ -48,9 +47,10 @@ Include exact commands, outputs, logs, screenshots descriptions, browser/API evi
 
 ## Decision
 
-- Status: pass | fail | blocked_insufficient_evidence
 - Reason:
 
 ## Notes for Generator
 
 <Chi ghi yeu cau fix, khong sua code>
+
+- Status: <required: pass or fail or blocked_insufficient_evidence>

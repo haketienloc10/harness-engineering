@@ -8,7 +8,7 @@ updated_at: <UPDATED-AT>
 status: initialized
 
 runtime:
-  subagent_runtime_available: false
+  subagent_runtime_available: unknown
   subagent_runtime_name:
   dispatch_mode: template_based
   fallback_allowed: false

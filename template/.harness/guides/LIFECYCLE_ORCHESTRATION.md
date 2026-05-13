@@ -14,6 +14,8 @@ Harness uses `.harness/scripts/dispatch-role.sh` plus spawned subagents for role
 
 The coordinator must call `.harness/scripts/dispatch-role.sh` for each required lifecycle role. The dispatch artifact binds the role to the fixed template in `.harness/subagents/`.
 
+`dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn or execute the role. The runtime executor must consume that artifact and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+
 The coordinator may pass task-specific inputs, but must not write free-form prompts for core roles or modify template responsibilities, output schema, evidence requirements, or pass/fail criteria.
 
 The coordinator is orchestration-only. It may route state, build bounded packets, spawn template-based subagents, wait for completion, inspect role status and decision summaries, update Harness metadata, and summarize from approved artifacts. It must not implement, debug, verify, review, repair, test, or approve role work directly.
@@ -29,7 +31,7 @@ Required dispatch:
 - `EVALUATING` -> `dispatch-role.sh <run> evaluator` -> spawn `.harness/subagents/evaluator.md`
 - `FAILED_VERIFICATION` -> read evaluator decision summary only, create a bounded Generator rework packet, spawn `.harness/subagents/generator.md`, then spawn `.harness/subagents/evaluator.md`
 
-If the runtime cannot spawn subagents, the run must enter `BLOCKED_FOR_EXECUTOR_UNAVAILABLE` before Planner execution. There is no degraded single-session fallback.
+New runs start with `runtime.subagent_runtime_available: unknown`. Before Planner dispatch, the coordinator must set it to `true` after confirming native subagent spawning, or set it to `false` and enter `BLOCKED_FOR_EXECUTOR_UNAVAILABLE`. There is no degraded single-session fallback.
 
 If a required template is missing, invalid, or unavailable, stop with `BLOCKED_REQUIRED_SUBAGENT_TEMPLATE_UNAVAILABLE`.
 

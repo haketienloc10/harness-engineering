@@ -51,11 +51,11 @@ Harness core lifecycle roles MUST be executed by separate spawned subagents inst
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-The top-level agent acts as coordinator/orchestrator only. It must call `.harness/scripts/dispatch-role.sh` for each lifecycle role. The dispatch script selects only the fixed role template, writes a structured dispatch artifact, and never accepts a free-form role prompt.
+The top-level agent acts as coordinator/orchestrator only. It must call `.harness/scripts/dispatch-role.sh` for each lifecycle role. The dispatch script selects only the fixed role template, writes `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`, and never accepts a free-form role prompt. It does not spawn or execute a subagent; the runtime executor must consume the dispatch artifact and spawn the role-specific subagent.
 
 The coordinator must not create free-form prompts for core lifecycle roles, execute those roles itself, modify role responsibilities, weaken evidence requirements, bypass role separation, edit source/tests/config, repair implementation failures directly, or continue when subagent spawning is unavailable.
 
-If no spawned subagent runtime is available, the run is blocked before Planner execution. There is no degraded single-session fallback.
+New runs start with `runtime.subagent_runtime_available: unknown`. Before Planner dispatch, mark runtime availability with `.harness/scripts/mark-subagent-runtime.sh`. If no spawned subagent runtime is available, the run is blocked before Planner execution. There is no degraded single-session fallback.
 
 If Evaluator returns a non-passing result, the coordinator routes through a bounded Generator rework packet and spawns Generator again. If Generator cannot be spawned, stop with `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 

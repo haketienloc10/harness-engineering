@@ -6,15 +6,34 @@ Role transitions are performed through `.harness/scripts/dispatch-role.sh`, then
 
 Harness does not use `HANDOFF.md` for normal lifecycle transitions.
 
+`dispatch-role.sh` creates a dispatch artifact only:
+
+```txt
+.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md
+```
+
+It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from `.harness/subagents/<role>.md`.
+
 ## Runtime Capability Rule
 
 Before executing lifecycle role work, determine whether the current runtime supports real subagent spawning.
 
-If supported, the coordinator MUST call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding template under `.harness/subagents/`.
+New runs start with `runtime.subagent_runtime_available: unknown` in `run.yaml` and `subagent_runtime_available: unknown` in `run-manifest.md`.
 
-If unsupported, the coordinator MUST block the run before Planner execution.
+If supported, the coordinator MUST mark runtime availability as true before Planner dispatch, then call `.harness/scripts/dispatch-role.sh` for the next lifecycle role. The runtime executor MUST instantiate that role from the corresponding template under `.harness/subagents/`.
+
+If unsupported, the coordinator MUST mark runtime availability as false and block the run before Planner execution.
 
 There is no degraded single-session fallback.
+
+Use the helper when available:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
+```
+
+If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`.
 
 If a required role template is missing, invalid, or unavailable, the coordinator MUST stop with:
 

@@ -232,6 +232,12 @@ role_key_to_executor() {
 }
 
 block_for_executor_unavailable() {
+  if command -v bash >/dev/null 2>&1 && [ -f "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" ]; then
+    bash "$HARNESS_DIR/scripts/mark-subagent-runtime.sh" "$RUN_DIR" false "Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed." >/dev/null
+    STATE="BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
+    return
+  fi
+
   set_yaml_field "state" "BLOCKED_FOR_EXECUTOR_UNAVAILABLE"
   set_yaml_field "blocked_reason" "\"Subagent runtime is unavailable. Harness requires template-based subagent orchestration. This run cannot proceed.\""
   write_blocked_manifest

@@ -23,6 +23,8 @@ The coordinator may pass task-specific inputs to the selected template, includin
 
 The coordinator must not create free-form prompts for these roles, modify role responsibilities, weaken evidence requirements, bypass role separation, or write role artifacts on behalf of subagents.
 
+`.harness/scripts/dispatch-role.sh` creates only `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`. It does not spawn, execute, or emulate a subagent. A runtime executor must consume the dispatch artifact and spawn the role-specific subagent from the fixed template.
+
 ## Coordinator Non-Execution Policy
 
 The coordinator is an orchestration role only.
@@ -83,7 +85,17 @@ BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
 
 Core lifecycle execution requires real subagent spawning.
 
-If the runtime cannot spawn subagents, the coordinator must block the run before Planner execution.
+New runs start with `runtime.subagent_runtime_available: unknown`. Before Planner dispatch, the coordinator must mark runtime availability:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
+```
+
+If the runtime cannot spawn subagents, the coordinator must mark availability as false and block the run before Planner execution:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
+```
 
 Required blocked message:
 
@@ -110,19 +122,14 @@ BLOCKED_REQUIRED_SUBAGENT_UNAVAILABLE
 
 ## Required Metadata
 
-New run artifacts must include runtime metadata near the top:
+New role artifacts must include runtime metadata near the top:
 
 ```yaml
-runtime_mode: template_subagents_required
+role: planner | contract_reviewer | generator | evaluator
 executor_type: subagent
 executor_id: <required>
-agent_runtime: <required>
-agent_session_id: <required>
 template_source: .harness/subagents/<role>.md
-started_at: <required>
-completed_at: <required>
-independence: independent
-role: Planner | ContractReviewer | Generator | Evaluator | Coordinator
+status: completed
 ```
 
 New role artifacts must use `template_source` for validator checks. `role_template` may exist only as legacy context.

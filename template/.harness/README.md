@@ -52,9 +52,9 @@ Core lifecycle:
 Planner -> Contract Reviewer -> Generator -> Evaluator
 ```
 
-Coordinator phải gọi `.harness/scripts/dispatch-role.sh` cho role tiếp theo để bind fixed template trong `.harness/subagents/`, rồi runtime executor spawn subagent tương ứng. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, không được viết artifact thay role subagent, không được edit source/tests/config, và không được tự repair implementation failure.
+Coordinator phải gọi `.harness/scripts/dispatch-role.sh` cho role tiếp theo để tạo `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md` bind fixed template trong `.harness/subagents/`. Script này chỉ tạo dispatch artifact; nó không spawn hoặc execute subagent. Runtime executor phải consume dispatch artifact rồi spawn subagent tương ứng. Coordinator không được tự làm lifecycle role, không được tạo prompt tự do cho core role, không được viết artifact thay role subagent, không được edit source/tests/config, và không được tự repair implementation failure.
 
-Nếu runtime không thể spawn subagent, run phải block trước Planner execution. Không có degraded single-session fallback.
+New run bắt đầu với `runtime.subagent_runtime_available: unknown`. Trước Planner dispatch, mark runtime availability bằng `.harness/scripts/mark-subagent-runtime.sh`. Nếu runtime không thể spawn subagent, run phải block trước Planner execution. Không có degraded single-session fallback.
 
 Nếu Evaluator trả kết quả không pass, Coordinator phải route qua bounded Generator rework packet rồi spawn Generator lại. Nếu không spawn được Generator, stop với `BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE`.
 

@@ -37,10 +37,10 @@ Write:
 
 ## Required Decision
 
-Output exactly one of:
+The final line of `03-contract-review.md` MUST be exactly one of:
 
-- `approved`
-- `rejected_requires_revision`
+- `- Status: approved`
+- `- Status: rejected_requires_revision`
 
 ## Evidence Requirements
 

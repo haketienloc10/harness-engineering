@@ -87,6 +87,49 @@ No lifecycle role may be executed in this session.
 - Read only role status, decision summaries, and approved artifacts when routing after delegation.
 - Create bounded role/rework packets when a role must repeat work.
 
+## Coordinator Write Scope Validator
+
+When the current executor role is `coordinator` or `orchestrator`, run:
+
+```bash
+HARNESS_EXECUTOR_ROLE=coordinator \
+HARNESS_RUN_DIR=".harness/runs/<RUN_ID>" \
+bash .harness/scripts/validate-coordinator-write-scope.sh
+```
+
+The validator enforces Direction A: the coordinator may write only narrow Harness orchestration metadata in the current run. If it fails, stop with `BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION` and route required source/test/config changes to Generator.
+
+Coordinator MAY write only:
+
+```text
+run.yaml
+run-manifest.md
+routing-note.md
+rework-packet.md
+generator-rework-packet.md
+07-final-summary.md
+status.md
+routing/*.md
+packets/*.md
+```
+
+Coordinator MUST NOT write:
+
+```text
+01-planner-brief.md
+02-implementation-contract.md
+03-contract-review.md
+04-implementation-report.md
+05-evaluator-report.md
+06-fix-report.md
+source code
+tests
+configs
+package/build files
+```
+
+The coordinator may summarize final results only from approved artifacts and evaluator evidence. It must not invent implementation or verification evidence.
+
 ## Role Dispatch Table
 
 | Lifecycle State | Required Executor | Required Output |

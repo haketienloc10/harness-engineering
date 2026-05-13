@@ -3,6 +3,10 @@ set -euo pipefail
 
 echo "== Harness Verify =="
 
+if [[ -x ".harness/scripts/validate-coordinator-write-scope.sh" ]]; then
+  .harness/scripts/validate-coordinator-write-scope.sh
+fi
+
 if [ "$#" -gt 0 ]; then
   for run_dir in "$@"; do
     echo "== Validate Harness run: $run_dir =="

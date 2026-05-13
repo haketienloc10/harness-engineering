@@ -18,6 +18,8 @@ The coordinator may pass task-specific inputs, but must not write free-form prom
 
 The coordinator is orchestration-only. It may route state, build bounded packets, spawn template-based subagents, wait for completion, inspect role status and decision summaries, update Harness metadata, and summarize from approved artifacts. It must not implement, debug, verify, review, repair, test, or approve role work directly.
 
+For coordinator/orchestrator sessions, the workflow MUST run `.harness/scripts/validate-coordinator-write-scope.sh` with `HARNESS_EXECUTOR_ROLE` and `HARNESS_RUN_DIR` set. The allowlist and forbidden role-owned artifacts are defined in `.harness/guides/SUBAGENT_EXECUTION.md#coordinator-write-scope-validator`. A failure blocks the workflow with `BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION`.
+
 Required dispatch:
 
 - `PLANNING` -> spawn `.harness/subagents/planner.md`

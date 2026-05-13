@@ -54,6 +54,16 @@ The coordinator MUST NOT modify:
 
 The coordinator MUST NOT modify application source files, tests, production configuration, generated production artifacts, or project implementation files. Any source/test/config change MUST be performed by the Generator role.
 
+For coordinator/orchestrator sessions, run the write-scope validator before accepting changed files:
+
+```bash
+HARNESS_EXECUTOR_ROLE=coordinator \
+HARNESS_RUN_DIR=".harness/runs/<RUN_ID>" \
+bash .harness/scripts/validate-coordinator-write-scope.sh
+```
+
+The validator enforces the narrow orchestration metadata allowlist documented in `.harness/guides/SUBAGENT_EXECUTION.md#coordinator-write-scope-validator`. If it fails, stop with `BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION` and route source/test/config work to Generator.
+
 If subagent spawning is unavailable, the run MUST be blocked.
 
 There is no degraded single-session fallback.

@@ -1,104 +1,50 @@
 # AGENTS.md
 
-Repository này đã cài **Harness** để điều phối AI-assisted development bằng artifact, role policy, và lifecycle state.
+Repository này đã cài **Harness** để điều phối AI-assisted development bằng artifact, role policy, lifecycle state, và template-based subagent orchestration.
 
-File này là bootstrap instruction của target repository. Quy trình chi tiết nằm trong `.harness/guides/*`; chỉ đọc guide liên quan đến task hiện tại.
+File này là bootstrap instruction của target repository. Quy trình chi tiết nằm trong `.harness/guides/*`, `.harness/workflows/*`, `.harness/subagents/*`, và `.harness/scripts/*`. Chỉ load tài liệu liên quan đến task hiện tại.
 
 ## Bootstrap Rules
 
-- Reply theo ngôn ngữ người dùng; giữ code, command, path, API name, logs, và identifiers ở dạng gốc.
-- Trước non-trivial work, đọc `.harness/HARNESS_SKILLS.md` và chỉ load skill liên quan.
-- Trước lifecycle execution, đọc `.harness/guides/LIFECYCLE_ORCHESTRATION.md`.
-- Trước lifecycle execution, đọc `.harness/guides/SUBAGENT_EXECUTION.md` và `.harness/workflows/default-lifecycle.md`.
-- Dùng `run.yaml` làm authoritative workflow state.
+- Reply theo ngôn ngữ người dùng; giữ code, command, path, API name, logs, schema keys, package names, và identifiers ở dạng gốc.
+- Trước non-trivial work, đọc `.harness/HARNESS_SKILLS.md`, chọn skill/guide liên quan theo name, description, trigger conditions, và chỉ load phần cần thiết.
+- Không load toàn bộ `.harness/guides/*`, `.harness/subagents/*`, hoặc `.harness/codebase/*` theo mặc định.
+- Dùng `run.yaml` làm authoritative lifecycle state.
 - Không sửa application code trước khi Contract Reviewer approve contract và `run.yaml` cho phép Generator.
 - Evaluator phải độc lập với Generator và phải có evidence thật.
-- Không kết thúc bằng generic “Suggested Next Steps” khi bước tiếp theo có thể được biểu diễn bằng executor dispatch.
-
-## Harness Skill Discovery
-
-This project uses project-local Harness Workflow Skills.
-
-Before non-trivial work, read:
-
-```txt
-.harness/HARNESS_SKILLS.md
-```
-
-Use it as the skill registry. Select the relevant skill by name, description, and trigger conditions. Load only the selected skill file. Do not load every skill file by default.
-
-## Project Context Requirement
-
-Before any run or epic, check whether `.harness/project/*` exists and appears current.
-
-If project context is missing, stale, contradictory, or low-confidence, use the `project-sync` Harness workflow skill from `.harness/HARNESS_SKILLS.md`.
-
-The user may request this skill at any time to refresh project context.
+- Không kết thúc bằng generic “Suggested Next Steps” nếu bước tiếp theo có thể biểu diễn bằng Harness lifecycle routing hoặc executor dispatch.
 
 ## Repository Boundary
 
-`.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, codebase cache, và backlog cho AI-assisted development.
+`.harness/` là workflow infrastructure của target repository. Nó chứa guides, templates, scripts, run records, project adapter files, codebase cache, subagent templates, workflows, và backlog cho AI-assisted development.
 
-`.harness/` không phải application source tree. Khi làm task, inspect source code, tests, runtime behaviour, và architecture thực tế của target repository bên ngoài `.harness/`.
+`.harness/` không phải application source tree.
 
-Harness là seed workflow layer, không phải application source tree.
+Khi làm implementation task, role phù hợp phải inspect source code, tests, runtime behaviour, và architecture thực tế của target repository bên ngoài `.harness/`.
 
-## Project Adapter
+Coordinator không được dùng câu trên như quyền để tự inspect source nhằm implement, debug, repair, verify, hoặc review thay lifecycle roles.
 
-Trước khi lập kế hoạch cho task implementation không tầm thường, đọc các file này nếu có:
+## Context Loading
 
-```txt
-.harness/project/PROJECT_PROFILE.md
-.harness/project/PROJECT_CONTEXT.md
-.harness/project/PROJECT_RULES.md
-.harness/project/PROJECT_VERIFICATION.md
-.harness/project/PROJECT_ARCHITECTURE.md
-.harness/project/PROJECT_GLOSSARY.md
-.harness/project/PROJECT_OPEN_QUESTIONS.md
-```
+Trước implementation work không tầm thường:
 
-Nếu các file này thiếu hoặc có vẻ cũ, đọc `.harness/HARNESS_SKILLS.md` và chạy Harness workflow skill `project-sync`.
+1. Đọc `.harness/HARNESS_SKILLS.md`.
+2. Chọn skill/guide liên quan.
+3. Nếu cần project-level context, đọc các file liên quan trong `.harness/project/*`.
+4. Nếu cần source-navigation hoặc impact context, đọc `.harness/codebase/CODEBASE_INDEX.md` và chỉ các `.harness/codebase/*` docs liên quan.
+5. Nếu project/codebase context thiếu, stale, contradictory, hoặc low-confidence, dùng workflow skill phù hợp như `project-sync` hoặc `codebase-sync`.
 
-Project context chỉ đáng tin khi có evidence hiện tại. Ưu tiên manual notes và quyết định local của target repository khi có xung đột, nhưng ghi rõ uncertainty nếu evidence chưa đủ.
+Không đọc toàn bộ project/codebase cache theo mặc định.
 
-## Codebase Knowledge Base
+## Harness Lifecycle
 
-`.harness/codebase/*` là source-navigation và change-impact cache thuộc target repository. Nó không thay thế `.harness/project/*` và không được duplicate project-level facts.
-
-Trước coding run không tầm thường:
-
-1. Đọc `.harness/project/*` để lấy project-level context.
-2. Đọc `.harness/codebase/CODEBASE_INDEX.md` nếu có.
-3. Chỉ đọc các `.harness/codebase/*` docs liên quan đến task.
-4. Dùng codebase docs để xác định source files, modules, technical flows, và impact areas cần inspect.
-5. Sau đó inspect actual source files trước khi edit.
-6. Search usages trước khi đổi existing functions/classes/routes/commands/exported APIs.
-7. Nếu source evidence mâu thuẫn codebase docs, update `.harness/codebase/*` hoặc mark stale context.
-
-Nếu `.harness/codebase/*` thiếu, stale, contradictory, hoặc low-confidence, đọc `.harness/HARNESS_SKILLS.md` và chạy Harness workflow skill `codebase-sync`.
-
-## Mandatory Harness Lifecycle
-
-Trước khi tạo bất kỳ run nào, classify request:
+Trước khi tạo run, classify request:
 
 ```txt
 User request
-  -> classify as Normal Run or Epic
-  -> create Epic if broad/multi-phase
-  -> create normal run only if bounded
-```
-
-Với mọi implementation task không tầm thường và bounded, tạo một run dưới:
-
-```txt
-.harness/runs/RUN-YYYYMMDD-NNN-task-slug/
-```
-
-Nếu implementation task là một phần của Epic, tạo child run dưới:
-
-```txt
-.harness/runs/EPIC-YYYYMMDD-NNN-task-slug/runs/RUN-NNN-child-task-slug/
-```
+  -> Normal Run nếu bounded và verify được trong một run
+  -> Epic nếu broad, multi-phase, multi-module, long-running, hoặc không verify sạch trong một run
+````
 
 Canonical run artifacts:
 
@@ -114,33 +60,13 @@ run-manifest.md
 06-final-summary.md
 ```
 
-Lifecycle chuẩn:
+Normal runs live under:
 
 ```txt
-Classify Request
-  -> Epic or Normal Run
-  -> Planner subagent
-  -> Contract Reviewer subagent
-  -> Generator subagent
-  -> Evaluator subagent
-  -> Final Summary
+.harness/runs/RUN-YYYYMMDD-NNN-task-slug/
 ```
 
-Luôn update `.harness/runs/RUN_INDEX.md` khi tạo run/epic.
-
-## Long Task / Epic Policy
-
-For long-running tasks, do not create a single giant run.
-
-Epic is a planning and coordination run container, not a standalone metadata folder and not a normal implementation run.
-
-Epic is mandatory when the task has multiple phases, multiple milestones, multiple user flows, multiple modules, uncertain or expanding scope, cannot be verified cleanly in one run, or mentions wording such as `phase`, `phase 1-4`, `part 1-4`, `core loop`, `full feature`, `complete playable`, `end-to-end`, `MVP`, `large task`, or `long task`.
-
-A task named like `phase 1-4` must not become one normal run.
-
-If a task qualifies as an Epic but only one child run is known, Planner must reduce scope to one bounded normal run or ask/derive additional decomposition before implementation. Do not use an oversized normal run as a workaround.
-
-Epic artifacts live under:
+Epic containers live under:
 
 ```txt
 .harness/runs/EPIC-YYYYMMDD-NNN-task-slug/
@@ -152,17 +78,13 @@ Child runs live under:
 .harness/runs/EPIC-YYYYMMDD-NNN-task-slug/runs/RUN-NNN-child-task-slug/
 ```
 
-Create child runs with:
+Luôn update:
 
-```bash
-bash .harness/scripts/new-run.sh --within EPIC-YYYYMMDD-NNN-task-slug "child task"
+```txt
+.harness/runs/RUN_INDEX.md
 ```
 
-Each Epic must be decomposed into smaller child runs. Each child run keeps the normal Planner -> Contract Reviewer -> Generator -> Evaluator -> Final Summary lifecycle through template subagents.
-
-Before creating a run for a long task, check whether an active Epic should own the run.
-
-Relevant guides:
+Detailed classification and Epic rules live in:
 
 ```txt
 .harness/guides/RUN_CLASSIFICATION.md
@@ -171,44 +93,84 @@ Relevant guides:
 
 ## Template-Based Subagent Orchestration
 
-Harness core lifecycle roles MUST be executed by separate spawned subagents.
+Harness core lifecycle roles MUST be executed by separate spawned subagents from fixed templates.
 
-The coordinator MUST call `.harness/scripts/dispatch-role.sh` to create a dispatch artifact for each core role from its predefined template under `.harness/subagents/`.
+Core lifecycle roles:
 
-Core lifecycle roles are:
+1. `planner`
+2. `contract_reviewer`
+3. `generator`
+4. `evaluator`
 
-1. Planner
-2. Contract Reviewer
-3. Generator
-4. Evaluator
+Required templates:
 
-The coordinator MUST NOT create free-form prompts for these roles. `dispatch-role.sh` does not accept free-form role prompts.
+```txt
+.harness/subagents/planner.md
+.harness/subagents/contract-reviewer.md
+.harness/subagents/generator.md
+.harness/subagents/evaluator.md
+```
 
-The coordinator MUST NOT execute these roles itself.
+The coordinator/orchestrator is orchestration-only.
 
-The coordinator is orchestration-only. It MUST NOT perform implementation, review, verification, debugging, or repair work directly.
+The coordinator MUST NOT:
 
-The coordinator MAY make task-specific artifacts available to the selected role template, including:
+* perform Planner, Contract Reviewer, Generator, or Evaluator work directly;
+* create free-form prompts for core lifecycle roles;
+* modify role responsibilities, forbidden actions, required artifacts, output schema, evidence requirements, pass/fail criteria, or independence requirements;
+* write lifecycle role artifacts on behalf of subagents;
+* implement, debug, repair, review, verify, approve, or test application work directly;
+* modify application source files, tests, production configuration, generated production artifacts, or project implementation files;
+* emulate multiple production roles in one session;
+* create `HANDOFF.md` for normal lifecycle transitions;
+* continue in degraded single-session fallback.
 
-- original user request
-- project context summary
-- relevant files
-- previous role artifacts
-- acceptance criteria
-- verification commands
-- constraints
+There is no degraded single-session fallback.
 
-The coordinator MUST NOT modify:
+If required template subagents cannot be spawned, block the run before lifecycle role execution.
 
-- role responsibilities
-- forbidden actions
-- required artifacts
-- output schema
-- evidence requirements
-- pass/fail criteria
-- independence requirements
+## Dispatch Semantics
 
-The coordinator MUST NOT modify application source files, tests, production configuration, generated production artifacts, or project implementation files. Any source/test/config change MUST be performed by the Generator role.
+The coordinator dispatches roles with:
+
+```bash
+bash .harness/scripts/dispatch-role.sh .harness/runs/<RUN_ID> <role>
+```
+
+`dispatch-role.sh` only creates:
+
+```txt
+.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md
+```
+
+It does not spawn, execute, or emulate a subagent.
+
+The runtime executor MUST consume the dispatch artifact and spawn the role-specific subagent from the fixed template.
+
+If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume dispatch artifacts.
+
+Before Planner dispatch, runtime availability must be marked:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> true
+```
+
+If subagent runtime is unavailable:
+
+```bash
+bash .harness/scripts/mark-subagent-runtime.sh .harness/runs/<RUN_ID> false "Subagent runtime unavailable"
+```
+
+Required blocked message:
+
+```text
+Subagent runtime unavailable.
+Harness lifecycle requires template-based subagent orchestration.
+This run is blocked.
+No lifecycle role may be executed in this session.
+```
+
+## Coordinator Write Scope
 
 For coordinator/orchestrator sessions, run the write-scope validator before accepting changed files:
 
@@ -218,185 +180,194 @@ HARNESS_RUN_DIR=".harness/runs/<RUN_ID>" \
 bash .harness/scripts/validate-coordinator-write-scope.sh
 ```
 
-The validator enforces the narrow orchestration metadata allowlist documented in `.harness/guides/SUBAGENT_EXECUTION.md#coordinator-write-scope-validator`. If it fails, stop with `BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION` and route source/test/config work to Generator.
-
-If subagent spawning is unavailable, the run MUST be blocked.
-
-There is no degraded single-session fallback.
-
-## No Subagent Runtime, No Harness Run
-
-Harness lifecycle execution requires real subagent spawning.
-
-If the current runtime cannot spawn subagents, the coordinator MUST block the run before Planner execution.
-
-The coordinator MUST NOT emulate subagents by writing multiple role artifacts in one session.
-
-The coordinator MUST NOT continue in degraded mode.
-
-A blocked run is valid and preferable to a fake multi-role run.
-
-Required blocking message:
+If it fails, stop with:
 
 ```text
-Subagent runtime unavailable.
-Harness lifecycle requires template-based subagent orchestration.
-This run is blocked.
-No lifecycle role may be executed in this session.
+BLOCKED_COORDINATOR_WRITE_SCOPE_VIOLATION
 ```
 
-## Role Independence Audit
+Coordinator may write only narrow orchestration metadata allowed by the validator.
 
-A Harness run is invalid if any of the following is true:
+Coordinator must route source/test/config/implementation changes to Generator.
 
-- Planner, Contract Reviewer, Generator, and Evaluator were performed by the same session.
-- The coordinator wrote lifecycle artifacts on behalf of role subagents.
-- A core role was executed from a free-form prompt instead of a role template.
-- The run continued after detecting unavailable subagent runtime.
-- Evaluator approved without independent evidence.
+## Role Boundaries
 
-## Production Role Separation
+### Planner
 
-Production workflow yêu cầu template subagents riêng cho:
+Planner may inspect relevant project context and source/test files for planning.
 
-- Planner
-- Contract Reviewer
-- Generator
-- Evaluator
-
-Planner tạo planning artifacts nhưng không được implement application code hoặc approve contract của mình. Contract Reviewer review contract và phải approve/reject trong `03-contract-review.md`, nhưng không được sửa application code hoặc rewrite contract âm thầm. Generator chỉ implement sau khi contract được approve và không được tự approve implementation. Evaluator phải là spawned subagent khác với Generator.
-
-Evaluator không được rely vào hidden reasoning hoặc memory từ Planner/Generator. Evaluation chỉ được dựa trên visible artifacts, code diff, command output, runtime evidence, browser evidence, API evidence, logs, và acceptance criteria. Evaluator không được approve chỉ bằng code inspection.
-
-For production-grade implementation work, Planner, Contract Reviewer, Generator, and Evaluator must run as separate template-based subagents.
-
-A single runtime session must not approve its own contract or evaluate its own implementation.
-
-Fallback execution is forbidden. If required template subagents cannot be spawned, block the run before role execution.
-
-Chi tiết:
+Planner writes:
 
 ```txt
-.harness/guides/RUNTIME_ROLE_SEPARATION.md
-.harness/guides/SUBAGENT_EXECUTION.md
+01-planner-brief.md
+02-implementation-contract.md
 ```
 
-## Role Execution
+Planner must not implement code, approve its own contract, or evaluate final output.
 
-Harness uses template-based subagent orchestration, not handoff files, for role transitions.
+### Contract Reviewer
 
-The top-level agent is the coordinator/orchestrator.
+Contract Reviewer reviews `01-planner-brief.md` and `02-implementation-contract.md`.
 
-The coordinator must run:
-
-```bash
-bash .harness/scripts/dispatch-role.sh .harness/runs/<RUN_ID> <role>
-```
-
-for the required role whenever the workflow enters a role-owned phase.
-
-`dispatch-role.sh` creates only:
+Contract Reviewer writes:
 
 ```txt
-.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md
+03-contract-review.md
 ```
 
-It does not spawn, execute, or emulate a subagent.
-
-The runtime executor MUST consume the dispatch artifact and spawn the required role-specific subagent from:
+The final line of `03-contract-review.md` MUST be exactly one of:
 
 ```txt
-.harness/subagents/<role>.md
+- Status: approved
+- Status: rejected_requires_revision
 ```
 
-Required role templates:
+Contract Reviewer must not implement code, silently rewrite the contract, or evaluate final implementation.
 
-- `.harness/subagents/planner.md`
-- `.harness/subagents/contract-reviewer.md`
-- `.harness/subagents/generator.md`
-- `.harness/subagents/evaluator.md`
+### Generator
 
-If no real runtime adapter exists, Harness lifecycle execution is blocked unless the current agent/runtime has native subagent spawning and can consume `.harness/runs/<RUN_ID>/dispatch/<role>.dispatch.md`.
+Generator implements only after contract approval.
 
-The coordinator must not create `HANDOFF.md` to move between roles.
+Generator writes:
 
-The coordinator must not emulate multiple production roles in one agent response.
+```txt
+04-implementation-report.md
+```
 
-## Evaluator Failure Routing
+Generator may edit application source, tests, docs, and config only within the approved contract.
 
-When Evaluator returns `FAIL`, `REJECTED`, `NEEDS_FIX`, `blocked_insufficient_evidence`, or any equivalent non-passing result, the coordinator MUST NOT fix the implementation directly.
+Before editing implementation files, Generator must:
 
-The coordinator may read only the evaluator decision summary, create a bounded Generator rework packet from `.harness/templates/generator-rework-packet.template.md`, spawn Generator, wait for Generator output, and then spawn Evaluator again.
+* read target files first;
+* inspect nearby code;
+* search usages before changing existing functions, classes, routes, commands, or exported APIs;
+* avoid unrelated refactors;
+* keep changes inside the approved contract.
 
-If the runtime cannot spawn Generator for required implementation or rework, stop with:
+Generator must not approve or evaluate its own work.
+
+### Evaluator
+
+Evaluator independently evaluates implementation against:
+
+* original user request;
+* `01-planner-brief.md`;
+* approved `02-implementation-contract.md`;
+* `03-contract-review.md`;
+* `04-implementation-report.md`;
+* code diff;
+* command output;
+* runtime/browser/API evidence where relevant;
+* acceptance criteria.
+
+Evaluator writes:
+
+```txt
+05-evaluator-report.md
+```
+
+The final line of `05-evaluator-report.md` MUST be exactly one of:
+
+```txt
+- Status: pass
+- Status: fail
+- Status: blocked_insufficient_evidence
+```
+
+Evaluator must not patch implementation, weaken acceptance criteria, or approve based only on code inspection or Generator summary.
+
+## Rework Routing
+
+If Evaluator returns:
+
+```txt
+- Status: fail
+```
+
+or:
+
+```txt
+- Status: blocked_insufficient_evidence
+```
+
+the coordinator MUST NOT fix implementation directly.
+
+The coordinator may read only the evaluator decision summary, create a bounded Generator rework packet from:
+
+```txt
+.harness/templates/generator-rework-packet.template.md
+```
+
+Then coordinator must dispatch Generator via `dispatch-role.sh`.
+
+The runtime executor must spawn Generator from the dispatch artifact.
+
+After Generator updates `04-implementation-report.md`, coordinator dispatches Evaluator again.
+
+If Generator cannot be spawned for required implementation or rework, stop with:
 
 ```text
 BLOCKED_REQUIRED_GENERATOR_UNAVAILABLE
 ```
 
-## Execution Namespace
-
-```txt
-.harness/runs/RUN-*                 # normal runs
-.harness/runs/EPIC-*                # Epic containers
-.harness/runs/EPIC-*/runs/RUN-*     # child runs
-```
-
-Không tạo primary Epic data trong `.harness/epics/*`; nếu tồn tại thì chỉ coi là legacy/read-only.
-
 ## Verification
 
-Chạy verification thật khi có thể:
+Run verification through the appropriate role.
+
+Default verification guidance lives in:
+
+```txt
+.harness/guides/TESTING_POLICY.md
+```
+
+Common commands, when relevant:
 
 ```bash
 bash .harness/scripts/verify.sh
-```
-
-Nếu app có runtime UI hoặc API behaviour, chạy thêm:
-
-```bash
 bash .harness/scripts/smoke.sh
 ```
 
-Với Vite app:
+For Vite apps, when relevant:
 
 ```bash
 APP_URL=http://localhost:5173 bash .harness/scripts/smoke.sh
 ```
 
-Với UI task, build success, static checks, hoặc curl smoke chưa đủ. Evaluator phải có behaviour-level evidence cho từng UI behaviour bắt buộc.
-
-## Code Change Rules
-
-Trước khi edit files:
-
-- đọc target file trước;
-- inspect nearby code;
-- search usages trước khi đổi existing functions/classes;
-- tránh unrelated refactors;
-- giữ thay đổi trong approved contract.
-
-Không sửa Harness guides, templates, hoặc scripts trừ khi user yêu cầu. Nếu một run phát hiện cải tiến Harness tái sử dụng được, thêm proposal cụ thể vào:
-
-```txt
-.harness/backlog/HARNESS_BACKLOG.md
-```
+For UI tasks, build success, static checks, or curl smoke are insufficient. Evaluator must provide behaviour-level evidence for required UI behaviours.
 
 ## Parallel Work
 
-Nếu user đưa nhiều task không liên quan, tạo một run cho mỗi task.
+If the user gives multiple unrelated tasks, create one run per task.
 
-Trước implementation, kiểm tra active runs để phát hiện file conflicts:
+Before implementation, check active runs for possible file conflicts using the relevant guide/script.
 
-```bash
-bash .harness/scripts/check-conflicts.sh RUN-YYYYMMDD-NNN-task-slug
+Parallel work policy lives in:
+
+```txt
+.harness/guides/PARALLEL_WORK.md
 ```
 
-Nếu các run có thể modify cùng file, ghi conflict và ưu tiên sequence work, separate branch, hoặc worktree. Nếu conflict có thể gây overwrite hoặc làm mất thay đổi của user/run khác, dừng và surface tradeoff.
+Do not overwrite user work or another run’s work. If conflict can cause data loss or ambiguous ownership, stop and surface the tradeoff.
 
-## When To Read Guides
+## Legacy Artifacts Are Forbidden
 
-Chỉ load guide liên quan:
+Do not create or rely on:
+
+```txt
+HANDOFF.md
+03-evaluator-contract-review.md
+04-generator-worklog.md
+06-fix-report.md
+07-final-summary.md
+```
+
+Current canonical artifacts are `00` through `06-final-summary.md`.
+
+## Guide Routing
+
+Only load guides relevant to the current task.
+
+Available guide families may include:
 
 ```txt
 .harness/guides/HARNESS_PRINCIPLES.md
@@ -414,13 +385,19 @@ Chỉ load guide liên quan:
 .harness/guides/SUBAGENT_EXECUTION.md
 ```
 
-Không load toàn bộ guides theo mặc định.
+Do not load the entire guide set by default.
 
 ## Priority
 
+When instructions conflict, follow this order:
+
 1. Current user request.
 2. Root `AGENTS.md`.
-3. `.harness/project/*` và `.harness/codebase/*` liên quan.
-4. `run.yaml` và artifact trong current run.
-5. Relevant `.harness/guides/*`.
-6. Templates/scripts trong `.harness/`.
+3. Relevant `.harness/project/*`.
+4. Relevant `.harness/codebase/*`.
+5. `run.yaml` and current run artifacts.
+6. Relevant `.harness/guides/*`.
+7. Relevant `.harness/workflows/*`.
+8. Relevant `.harness/subagents/*`.
+9. Templates/scripts in `.harness/`.
+10. Agent defaults or assumptions.

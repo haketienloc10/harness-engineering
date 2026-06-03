@@ -259,29 +259,29 @@ Activated responsibilities:
 
 ## Current Assessment
 
-| Level | Status | Evidence |
-| --- | --- | --- |
-| H0 | Passed | Harness docs, templates, and durable records exist. |
-| H1 | Achieved | `AGENTS.md`, `docs/HARNESS.md`, `docs/FEATURE_INTAKE.md`, `docs/ARCHITECTURE.md`, `docs/templates/*`, and `docs/TEST_MATRIX.md` exist. |
-| H2 | Achieved | `scripts/bin/harness-cli`, `scripts/schema/001-init.sql`, durable story records, `docs/HARNESS_COMPONENTS.md`, `docs/HARNESS_MATURITY.md`, `docs/TRACE_SPEC.md`, and `docs/CONTEXT_RULES.md` define the Phase 2 surface. |
-| H3 | Partial | Phase 3 adds `scripts/bin/harness-cli score-trace`, enriched friction context, and the backlog outcome loop; Phase 4 auto-scores traces on write. Component-level benchmark attribution remains open. |
-| H4 | Partial | Phase 4 adds story-level `verify_command`, `story verify`, and trace-time verification warnings. Batch verification and proof-column automation remain open. |
-| H5 | Not achieved | No self-improvement protocol or automated evolution loop exists. |
+| Level | Status       | Evidence                                                                                                                                                                                                                 |
+| ----- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| H0    | Passed       | Harness docs, templates, and durable records exist.                                                                                                                                                                      |
+| H1    | Achieved     | `AGENTS.md`, `docs/HARNESS.md`, `docs/FEATURE_INTAKE.md`, `docs/ARCHITECTURE.md`, `docs/templates/*`, and `docs/TEST_MATRIX.md` exist.                                                                                   |
+| H2    | Achieved     | `scripts/bin/harness-cli`, `scripts/schema/001-init.sql`, durable story records, `docs/HARNESS_COMPONENTS.md`, `docs/HARNESS_MATURITY.md`, `docs/TRACE_SPEC.md`, and `docs/CONTEXT_RULES.md` define the Phase 2 surface. |
+| H3    | Partial      | Phase 3 adds `scripts/bin/harness-cli score-trace`, enriched friction context, and the backlog outcome loop; Phase 4 auto-scores traces on write. Component-level benchmark attribution remains open.                    |
+| H4    | Partial      | Phase 4 adds story-level `verify_command`, `story verify`, and trace-time verification warnings. Batch verification and proof-column automation remain open.                                                             |
+| H5    | Not achieved | No self-improvement protocol or automated evolution loop exists.                                                                                                                                                         |
 
 ## Responsibility Activation
 
-| Responsibility | H0 | H1 | H2 | H3 | H4 | H5 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Task specification | Missing | Covered | Covered | Covered | Covered | Covered |
-| Context selection | Missing | Partial | Covered | Covered | Covered | Covered |
-| Tool access | Missing | Partial | Partial | Partial | Covered | Covered |
-| Project memory | Missing | Covered | Covered | Covered | Covered | Covered |
-| Task state | Missing | Partial | Covered | Covered | Covered | Covered |
-| Observability | Missing | Missing | Partial | Covered | Covered | Covered |
-| Failure attribution | Missing | Missing | Partial | Covered | Covered | Covered |
-| Verification | Missing | Partial | Partial | Partial | Covered | Covered |
-| Permissions | Missing | Partial | Partial | Partial | Covered | Covered |
-| Entropy auditing | Missing | Missing | Partial | Covered | Covered | Covered |
+| Responsibility         | H0      | H1      | H2      | H3      | H4      | H5      |
+| ---------------------- | ------- | ------- | ------- | ------- | ------- | ------- |
+| Task specification     | Missing | Covered | Covered | Covered | Covered | Covered |
+| Context selection      | Missing | Partial | Covered | Covered | Covered | Covered |
+| Tool access            | Missing | Partial | Partial | Partial | Covered | Covered |
+| Project memory         | Missing | Covered | Covered | Covered | Covered | Covered |
+| Task state             | Missing | Partial | Covered | Covered | Covered | Covered |
+| Observability          | Missing | Missing | Partial | Covered | Covered | Covered |
+| Failure attribution    | Missing | Missing | Partial | Covered | Covered | Covered |
+| Verification           | Missing | Partial | Partial | Partial | Covered | Covered |
+| Permissions            | Missing | Partial | Partial | Partial | Covered | Covered |
+| Entropy auditing       | Missing | Missing | Partial | Covered | Covered | Covered |
 | Intervention recording | Missing | Partial | Partial | Covered | Covered | Covered |
 
 ## Phase 3 Interpretation

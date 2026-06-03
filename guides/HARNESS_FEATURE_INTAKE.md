@@ -10,20 +10,22 @@ Mọi yêu cầu từ người dùng (từ dự án mới đến tính năng ho�
 `User prompt` ➡️ `Phân loại Input Type` ➡️ `Định dạng thành Work Item` ➡️ `Tìm Docs/Stories liên quan` ➡️ `Chạy Risk Checklist` ➡️ `Chọn Lane (Tiny/Normal/High-risk)`.
 
 ## 1. Phân loại Yêu cầu đầu vào (Input Types)
+
 Xác định loại yêu cầu để biết kết quả (artifact) cần tạo ra là gì trước khi chọn luồng rủi ro:
 
-* **New spec**: Chuyển spec do user cung cấp thành docs đạt chuẩn Harness. (Tạo ra: Product docs, candidate epics, decisions).
-* **Spec slice**: Hiện thực hóa một phần hành vi từ spec đã duyệt. (Tạo ra: Story packet).
-* **Change request**: Thay đổi, sửa lỗi, tinh chỉnh hành vi đã được duyệt. (Tạo ra: Story packet hoặc vá lỗi trực tiếp).
-* **New initiative**: Thêm một tính năng/khu vực sản phẩm lớn cần nhiều stories. (Tạo ra: Initiative notes + story packets).
-* **Maintenance request**: Thay đổi kỹ thuật, vận hành, hoặc thư viện phụ thuộc. (Tạo ra: Story packet, validation report, hoặc decision).
-* **Harness improvement**: Cải thiện cách User và Agent cộng tác. (Sửa trực tiếp docs hoặc dùng `scripts/bin/harness-cli backlog add`).
+- **New spec**: Chuyển spec do user cung cấp thành docs đạt chuẩn Harness. (Tạo ra: Product docs, candidate epics, decisions).
+- **Spec slice**: Hiện thực hóa một phần hành vi từ spec đã duyệt. (Tạo ra: Story packet).
+- **Change request**: Thay đổi, sửa lỗi, tinh chỉnh hành vi đã được duyệt. (Tạo ra: Story packet hoặc vá lỗi trực tiếp).
+- **New initiative**: Thêm một tính năng/khu vực sản phẩm lớn cần nhiều stories. (Tạo ra: Initiative notes + story packets).
+- **Maintenance request**: Thay đổi kỹ thuật, vận hành, hoặc thư viện phụ thuộc. (Tạo ra: Story packet, validation report, hoặc decision).
+- **Harness improvement**: Cải thiện cách User và Agent cộng tác. (Sửa trực tiếp docs hoặc dùng `scripts/bin/harness-cli backlog add`).
 
 **Lưu ý quan trọng**: Không tạo hay mở rộng một file Spec khổng lồ. Hãy sử dụng Product docs, Stories, Decisions và Initiative notes làm tài liệu sống (living surface).
 
 ## 2. Quét Checklist Rủi ro (Risk Checklist) & Cổng cứng (Hard Gates)
 
 Đánh dấu 1 cờ (flag) cho mỗi yếu tố rủi ro bị ảnh hưởng:
+
 1. **Auth**: Đăng nhập, đăng xuất, sessions, JWT, mật khẩu, refresh token.
 2. **Authorization**: Quyền (roles, permissions), phạm vi công ty hoặc tenant.
 3. **Data model**: Lược đồ database (schema), migrations, tính duy nhất, xóa, vòng đời dữ liệu.
@@ -36,28 +38,31 @@ Xác định loại yêu cầu để biết kết quả (artifact) cần tạo r
 10. **Multi-domain**: Thay đổi nhiều domain sản phẩm cùng lúc.
 
 **Các Cổng cứng (Hard Gates) tự động đẩy task lên High-Risk:**
-* Auth (Xác thực).
-* Authorization (Phân quyền).
-* Có rủi ro mất mát dữ liệu hoặc cần migration (Data loss/migration).
-* Audit/security (Bảo mật/Kiểm toán).
-* Hành vi của nhà cung cấp bên ngoài (External provider behavior).
-* Gỡ bỏ hoặc làm yếu đi các yêu cầu xác thực dữ liệu (Validation requirements).
+
+- Auth (Xác thực).
+- Authorization (Phân quyền).
+- Có rủi ro mất mát dữ liệu hoặc cần migration (Data loss/migration).
+- Audit/security (Bảo mật/Kiểm toán).
+- Hành vi của nhà cung cấp bên ngoài (External provider behavior).
+- Gỡ bỏ hoặc làm yếu đi các yêu cầu xác thực dữ liệu (Validation requirements).
 
 ## 3. Phân luồng Mức độ Rủi ro (Lanes & Classification)
 
 Dựa vào số cờ rủi ro (flags) hoặc cổng cứng (hard gates), task sẽ được xếp vào 1 trong 3 Lane sau:
 
 ### 3.1. Lane: Tiny (0-1 Flags)
-* **Phạm vi áp dụng:** Lỗi nhỏ, sửa docs, sửa từ ngữ (copy), thay đổi siêu hẹp. Cài đặt project ban đầu (ví dụ: cài thư viện, setup server entrypoint, thêm health/smoke endpoint cục bộ) miễn là chưa tạo schema, CRUD, auth, hay tích hợp bên thứ ba.
-* **Yêu cầu thực thi:**
+
+- **Phạm vi áp dụng:** Lỗi nhỏ, sửa docs, sửa từ ngữ (copy), thay đổi siêu hẹp. Cài đặt project ban đầu (ví dụ: cài thư viện, setup server entrypoint, thêm health/smoke endpoint cục bộ) miễn là chưa tạo schema, CRUD, auth, hay tích hợp bên thứ ba.
+- **Yêu cầu thực thi:**
   - Sửa code trực tiếp (Patch directly).
   - Cập nhật tài liệu nếu bị ảnh hưởng.
   - Chạy các công cụ quick checks.
   - Cập nhật lại harness (bằng `backlog add`) chỉ khi gặp vấn đề (friction).
 
 ### 3.2. Lane: Normal (1-3 Flags)
-* **Phạm vi áp dụng:** Phạm vi ảnh hưởng có giới hạn (bounded blast radius), lớn bằng 1 Story. Nếu có 2-3 cờ rủi ro, cần chú trọng validation mạnh hơn.
-* **Yêu cầu thực thi:**
+
+- **Phạm vi áp dụng:** Phạm vi ảnh hưởng có giới hạn (bounded blast radius), lớn bằng 1 Story. Nếu có 2-3 cờ rủi ro, cần chú trọng validation mạnh hơn.
+- **Yêu cầu thực thi:**
   - **Bắt buộc** tạo hoặc cập nhật 1 file Story từ mẫu `docs/templates/story.md`.
   - Liên kết với các Product docs liên quan.
   - Thêm hoặc cập nhật kỳ vọng test (validation expectations).
@@ -66,8 +71,9 @@ Dựa vào số cờ rủi ro (flags) hoặc cổng cứng (hard gates), task s�
     `scripts/bin/harness-cli story add` và `scripts/bin/harness-cli story update`.
 
 ### 3.3. Lane: High-Risk (4+ Flags hoặc dính Hard Gates)
-* **Phạm vi áp dụng:** Có dính cổng cứng (ví dụ: Auth) hoặc có tác động lan rộng đến bảo mật, dữ liệu, hợp đồng API, nền tảng. Có thể hạ cấp nếu User chủ động thu hẹp phạm vi rất chặt.
-* **Yêu cầu thực thi:**
+
+- **Phạm vi áp dụng:** Có dính cổng cứng (ví dụ: Auth) hoặc có tác động lan rộng đến bảo mật, dữ liệu, hợp đồng API, nền tảng. Có thể hạ cấp nếu User chủ động thu hẹp phạm vi rất chặt.
+- **Yêu cầu thực thi:**
   - **Bắt buộc** tạo một thư mục riêng trong `docs/templates/high-risk-story/`.
   - Phải điền đầy đủ các file: `execplan.md`, `overview.md`, `design.md`, và `validation.md`.
   - Nếu định hướng không rõ ràng, **phải dừng lại và yêu cầu User xác nhận** trước khi code.

@@ -3,6 +3,7 @@
 Add project-specific agent instructions here.
 
 <!-- HARNESS:BEGIN -->
+
 ## Harness
 
 This repo uses Harness. Before work, read:
@@ -21,4 +22,5 @@ Use the Rust Harness CLI at `scripts/bin/harness-cli` on macOS/Linux or
 `scripts/bin/harness-cli.exe` on Windows as the main operational tool.
 
 All markdown files must use 80-character hard wrapping for standard paragraphs.
+
 <!-- HARNESS:END -->

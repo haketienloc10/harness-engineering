@@ -13,6 +13,8 @@ future user-provided spec.
 - `HARNESS_BACKLOG.md`: legacy improvement list; current improvement records are
   stored with `scripts/bin/harness-cli backlog`.
 - `GLOSSARY.md`: shared terms.
+- `CONTEXT_RULES.md`: Context rules help agents decide what to read, when to
+  read it, and when to stop reading.
 
 ## Folders
 

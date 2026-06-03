@@ -17,6 +17,8 @@ This repo uses Harness. Before work, read:
 - `docs/HARNESS_BACKLOG.md`: legacy improvement list; current improvement
   records are stored with `scripts/bin/harness-cli backlog`.
 - `docs/GLOSSARY.md`: shared terms.
+- `docs/CONTEXT_RULES.md`: Context rules help agents decide what to read, when
+  to read it, and when to stop reading.
 
 Use the Rust Harness CLI at `scripts/bin/harness-cli` on macOS/Linux or
 `scripts/bin/harness-cli.exe` on Windows as the main operational tool.

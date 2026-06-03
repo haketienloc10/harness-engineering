@@ -1,8 +1,7 @@
 # Harness Components
 
-This taxonomy maps the current `repository-harness` repository to two
-component frameworks used by Phase 2 and updated by Phase 3 active
-observability work:
+This taxonomy maps the current `repository-harness` repository to two component
+frameworks used by Phase 2 and updated by Phase 3 active observability work:
 
 - Runtime Substrate responsibilities: the 11 responsibility areas the harness
   should cover.
@@ -47,8 +46,8 @@ Status values:
 
 ## File Inventory
 
-Every tracked project file plus the Phase 2 input file is mapped to at least
-one Runtime Substrate responsibility.
+Every tracked project file plus the Phase 2 input file is mapped to at least one
+Runtime Substrate responsibility.
 
 | File                                                                         | Primary Responsibility | Secondary Responsibilities                    |
 | ---------------------------------------------------------------------------- | ---------------------- | --------------------------------------------- |
@@ -131,8 +130,7 @@ Covered responsibilities:
 - Context selection.
 - Project memory.
 - Task state.
-- Verification.
-  Partial responsibilities:
+- Verification. Partial responsibilities:
 
 - Tool access.
 - Observability.

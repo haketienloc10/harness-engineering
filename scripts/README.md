@@ -75,8 +75,8 @@ scripts/bin/harness-cli query stats
 scripts/bin/harness-cli query sql ...
 ```
 
-`scripts/bin/harness-cli import brownfield` seeds or refreshes the durable database
-from existing Harness v0 markdown in `docs/TEST_MATRIX.md`,
+`scripts/bin/harness-cli import brownfield` seeds or refreshes the durable
+database from existing Harness v0 markdown in `docs/TEST_MATRIX.md`,
 `docs/decisions/`, and `docs/HARNESS_BACKLOG.md`. This keeps already-installed
 Harness repos on the Rust CLI path without losing their populated operating
 docs.
@@ -87,14 +87,13 @@ The upstream installer applies the Harness v0 operating files and folder
 structure to a target project directory. It defaults to the current directory,
 accepts a target path, and asks interactive users whether to `1. Merge`,
 `2. Override`, or `3. Stop` when the target already contains `AGENTS.md`,
-`docs/`, or `scripts/`.
-Non-interactive installs stop on those protected paths unless `--merge` or
-`--override` is provided. Use `--merge` as the safe update path for repositories
-that already have Harness: it keeps existing files in place and creates only
-missing Harness files. Add `--refresh-agent-shim` when an older install has the
-full generated Harness guide in `AGENTS.md` and should move to the small stable
-shim. Use `--override` only when replacing the protected Harness surface is
-intentional.
+`docs/`, or `scripts/`. Non-interactive installs stop on those protected paths
+unless `--merge` or `--override` is provided. Use `--merge` as the safe update
+path for repositories that already have Harness: it keeps existing files in
+place and creates only missing Harness files. Add `--refresh-agent-shim` when an
+older install has the full generated Harness guide in `AGENTS.md` and should
+move to the small stable shim. Use `--override` only when replacing the
+protected Harness surface is intentional.
 
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/haketienloc10/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --yes
@@ -123,8 +122,8 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/repository-harness/m
 `--refresh-agent-shim` backs up `AGENTS.md` before changing it. If the existing
 file is recognized as the old Harness-generated operating guide, the installer
 replaces it with the current shim. Otherwise it appends or replaces only the
-marked `<!-- HARNESS:BEGIN -->` block so project-specific instructions remain
-in place.
+marked `<!-- HARNESS:BEGIN -->` block so project-specific instructions remain in
+place.
 
 The installer must stay limited to harness files. Do not use it to scaffold
 application source folders, package scripts, CI, tests, platform shells, or fake
@@ -144,8 +143,8 @@ directory, such as a local `file:///.../dist` directory created by
 ## Schema Migrations
 
 Migration files live under `scripts/schema/` and are named `NNN-description.sql`
-where `NNN` is a zero-padded version number. Run `scripts/bin/harness-cli migrate` to
-apply pending migrations.
+where `NNN` is a zero-padded version number. Run
+`scripts/bin/harness-cli migrate` to apply pending migrations.
 
 ## Future Command Contract
 
@@ -191,10 +190,9 @@ For cross-compilation, pass a Cargo target triple:
 scripts/build-harness-cli-release.sh --target x86_64-unknown-linux-gnu
 ```
 
-GitHub releases are produced by
-`.github/workflows/harness-cli-release.yml`. Push a tag matching `v*` or
-`harness-cli-v*` to run the verification job, build all supported targets on
-native hosted runners, and upload these release assets:
+GitHub releases are produced by `.github/workflows/harness-cli-release.yml`.
+Push a tag matching `v*` or `harness-cli-v*` to run the verification job, build
+all supported targets on native hosted runners, and upload these release assets:
 
 - `harness-cli-macos-arm64`
 - `harness-cli-macos-arm64.sha256`

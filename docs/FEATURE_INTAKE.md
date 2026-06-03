@@ -53,9 +53,9 @@ Use for low-risk docs, copy, names, or narrow edits.
 Also use for initial project setup when the work is limited to installing
 declared dependencies, wiring a server entrypoint, adding a health/smoke
 endpoint, or opening a local development database connection without creating
-domain schema, CRUD behavior, auth, authorization, provider integration, or
-data migration. A health endpoint in a new benchmark or scaffolded project is
-smoke proof, not a public contract escalation by itself.
+domain schema, CRUD behavior, auth, authorization, provider integration, or data
+migration. A health endpoint in a new benchmark or scaffolded project is smoke
+proof, not a public contract escalation by itself.
 
 Requirements:
 
@@ -89,9 +89,9 @@ Requirements:
 - Ask for human confirmation before implementation if direction is ambiguous.
 - Record a durable decision when behavior, architecture, authorization, data
   ownership, API shape, or validation requirements change meaningfully. Use a
-  `docs/decisions/NNNN-*.md` file from `docs/templates/decision.md`, then add
-  or refresh the durable row with `scripts/bin/harness-cli decision add`.
-  Decision text in a trace is not a durable decision record.
+  `docs/decisions/NNNN-*.md` file from `docs/templates/decision.md`, then add or
+  refresh the durable row with `scripts/bin/harness-cli decision add`. Decision
+  text in a trace is not a durable decision record.
 
 ## Risk Checklist
 

@@ -198,13 +198,13 @@ scripts/bin/harness-cli backlog add --title "<short name>" --pain "<what was har
 Use the backlog outcome loop for improvements that are expected to change agent
 behavior or validation results:
 
-1. When creating the backlog item, fill `--predicted` with the measurable
-   impact expected from the improvement.
+1. When creating the backlog item, fill `--predicted` with the measurable impact
+   expected from the improvement.
 2. When closing the item, fill `--outcome` with the actual measured result or
    review evidence.
-3. Use `scripts/bin/harness-cli query backlog --open` to review proposed and accepted
-   items, and `scripts/bin/harness-cli query backlog --closed` to compare predictions
-   with outcomes after implementation.
+3. Use `scripts/bin/harness-cli query backlog --open` to review proposed and
+   accepted items, and `scripts/bin/harness-cli query backlog --closed` to
+   compare predictions with outcomes after implementation.
 
 The `harness_friction` field on traces also captures per-task friction so
 patterns can be queried later:
@@ -213,9 +213,9 @@ patterns can be queried later:
 scripts/bin/harness-cli query friction
 ```
 
-Backlog risk uses the same lane vocabulary as intake and stories:
-`tiny`, `normal`, or `high-risk`. Use `--risk tiny` for low-risk follow-up
-items; `low` is not a valid lane.
+Backlog risk uses the same lane vocabulary as intake and stories: `tiny`,
+`normal`, or `high-risk`. Use `--risk tiny` for low-risk follow-up items; `low`
+is not a valid lane.
 
 ## Task Loop
 

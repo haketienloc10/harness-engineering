@@ -19,8 +19,8 @@ Harness instructions and CLI help must distinguish durable records from trace
 evidence and must show the current Rust CLI command shape at the point agents
 need it:
 
-- High-risk behavior changes require a markdown decision under
-  `docs/decisions/` and a durable `decision` row.
+- High-risk behavior changes require a markdown decision under `docs/decisions/`
+  and a durable `decision` row.
 - Trace `--decisions` is evidence for trace quality, not the decision log.
 - `story update` proof flags use `1` and `0`.
 - `story verify <id>` only runs the configured `verify_command`; proof flags

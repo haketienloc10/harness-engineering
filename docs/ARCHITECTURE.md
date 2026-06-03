@@ -104,8 +104,8 @@ unknown input
 ```
 
 Inner layers should work with meaningful product types such as `UserId`,
-`AccountId`, `WorkspaceId`, `Role`, `DateRange`, or domain-specific IDs,
-rather than repeatedly validating raw strings.
+`AccountId`, `WorkspaceId`, `Role`, `DateRange`, or domain-specific IDs, rather
+than repeatedly validating raw strings.
 
 ## Command/Query Boundary
 

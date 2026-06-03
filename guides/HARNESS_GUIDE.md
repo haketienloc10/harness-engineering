@@ -1,16 +1,16 @@
 # Hướng dẫn Vận hành Quy trình Harness (Từ lý thuyết đến thực hành)
 
 Hướng dẫn này được tổng hợp dựa trên luồng tài liệu xuất phát từ `AGENTS.md`,
-giúp bạn hiểu và thực thi đúng vòng đời của một luồng công việc (task) trong
-dự án.
+giúp bạn hiểu và thực thi đúng vòng đời của một luồng công việc (task) trong dự
+án.
 
 ---
 
 ## 1. Khởi động & Nắm bắt bối cảnh (AGENTS.md & README.md)
 
 - **Nguyên tắc cốt lõi:** Luôn bắt đầu bằng việc đọc `AGENTS.md` (chỉ thị dự
-  án). Tài liệu này sẽ dẫn bạn tới `docs/README.md` và `docs/HARNESS.md` để
-  hiểu quy tắc cộng tác.
+  án). Tài liệu này sẽ dẫn bạn tới `docs/README.md` và `docs/HARNESS.md` để hiểu
+  quy tắc cộng tác.
 - **Công cụ chính:** Mọi hành động quản lý (intake, story, trace...) không được
   sửa file thủ công (trừ các file `.md` tài liệu/template) mà phải thông qua
   CLI: `scripts/bin/harness-cli` (lưu trữ tại SQLite db `harness.db`).
@@ -37,8 +37,8 @@ Khi User đưa ra một yêu cầu mới, **không bắt tay vào code ngay**:
 - **Kiến trúc:** Dựa theo `docs/ARCHITECTURE.md`, luôn tuân thủ nguyên tắc
   "Parse-First Boundary Rule" (kiểm tra và parse dữ liệu ở ranh giới) và
   "Dependency Rule" (lớp trong không phụ thuộc lớp ngoài).
-- **Quyết định (Decision):** Đối với các tác vụ high-risk làm thay đổi kiến
-  trúc hoặc bảo mật, hãy thảo luận với User. Sau khi chốt, tạo file dựa trên
+- **Quyết định (Decision):** Đối với các tác vụ high-risk làm thay đổi kiến trúc
+  hoặc bảo mật, hãy thảo luận với User. Sau khi chốt, tạo file dựa trên
   `docs/templates/decision.md` vào `docs/decisions/` và ghi nhận bằng lệnh:
   `scripts/bin/harness-cli decision add...`
 

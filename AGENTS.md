@@ -14,8 +14,8 @@ This repo uses Harness. Before work, read:
 - `docs/ARCHITECTURE.md`: architecture discovery and boundary rules.
 - `docs/TEST_MATRIX.md`: legacy proof map; current proof status is queried with
   `scripts/bin/harness-cli query matrix`.
-- `docs/HARNESS_BACKLOG.md`: legacy improvement list; current improvement records
-  are stored with `scripts/bin/harness-cli backlog`.
+- `docs/HARNESS_BACKLOG.md`: legacy improvement list; current improvement
+  records are stored with `scripts/bin/harness-cli backlog`.
 - `docs/GLOSSARY.md`: shared terms.
 
 Use the Rust Harness CLI at `scripts/bin/harness-cli` on macOS/Linux or

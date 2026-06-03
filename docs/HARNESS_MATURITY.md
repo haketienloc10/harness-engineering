@@ -1,7 +1,7 @@
 # Harness Maturity Ladder
 
-This ladder defines how `repository-harness` should progress from static
-agent instructions to measurable harness improvement.
+This ladder defines how `repository-harness` should progress from static agent
+instructions to measurable harness improvement.
 
 The levels are intentionally verifiable. A level is achieved only when its
 criteria can be inspected in repository files, durable Harness records, or
@@ -48,8 +48,7 @@ state may still be manual or incomplete.
 Criteria:
 
 - `AGENTS.md` points agents to the Harness operating docs.
-- `docs/HARNESS.md`, `docs/FEATURE_INTAKE.md`, and `docs/ARCHITECTURE.md`
-  exist.
+- `docs/HARNESS.md`, `docs/FEATURE_INTAKE.md`, and `docs/ARCHITECTURE.md` exist.
 - Story, decision, and validation templates exist under `docs/templates/`.
 - `docs/TEST_MATRIX.md` defines proof columns and status meanings.
 
@@ -89,8 +88,8 @@ traces with predictable depth.
 
 Criteria:
 
-- `scripts/bin/harness-cli` can record intake, story, decision, backlog, and trace
-  data in `harness.db`.
+- `scripts/bin/harness-cli` can record intake, story, decision, backlog, and
+  trace data in `harness.db`.
 - `scripts/schema/001-init.sql` defines durable tables for intake, story,
   decision, backlog, and trace records.
 - `docs/HARNESS_COMPONENTS.md` maps files and responsibilities.
@@ -118,9 +117,8 @@ Benchmark indicators:
 
 Current status:
 
-- Achieved. Durable state exists, and the Phase 2 docs define the
-  observability and context specification. Phase 3 active scoring builds on
-  this layer.
+- Achieved. Durable state exists, and the Phase 2 docs define the observability
+  and context specification. Phase 3 active scoring builds on this layer.
 
 Activated responsibilities:
 
@@ -138,7 +136,8 @@ into prioritized improvements.
 Criteria:
 
 - Trace quality can be scored by a repeatable command or benchmark step.
-- Harness friction can be grouped by component from `docs/HARNESS_COMPONENTS.md`.
+- Harness friction can be grouped by component from
+  `docs/HARNESS_COMPONENTS.md`.
 - Backlog items include predicted impact and actual outcome after completion.
 - Benchmark comparison output identifies which harness responsibility moved or
   regressed.
@@ -160,11 +159,11 @@ Benchmark indicators:
 
 Current status:
 
-- Partially achieved by Phase 3. `scripts/bin/harness-cli score-trace` scores trace
-  quality against tier rules, `query friction` includes linked intake context,
-  the `trace` command now prints that score at write time, and the backlog
-  outcome loop documents predicted impact versus actual outcome. Full H3 still
-  requires benchmark comparison output that attributes moved or regressed
+- Partially achieved by Phase 3. `scripts/bin/harness-cli score-trace` scores
+  trace quality against tier rules, `query friction` includes linked intake
+  context, the `trace` command now prints that score at write time, and the
+  backlog outcome loop documents predicted impact versus actual outcome. Full H3
+  still requires benchmark comparison output that attributes moved or regressed
   responsibilities.
 
 Activated responsibilities:

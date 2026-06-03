@@ -10,8 +10,8 @@ future user-provided spec.
 - `ARCHITECTURE.md`: architecture discovery and boundary rules.
 - `TEST_MATRIX.md`: legacy proof map; current proof status is queried with
   `scripts/bin/harness-cli query matrix`.
-- `HARNESS_BACKLOG.md`: legacy improvement list; current improvement records
-  are stored with `scripts/bin/harness-cli backlog`.
+- `HARNESS_BACKLOG.md`: legacy improvement list; current improvement records are
+  stored with `scripts/bin/harness-cli backlog`.
 - `GLOSSARY.md`: shared terms.
 
 ## Folders

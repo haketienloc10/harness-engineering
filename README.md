@@ -45,8 +45,8 @@ engineering questions without relying only on chat history:
 
 In this repo, those answers live in:
 
-- `AGENTS.md` — the stable agent shim with local project notes and Harness
-  doc links.
+- `AGENTS.md` — the stable agent shim with local project notes and Harness doc
+  links.
 - `docs/HARNESS.md` — the human-agent collaboration model.
 - `docs/FEATURE_INTAKE.md` — tiny, normal, and high-risk work classification.
 - `docs/ARCHITECTURE.md` — architecture discovery and boundary rules.
@@ -104,10 +104,10 @@ operating guide, refresh it into the small stable shim:
 curl -fsSL "https://raw.githubusercontent.com/haketienloc10/repository-harness/main/scripts/install-harness.sh?$(date +%s)" | bash -s -- --merge --refresh-agent-shim --yes
 ```
 
-The refresh backs up the existing file. If it detects the old
-Harness-generated guide, it replaces it with the shim. If the file appears
-custom, it appends or updates a marked Harness block instead of overwriting the
-project's local instructions.
+The refresh backs up the existing file. If it detects the old Harness-generated
+guide, it replaces it with the shim. If the file appears custom, it appends or
+updates a marked Harness block instead of overwriting the project's local
+instructions.
 
 Or install into a specific path:
 
@@ -123,15 +123,14 @@ Use `--dry-run` on Bash or `-DryRun` on PowerShell to preview changes before
 writing files.
 
 The installer also downloads the prebuilt Harness CLI for the current platform,
-verifies its `.sha256` checksum, and installs it at
-`scripts/bin/harness-cli` on macOS/Linux or `scripts/bin/harness-cli.exe` on
-Windows. The Rust CLI is the main Harness tool and stable command path.
+verifies its `.sha256` checksum, and installs it at `scripts/bin/harness-cli` on
+macOS/Linux or `scripts/bin/harness-cli.exe` on Windows. The Rust CLI is the
+main Harness tool and stable command path.
 
-Harness CLI release assets are published from tags by the
-`Harness CLI Release` GitHub Actions workflow. The installer expects each
-release to include `harness-cli-<platform>` and
-`harness-cli-<platform>.sha256` assets for macOS arm64, macOS x64, Linux x64,
-Linux arm64, and Windows x64. The Windows asset is
+Harness CLI release assets are published from tags by the `Harness CLI Release`
+GitHub Actions workflow. The installer expects each release to include
+`harness-cli-<platform>` and `harness-cli-<platform>.sha256` assets for macOS
+arm64, macOS x64, Linux x64, Linux arm64, and Windows x64. The Windows asset is
 `harness-cli-windows-x64.exe` plus `harness-cli-windows-x64.exe.sha256`.
 
 ## Try The Flow
@@ -162,8 +161,8 @@ validation and harness maintenance expectations.
 This repository is in Harness v0.
 
 There is no application implementation and no baked-in product specification
-yet. The current work is the reusable project harness: the file structure,
-agent operating model, feature intake process, story templates, and validation
+yet. The current work is the reusable project harness: the file structure, agent
+operating model, feature intake process, story templates, and validation
 expectations that help humans and agents turn a future user-provided spec into
 implementation work.
 
@@ -179,8 +178,8 @@ spec for the first buildout, then derive smaller living artifacts from it:
 - `docs/TEST_MATRIX.md`: behavior-to-proof control panel.
 - `docs/decisions/`: durable decisions and tradeoffs.
 
-Do not keep a project-specific spec or product breakdown in this harness until
-a real project supplies one.
+Do not keep a project-specific spec or product breakdown in this harness until a
+real project supplies one.
 
 ## Repository Structure
 
@@ -206,8 +205,8 @@ project/
 ## Contributing
 
 This project is early and benefits most from real-world agent failure cases,
-example harness installs, docs improvements, and reusable workflow patterns.
-See `CONTRIBUTING.md` for contribution ideas.
+example harness installs, docs improvements, and reusable workflow patterns. See
+`CONTRIBUTING.md` for contribution ideas.
 
 Useful contributions include:
 

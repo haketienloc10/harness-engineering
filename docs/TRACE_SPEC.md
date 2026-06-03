@@ -74,8 +74,8 @@ Minimum fields:
 
 - All Standard fields.
 - `decisions_made` as JSON array text.
-- `errors` as JSON array text, using `none` with the current CLI when no
-  errors occurred.
+- `errors` as JSON array text, using `none` with the current CLI when no errors
+  occurred.
 - `harness_friction`, using `none` only after checking for friction.
 - `duration_seconds` or a note explaining why duration is unavailable.
 - `token_estimate` or a note explaining why token estimate is unavailable.
@@ -85,9 +85,9 @@ Minimum fields:
 Required for:
 
 - High-risk tasks.
-- Changes touching architecture direction, source-of-truth hierarchy,
-  validation requirements, auth, authorization, data loss, audit/security, or
-  external provider behavior.
+- Changes touching architecture direction, source-of-truth hierarchy, validation
+  requirements, auth, authorization, data loss, audit/security, or external
+  provider behavior.
 - Benchmark or release work where later review needs precise proof.
 
 For high-risk work, `decisions_made` in the trace summarizes what was decided.
@@ -194,11 +194,11 @@ Why this is insufficient for normal-lane Phase 2 work:
 Before the final response, check:
 
 - The trace tier matches the lane.
-- Review the score printed automatically by `scripts/bin/harness-cli trace`.
-  Use `scripts/bin/harness-cli score-trace --id N` when re-checking a specific
+- Review the score printed automatically by `scripts/bin/harness-cli trace`. Use
+  `scripts/bin/harness-cli score-trace --id N` when re-checking a specific
   historical trace.
 - `files_changed` matches the actual changed-file set at a useful level.
-- `errors` names real blockers or is `none` for Detailed traces when the
-  current CLI is used.
+- `errors` names real blockers or is `none` for Detailed traces when the current
+  CLI is used.
 - `harness_friction` either names a concrete issue or is intentionally `none`.
 - Any friction that should become future work is recorded in the backlog.

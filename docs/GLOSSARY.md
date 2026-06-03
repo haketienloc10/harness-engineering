@@ -21,8 +21,8 @@ docs, design notes, and validation expectations for a feature.
 
 ## Feature Intake
 
-The classification step that turns a prompt into tiny, normal, or high-risk
-work before implementation begins.
+The classification step that turns a prompt into tiny, normal, or high-risk work
+before implementation begins.
 
 ## Component Taxonomy
 
@@ -70,9 +70,10 @@ closed so future agents can compare expectation with result.
 
 ## Durable Layer
 
-The SQLite database and CLI (`scripts/bin/harness-cli`) that stores operational records
-(intakes, stories, decisions, backlog items, traces) as structured, queryable
-data. Policy docs describe how to work; the durable layer stores what happened.
+The SQLite database and CLI (`scripts/bin/harness-cli`) that stores operational
+records (intakes, stories, decisions, backlog items, traces) as structured,
+queryable data. Policy docs describe how to work; the durable layer stores what
+happened.
 
 ## Product Delta
 

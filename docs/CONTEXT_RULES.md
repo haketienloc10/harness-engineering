@@ -1,10 +1,10 @@
 # Context Engineering Rules
 
-Context rules help agents decide what to read, when to read it, and when to
-stop reading. They are additive to the stable `AGENTS.md` reading list.
+Context rules help agents decide what to read, when to read it, and when to stop
+reading. They are additive to the stable `AGENTS.md` reading list.
 
-The goal is not to maximize context. The goal is to put the right information
-in the model for the current task phase and risk lane.
+The goal is not to maximize context. The goal is to put the right information in
+the model for the current task phase and risk lane.
 
 ## Context Phases
 
@@ -132,5 +132,5 @@ Before final response:
 
 - Validation evidence has been read.
 - `docs/TRACE_SPEC.md` has been read for normal/high-risk tasks.
-- The final trace includes files read, files changed, outcome, and friction
-  when applicable.
+- The final trace includes files read, files changed, outcome, and friction when
+  applicable.

@@ -8,8 +8,8 @@ Accepted, amended 2026-05-31
 
 ## Context
 
-The durable layer started as a thin shell wrapper around SQLite. That wrapper
-is now large enough to carry meaningful architecture risk: it mixes command
+The durable layer started as a thin shell wrapper around SQLite. That wrapper is
+now large enough to carry meaningful architecture risk: it mixes command
 parsing, SQL construction, migrations, import behavior, query rendering, and
 help text in one script.
 

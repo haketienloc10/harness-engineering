@@ -20,8 +20,8 @@ _(Được nhắc đến trực tiếp trong AGENTS.md và README.md)_
   high-risk).
 - `docs/ARCHITECTURE.md`: Các nguyên tắc về kiến trúc, khám phá trước khi định
   hình và ranh giới hệ thống.
-- `docs/TEST_MATRIX.md`: Bản đồ ma trận kiểm thử (dùng làm template/quy tắc
-  theo dõi).
+- `docs/TEST_MATRIX.md`: Bản đồ ma trận kiểm thử (dùng làm template/quy tắc theo
+  dõi).
 - `docs/HARNESS_BACKLOG.md`: Quy trình ghi nhận thiếu sót/khó khăn (friction)
   trong quá trình làm việc để cải thiện Harness.
 - `docs/GLOSSARY.md`: Từ điển thuật ngữ chung của toàn dự án.
@@ -33,8 +33,8 @@ _(Được nhắc đến bên trong các file cốt lõi ở trên)_
 - `docs/TRACE_SPEC.md` (nhắc đến trong `HARNESS.md`): Đặc tả chi tiết về cách
   thức ghi log (trace) lại các hành động của agent (các cấp độ: Minimal,
   Standard, Detailed).
-- `docs/templates/story.md` (nhắc đến trong `FEATURE_INTAKE.md`): Template
-  chuẩn cho một story thông thường.
+- `docs/templates/story.md` (nhắc đến trong `FEATURE_INTAKE.md`): Template chuẩn
+  cho một story thông thường.
 - `docs/templates/decision.md` (nhắc đến trong `HARNESS.md` và
   `FEATURE_INTAKE.md`): Template lưu lại các quyết định (Decisions/ADR) về thay
   đổi kiến trúc/hệ thống.

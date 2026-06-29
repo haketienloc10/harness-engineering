@@ -61,8 +61,11 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
 ## Evidence
 
 - `bash -n install.sh` passed.
+- `cargo test` passed for the Harness CLI crate.
 - `./install.sh "$tmp"` installed `AGENTS.md`, `.agent-harness/`, schema files,
-  and `.gitignore` rules into a temporary target.
+  CLI wrapper, and `.gitignore` rules into a temporary target.
+- `(cd "$tmp" && .agent-harness/bin/harness-cli init &&
+  .agent-harness/bin/harness-cli query matrix)` passed after install.
 - `./install.sh "$tmp"` with pre-existing `AGENTS.md` and `.agent-harness/`
   backed both paths up under `.harness-backup/<timestamp>/` before replacing
   them.
@@ -73,6 +76,6 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
   not run in this environment because of the system libc version; installer
   removed the unusable binary and tried the source-build fallback.
 - Source-build fallback expects either root workspace `Cargo.toml` with package
-  `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout currently has
-  untracked root `Cargo.toml`/`Cargo.lock`, but no crate manifest or Rust source
-  files under `crates/harness-cli/`.
+  `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout has tracked
+  Rust source under `crates/harness-cli/`, and the fallback built
+  `.agent-harness/bin/harness-cli.bin` successfully in the temporary target.

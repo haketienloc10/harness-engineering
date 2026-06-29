@@ -1032,7 +1032,7 @@ mod tests {
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            repo_root.join("scripts/schema"),
+            repo_root.join(".agent-harness/scripts/schema"),
         );
         (temp_dir, repository)
     }
@@ -1091,7 +1091,7 @@ mod tests {
             .nth(2)
             .unwrap()
             .to_path_buf()
-            .join("scripts/schema");
+            .join(".agent-harness/scripts/schema");
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
@@ -1292,7 +1292,7 @@ implemented
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            source_repo_root.join("scripts/schema"),
+            source_repo_root.join(".agent-harness/scripts/schema"),
         );
         repository.init().unwrap();
 

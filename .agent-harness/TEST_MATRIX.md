@@ -1,9 +1,6 @@
 # Test Matrix
 
-This file maps product behavior to proof.
-
-No product behavior has been defined or implemented yet. Do not mark a row
-implemented until tests or validation evidence exist.
+This file maps Harness behavior to proof.
 
 ## Status Values
 
@@ -19,7 +16,7 @@ implemented until tests or validation evidence exist.
 
 | Story | Contract                                | Unit | Integration | E2E | Platform | Status  | Evidence |
 | ----- | --------------------------------------- | ---- | ----------- | --- | -------- | ------- | -------- |
-| TBD   | Add rows when story packets are created | no   | no          | no  | no       | planned | none     |
+| US-001 | Simple curl installer for `harness-engineering` | yes | yes | no | yes | implemented | `cargo test`; `bash -n install.sh`; temp install plus `.agent-harness/bin/harness-cli init` and `query matrix` |
 
 ## Evidence Rules
 

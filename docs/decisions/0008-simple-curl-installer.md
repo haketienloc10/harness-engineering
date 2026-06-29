@@ -31,8 +31,10 @@ The installer should:
 - Use the local checkout as source when run as `./install.sh`.
 - Back up existing `AGENTS.md` and `_harness/` before replacing them.
 - Replace `_harness/` as a complete runtime tree on every install.
-- Snapshot existing `docs/`, then update Harness-provided docs files without
-  deleting target-only docs.
+- Snapshot existing `docs/`, then add missing Harness-provided docs files
+  without overwriting existing target docs.
+- Skip local runtime artifacts and write `_harness/.harness-manifest` with the
+  installed payload file list.
 - Append Harness local-state rules to `.gitignore`.
 - Try to install the platform CLI binary, but remove it and report a clear
   follow-up if the binary cannot run on the target system.

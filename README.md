@@ -70,11 +70,12 @@ From a local checkout, run the same installer:
 
 The installer backs up existing `AGENTS.md`, legacy `.agent-harness/`, and
 `_harness/` under `.harness-backup/`, then replaces `_harness/` with the current
-runtime payload. Existing `docs/` is snapshotted before being updated file by
-file; files that are not present in the Harness payload are preserved. The
-installer also appends local Harness ignore rules and installs the CLI by
-downloading a compatible release binary or building from `crates/harness-cli`
-when source and `cargo` are available.
+runtime payload. Existing `docs/` is snapshotted before file-level installation;
+existing target docs are kept, and only missing Harness docs are added. The
+installer writes `_harness/.harness-manifest`, skips local runtime artifacts,
+appends local Harness ignore rules, and installs the CLI by downloading a
+compatible release binary or building from `crates/harness-cli` when source and
+`cargo` are available.
 
 ## Payload Structure
 

@@ -19,10 +19,11 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 The installer targets the current directory by default, accepts one optional
 target directory argument, backs up existing `AGENTS.md`, legacy
 `.agent-harness/`, and `_harness/`, then replaces `_harness/` with the current
-Harness runtime. It snapshots `docs/` and updates it file by file without
-deleting target-only files, appends local `.gitignore` rules, and installs the
-CLI by downloading a compatible release binary or building from
-`crates/harness-cli` when source and `cargo` are available.
+Harness runtime. It snapshots `docs/` and installs docs file by file while
+keeping existing target docs, writes `_harness/.harness-manifest`, skips local
+runtime artifacts, appends local `.gitignore` rules, and installs the CLI by
+downloading a compatible release binary or building from `crates/harness-cli`
+when source and `cargo` are available.
 
 ## Relevant Product Docs
 
@@ -34,7 +35,8 @@ CLI by downloading a compatible release binary or building from
 - A root `install.sh` supports the one-line curl install command.
 - The documented install path no longer requires the removed option-heavy installer.
 - Existing target `AGENTS.md`, legacy `.agent-harness/`, and `_harness/` are backed up before replacement.
-- Existing `docs/` is snapshotted before file-level updates, and target-only docs are preserved.
+- Existing `docs/` is snapshotted before file-level updates, and existing target docs are preserved.
+- Installer records installed payload files in `_harness/.harness-manifest` and skips local runtime artifacts.
 - Installer output names the source, target, installed payload, and next CLI commands.
 
 ## Design Notes
@@ -43,7 +45,7 @@ CLI by downloading a compatible release binary or building from
 - Queries: none.
 - API: none.
 - Tables: none.
-- Domain rules: replace Harness runtime under `_harness/`; update Harness-managed product record files under `docs/` without deleting target-only docs; do not touch unrelated app folders.
+- Domain rules: replace Harness runtime under `_harness/`; add missing Harness-managed product record files under `docs/` without overwriting existing target docs; do not touch unrelated app folders.
 - UI surfaces: shell output only.
 
 ## Validation
@@ -84,5 +86,6 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
   Rust source under `crates/harness-cli/`, and the fallback installed the
   `_harness/bin/harness-cli` command successfully in the temporary target.
 - 2026-06-29 follow-up: installer behavior was changed to replace `_harness/`
-  as a full runtime tree while updating `docs/` file by file and preserving
-  target-only documentation.
+  as a full runtime tree while installing `docs/` file by file, preserving
+  existing target documentation, skipping runtime artifacts, and writing a
+  manifest.

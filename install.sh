@@ -160,13 +160,15 @@ install_cli() {
 build_cli_from_source() {
   [ "$CLI_INSTALLED" -eq 0 ] || return 0
 
-  local manifest binary source_name
-  if [ -f "$SRC/crates/harness-cli/Cargo.toml" ]; then
-    manifest="$SRC/crates/harness-cli/Cargo.toml"
-  elif [ -f "$SRC/Cargo.toml" ]; then
+  local manifest binary source_name package_args
+  package_args=""
+  if [ -f "$SRC/Cargo.toml" ]; then
     manifest="$SRC/Cargo.toml"
+    package_args="-p harness-cli"
+  elif [ -f "$SRC/crates/harness-cli/Cargo.toml" ]; then
+    manifest="$SRC/crates/harness-cli/Cargo.toml"
   else
-    printf 'warn    CLI source not built: Cargo.toml not found under crates/harness-cli\n' >&2
+    printf 'warn    CLI source not built: Cargo.toml not found at repo root or crates/harness-cli\n' >&2
     return 0
   fi
 
@@ -176,7 +178,7 @@ build_cli_from_source() {
   fi
 
   printf 'build   harness-cli from %s\n' "${manifest#$SRC/}"
-  if ! cargo build --release --manifest-path "$manifest"; then
+  if ! cargo build --release --manifest-path "$manifest" $package_args; then
     printf 'warn    CLI source build failed\n' >&2
     return 0
   fi

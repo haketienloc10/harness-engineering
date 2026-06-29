@@ -72,5 +72,7 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
 - CLI binary download fallback reached a release asset, but the binary could
   not run in this environment because of the system libc version; installer
   removed the unusable binary and tried the source-build fallback.
-- Source-build fallback could not run in this checkout because
-  `crates/harness-cli/Cargo.toml` is not present in the working tree.
+- Source-build fallback expects either root workspace `Cargo.toml` with package
+  `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout currently has
+  untracked root `Cargo.toml`/`Cargo.lock`, but no crate manifest or Rust source
+  files under `crates/harness-cli/`.

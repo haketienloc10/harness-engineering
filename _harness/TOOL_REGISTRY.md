@@ -17,7 +17,7 @@ adapt to what is installed without the core ever depending on it.
 ## Inbound Registry: Register A Tool
 
 ```bash
-.agent-harness/bin/harness-cli tool register \
+_harness/bin/harness-cli tool register \
   --name deploy-check \
   --kind cli \
   --capability deploy-verification \
@@ -50,10 +50,10 @@ so they register without `--force`; their presence is resolved later by
 Registering an MCP server or a Claude skill (examples):
 
 ```bash
-.agent-harness/bin/harness-cli tool register --name gitnexus --kind mcp \
+_harness/bin/harness-cli tool register --name gitnexus --kind mcp \
   --capability impact-analysis --scan ".gitnexus" --command "mcp:gitnexus" \
   --description "Code-graph blast radius" --responsibility Verification
-.agent-harness/bin/harness-cli tool register --name c3 --kind skill \
+_harness/bin/harness-cli tool register --name c3 --kind skill \
   --capability impact-analysis --scan ".c3" --command "skill:c3" \
   --description "Component model and drift audit (Claude skill)" \
   --responsibility Verification
@@ -62,7 +62,7 @@ Registering an MCP server or a Claude skill (examples):
 Remove a tool with:
 
 ```bash
-.agent-harness/bin/harness-cli tool remove --name deploy-check
+_harness/bin/harness-cli tool remove --name deploy-check
 ```
 
 ## Inbound Registry: Check Presence
@@ -72,9 +72,9 @@ scanning each registered tool and persisting the verdict (`status` and
 `checked_at`). Run it at intake start so status reflects current reality.
 
 ```bash
-.agent-harness/bin/harness-cli tool check            # scan all registered tools
-.agent-harness/bin/harness-cli tool check --name c3  # scan one
-.agent-harness/bin/harness-cli tool check --json     # machine-readable for agents
+_harness/bin/harness-cli tool check            # scan all registered tools
+_harness/bin/harness-cli tool check --name c3  # scan one
+_harness/bin/harness-cli tool check --json     # machine-readable for agents
 ```
 
 Probe per kind:
@@ -99,8 +99,8 @@ A workflow step asks "what is present for this purpose?" rather than naming a
 tool:
 
 ```bash
-.agent-harness/bin/harness-cli query tools --capability impact-analysis
-.agent-harness/bin/harness-cli query tools --capability impact-analysis --status present
+_harness/bin/harness-cli query tools --capability impact-analysis
+_harness/bin/harness-cli query tools --capability impact-analysis --status present
 ```
 
 The result is the set of providers. Multiple tools may provide one capability
@@ -136,9 +136,9 @@ performance-benchmark · documentation-lookup
 ## Inspecting The Registry
 
 ```bash
-.agent-harness/bin/harness-cli query tools --summary
-.agent-harness/bin/harness-cli query tools --json
-.agent-harness/bin/harness-cli query tools --responsibility Verification
+_harness/bin/harness-cli query tools --summary
+_harness/bin/harness-cli query tools --json
+_harness/bin/harness-cli query tools --responsibility Verification
 ```
 
 JSON records carry `kind`, `capability`, `scan_target`, `status`, and
@@ -153,10 +153,8 @@ without parsing the human table.
 | `migrate`             | Task state             | Apply pending schema migrations.                                                 | none                                                                                                                         |
 | `import brownfield`   | Project memory         | Seed durable records from markdown state.                                        | none                                                                                                                         |
 | `intake`              | Task specification     | Record a feature intake classification.                                          | `--type`, `--summary`, `--lane`                                                                                              |
-| `story add`           | Task state             | Create a durable story record.                                                   | `--id`, `--title`, `--lane`, optional `--verify`                                                                             |
-| `story update`        | Task state             | Update story status, proof flags, evidence, or verification command.             | `--id`, optional proof/status fields                                                                                         |
-| `story verify`        | Verification           | Run one story `verify_command` and record pass/fail.                             | story id                                                                                                                     |
-| `story verify-all`    | Verification           | Run all configured story verification commands and skip stories without one.     | none                                                                                                                         |
+| `story add`           | Task state             | Create a durable story record.                                                   | `--id`, `--title`, `--lane`, optional `--contract`, `--notes`                                                                |
+| `story update`        | Task state             | Update story status, proof flags, or evidence.                                   | `--id`, optional proof/status/evidence fields                                                                                |
 | `decision add`        | Project memory         | Create a durable decision record.                                                | `--id`, `--title`, optional `--doc`, `--verify`                                                                              |
 | `decision verify`     | Verification           | Run one decision verification command.                                           | decision id                                                                                                                  |
 | `backlog add`         | Entropy auditing       | Record a harness improvement proposal.                                           | `--title`, optional pain/suggestion/risk/predicted fields                                                                    |

@@ -14,7 +14,7 @@ Describe the behavior after the story is complete.
 
 ## Affected Product Docs
 
-- `.agent-harness/product/...`
+- `docs/product/...`
 
 ## Non-Goals
 

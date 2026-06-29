@@ -15,14 +15,14 @@ Read to classify the request, find the affected surface, and choose a lane.
 | Document Or Source                            | Tiny              | Normal                                              | High-Risk |
 | --------------------------------------------- | ----------------- | --------------------------------------------------- | --------- |
 | `AGENTS.md`                                   | Must              | Must                                                | Must      |
-| `.agent-harness/FEATURE_INTAKE.md`            | Must              | Must                                                | Must      |
-| `.agent-harness/bin/harness-cli query matrix` | Must              | Must                                                | Must      |
+| `_harness/FEATURE_INTAKE.md`            | Must              | Must                                                | Must      |
+| `_harness/bin/harness-cli query matrix` | Must              | Must                                                | Must      |
 | `README.md`                                   | Should            | Must                                                | Must      |
-| `.agent-harness/HARNESS.md`                   | Should            | Must                                                | Must      |
-| `.agent-harness/ARCHITECTURE.md`              | Skip              | Should                                              | Must      |
-| Relevant `.agent-harness/product/*`           | Skip if unrelated | Must if product behavior changes                    | Must      |
-| Relevant `.agent-harness/stories/*`           | Skip if unrelated | Must if a story exists                              | Must      |
-| `.agent-harness/decisions/*`                  | Skip              | Should if architecture or durable rules are touched | Must      |
+| `_harness/HARNESS.md`                   | Should            | Must                                                | Must      |
+| `_harness/ARCHITECTURE.md`              | Skip              | Should                                              | Must      |
+| Relevant `docs/product/*`           | Skip if unrelated | Must if product behavior changes                    | Must      |
+| Relevant `docs/stories/*`           | Skip if unrelated | Must if a story exists                              | Must      |
+| `docs/decisions/*`                  | Skip              | Should if architecture or durable rules are touched | Must      |
 
 ### Planning Phase
 
@@ -31,12 +31,12 @@ Read to decide the smallest safe approach and expected proof.
 | Document Or Source                                                               | Tiny   | Normal                              | High-Risk                         |
 | -------------------------------------------------------------------------------- | ------ | ----------------------------------- | --------------------------------- |
 | Current files to edit                                                            | Must   | Must                                | Must                              |
-| `.agent-harness/templates/story.md`                                              | Skip   | Must when creating/updating a story | Should                            |
-| `.agent-harness/templates/high-risk-story/*`                                     | Skip   | Skip unless risk escalates          | Must                              |
-| `.agent-harness/ARCHITECTURE.md`                                                 | Skip   | Should for code or boundary changes | Must                              |
-| `.agent-harness/TEST_MATRIX.md` or `.agent-harness/bin/harness-cli query matrix` | Should | Must                                | Must                              |
+| `_harness/templates/story.md`                                              | Skip   | Must when creating/updating a story | Should                            |
+| `_harness/templates/high-risk-story/*`                                     | Skip   | Skip unless risk escalates          | Must                              |
+| `_harness/ARCHITECTURE.md`                                                 | Skip   | Should for code or boundary changes | Must                              |
+| `_harness/TEST_MATRIX.md` or `_harness/bin/harness-cli query matrix` | Should | Must                                | Must                              |
 | Relevant decisions                                                               | Skip   | Should                              | Must                              |
-| `.agent-harness/bin/harness-cli query backlog`                                   | Skip   | Should if friction repeats          | Must if changing Harness behavior |
+| `_harness/bin/harness-cli query backlog`                                   | Skip   | Should if friction repeats          | Must if changing Harness behavior |
 
 ### Implementation Phase
 
@@ -50,7 +50,7 @@ affect the selected story.
 | Relevant product docs                | Skip if copy-only       | Must if behavior changes      | Must                                 |
 | Relevant story packet                | Skip if no story needed | Must                          | Must                                 |
 | Relevant templates                   | Skip                    | Should when adding docs       | Must                                 |
-| `.agent-harness/ARCHITECTURE.md`     | Skip                    | Should for structural changes | Must                                 |
+| `_harness/ARCHITECTURE.md`     | Skip                    | Should for structural changes | Must                                 |
 | Provider/API/security docs           | Skip                    | Should if touched             | Must                                 |
 | Unrelated docs and historical traces | Skip                    | Skip                          | Should only if they affect decisions |
 
@@ -61,9 +61,9 @@ Read to prove the change and avoid claiming unsupported completion.
 | Document Or Source                                                               | Tiny             | Normal                   | High-Risk                               |
 | -------------------------------------------------------------------------------- | ---------------- | ------------------------ | --------------------------------------- |
 | Story acceptance criteria                                                        | Should           | Must                     | Must                                    |
-| `.agent-harness/TEST_MATRIX.md` or `.agent-harness/bin/harness-cli query matrix` | Should           | Must                     | Must                                    |
+| `_harness/TEST_MATRIX.md` or `_harness/bin/harness-cli query matrix` | Should           | Must                     | Must                                    |
 | Validation section of story packet                                               | Skip if no story | Must                     | Must                                    |
-| `.agent-harness/templates/validation-report.md`                                  | Skip             | Should for notable proof | Must for high-risk proof                |
+| `_harness/templates/validation-report.md`                                  | Skip             | Should for notable proof | Must for high-risk proof                |
 | Relevant commands from README/package docs                                       | Should           | Must                     | Must                                    |
 | External benchmark or release protocol, when supplied                            | Skip             | Skip unless requested    | Must if the story depends on that proof |
 
@@ -73,9 +73,9 @@ Read to leave useful evidence for the next agent.
 
 | Document Or Source                             | Tiny             | Normal                      | High-Risk |
 | ---------------------------------------------- | ---------------- | --------------------------- | --------- |
-| `.agent-harness/TRACE_SPEC.md`                 | Should           | Must                        | Must      |
-| `.agent-harness/bin/harness-cli query matrix`  | Should           | Must                        | Must      |
-| `.agent-harness/bin/harness-cli query backlog` | Skip             | Should if friction occurred | Must      |
+| `_harness/TRACE_SPEC.md`                 | Should           | Must                        | Must      |
+| `_harness/bin/harness-cli query matrix`  | Should           | Must                        | Must      |
+| `_harness/bin/harness-cli query backlog` | Skip             | Should if friction occurred | Must      |
 | Changed-file list from `git status --short`    | Must             | Must                        | Must      |
 | Validation command output                      | Should           | Must                        | Must      |
 | Story packet or progress log                   | Skip if no story | Must                        | Must      |
@@ -84,21 +84,21 @@ Read to leave useful evidence for the next agent.
 
 | Trigger Condition                                                                              | Action                                                                                                                                                                        |
 | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Task touches database schema, durable records, or migrations                                   | Read `.agent-harness/decisions/0004-sqlite-durable-layer.md`, `.agent-harness/scripts/schema/`, and relevant CLI code before planning.                                        |
-| Task touches CLI command behavior or installer distribution                                    | Read `.agent-harness/decisions/0005-prebuilt-rust-harness-cli.md`, `.agent-harness/install/README.md`, `.agent-harness/scripts/schema/`, CLI help output, and installer docs. |
-| Task touches auth, authorization, audit/security, data loss, or external providers             | Treat as high-risk, read `.agent-harness/templates/high-risk-story/*`, and check prior decisions before implementation.                                                       |
-| Task changes public API shape, product behavior, or user-visible workflow                      | Read relevant `.agent-harness/product/*`, story packets, and validation expectations before editing.                                                                          |
-| Task changes Harness policy, source hierarchy, risk classification, or validation requirements | Read `.agent-harness/HARNESS.md`, `.agent-harness/FEATURE_INTAKE.md`, `.agent-harness/ARCHITECTURE.md`, and `.agent-harness/decisions/*`; pause if direction is ambiguous.    |
+| Task touches database schema, durable records, or migrations                                   | Read `docs/decisions/0004-sqlite-durable-layer.md`, `_harness/scripts/schema/`, and relevant CLI code before planning.                                        |
+| Task touches CLI command behavior or installer distribution                                    | Read `docs/decisions/0005-prebuilt-rust-harness-cli.md`, `_harness/scripts/schema/`, CLI help output, root `install.sh`, and installer docs. |
+| Task touches auth, authorization, audit/security, data loss, or external providers             | Treat as high-risk, read `_harness/templates/high-risk-story/*`, and check prior decisions before implementation.                                                       |
+| Task changes public API shape, product behavior, or user-visible workflow                      | Read relevant `docs/product/*`, story packets, and validation expectations before editing.                                                                          |
+| Task changes Harness policy, source hierarchy, risk classification, or validation requirements | Read `_harness/HARNESS.md`, `_harness/FEATURE_INTAKE.md`, `_harness/ARCHITECTURE.md`, and `docs/decisions/*`; pause if direction is ambiguous.    |
 | Task discovers repeated confusion, stale docs, or missing proof                                | Query backlog, record `harness_friction`, and add a backlog item when the fix is out of scope.                                                                                |
-| Task makes an observability, trace quality, release, or benchmark claim                        | Read `.agent-harness/TRACE_SPEC.md`, validation evidence, and any supplied external protocol.                                                                                 |
-| Task is normal or high-risk and spans multiple iterations                                      | Create or update a story/progress file under `.agent-harness/stories/` and keep it current.                                                                                   |
-| Final response is being prepared                                                               | Re-read the validation evidence, `git status --short`, and `.agent-harness/TRACE_SPEC.md` before recording the final trace.                                                   |
+| Task makes an observability, trace quality, release, or benchmark claim                        | Read `_harness/TRACE_SPEC.md`, validation evidence, and any supplied external protocol.                                                                                 |
+| Task is normal or high-risk and spans multiple iterations                                      | Create or update a story/progress file under `docs/stories/` and keep it current.                                                                                   |
+| Final response is being prepared                                                               | Re-read the validation evidence, `git status --short`, and `_harness/TRACE_SPEC.md` before recording the final trace.                                                   |
 
 ## Token Budget Guidance
 
 | Lane      | Target Context Budget               | Read Shape                                                                                                                  | Reasoning                                                                                                        |
 | --------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Tiny      | About 2K tokens of Harness context  | `AGENTS.md`, `.agent-harness/FEATURE_INTAKE.md`, matrix query, and the exact file being changed.                            | Tiny work should not spend more context on policy than on the edit.                                              |
+| Tiny      | About 2K tokens of Harness context  | `AGENTS.md`, `_harness/FEATURE_INTAKE.md`, matrix query, and the exact file being changed.                            | Tiny work should not spend more context on policy than on the edit.                                              |
 | Normal    | About 5K tokens of Harness context  | Intake docs, relevant product/story docs, architecture when structural, validation expectations, and trace spec at the end. | Normal work needs enough context to preserve contracts and record proof without reading every historical file.   |
 | High-risk | About 10K tokens of Harness context | Full intake, architecture, relevant decisions, high-risk templates, product docs, validation docs, and trace spec.          | High-risk work needs source hierarchy, prior decisions, and proof expectations in context before implementation. |
 
@@ -120,13 +120,13 @@ retrieve after that initial context, based on lane, phase, and trigger.
 
 Before implementation:
 
-- Lane is chosen from `.agent-harness/FEATURE_INTAKE.md`.
+- Lane is chosen from `_harness/FEATURE_INTAKE.md`.
 - Relevant product docs or story packets are identified.
 - Any high-risk trigger has been handled.
 
 Before final response:
 
 - Validation evidence has been read.
-- `.agent-harness/TRACE_SPEC.md` has been read for normal/high-risk tasks.
+- `_harness/TRACE_SPEC.md` has been read for normal/high-risk tasks.
 - The final trace includes files read, files changed, outcome, and friction when
   applicable.

@@ -3,27 +3,28 @@
 Stories are work packets. They turn product intent into bounded implementation
 and validation work.
 
-No story packets are active yet.
+Current story packets may live directly in this directory or under scoped
+`epics/` folders as the project grows.
 
 ## Normal Story
 
-Use `.agent-harness/templates/story.md` for normal feature work.
+Use `_harness/templates/story.md` for normal feature work.
 
 Suggested path:
 
 ```text
-.agent-harness/stories/epics/E01-domain-name/US-001-short-story-title.md
+docs/stories/epics/E01-domain-name/US-001-short-story-title.md
 ```
 
 ## High-Risk Story
 
-Use `.agent-harness/templates/high-risk-story/` when the feature intake
+Use `_harness/templates/high-risk-story/` when the feature intake
 classifies work as high-risk.
 
 Suggested path:
 
 ```text
-.agent-harness/stories/epics/E02-risky-domain/US-012-risky-story-title/
+docs/stories/epics/E02-risky-domain/US-012-risky-story-title/
   execplan.md
   overview.md
   design.md

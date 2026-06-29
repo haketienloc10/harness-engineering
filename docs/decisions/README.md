@@ -3,16 +3,16 @@
 Decision records explain why important product, architecture, or harness choices
 were made.
 
-Use `.agent-harness/templates/decision.md` when adding a new decision.
+Use `_harness/templates/decision.md` when adding a new decision.
 
 After adding or updating a markdown decision file, also add or refresh the
 durable decision row:
 
 ```bash
-.agent-harness/bin/harness-cli decision add \
+_harness/bin/harness-cli decision add \
   --id 0008-auth-boundary \
   --title "Auth Boundary" \
-  --doc .agent-harness/decisions/0008-auth-boundary.md
+  --doc docs/decisions/0008-auth-boundary.md
 ```
 
 Trace fields such as `--decisions` summarize task-level choices. They do not

@@ -16,7 +16,7 @@ This file maps Harness behavior to proof.
 
 | Story | Contract                                | Unit | Integration | E2E | Platform | Status  | Evidence |
 | ----- | --------------------------------------- | ---- | ----------- | --- | -------- | ------- | -------- |
-| US-001 | Simple curl installer for `harness-engineering` | yes | yes | no | yes | implemented | `cargo test`; `bash -n install.sh`; temp install plus `.agent-harness/bin/harness-cli init` and `query matrix` |
+| US-001 | Simple curl installer for `harness-engineering` | yes | yes | no | yes | implemented | `cargo test`; `bash -n install.sh`; temp install plus `_harness/bin/harness-cli init` and `query matrix` |
 
 ## Evidence Rules
 

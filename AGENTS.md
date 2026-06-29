@@ -24,21 +24,21 @@ The app is what users touch. The harness is what agents operate.
 At task start, read:
 
 1. `AGENTS.md`
-2. `.agent-harness/HARNESS.md`
-3. `.agent-harness/FEATURE_INTAKE.md`
-4. `.agent-harness/CONTEXT_RULES.md`
-5. `.agent-harness/bin/harness-cli query matrix` when the CLI exists
+2. `_harness/HARNESS.md`
+3. `_harness/FEATURE_INTAKE.md`
+4. `_harness/CONTEXT_RULES.md`
+5. `_harness/bin/harness-cli query matrix` when the CLI exists
 
 Then read conditionally:
 
-- `.agent-harness/ARCHITECTURE.md` for code structure, boundaries, data,
+- `_harness/ARCHITECTURE.md` for code structure, boundaries, data,
   providers, runtime, public contracts, or app surfaces.
-- `.agent-harness/TOOL_REGISTRY.md` before optional external tools.
-- `.agent-harness/product/*` when product behavior changes.
-- `.agent-harness/stories/*` when work maps to an existing story.
-- `.agent-harness/decisions/*` when architecture, source hierarchy, durable
+- `_harness/TOOL_REGISTRY.md` before optional external tools.
+- `docs/product/*` when product behavior changes.
+- `docs/stories/*` when work maps to an existing story.
+- `docs/decisions/*` when architecture, source hierarchy, durable
   records, validation, or high-risk behavior changes.
-- `.agent-harness/templates/*` before creating harness artifacts.
+- `_harness/templates/*` before creating harness artifacts.
 
 If a required harness file is missing, continue only if the task is safe from
 local context. Record the missing file as harness friction.
@@ -48,31 +48,31 @@ local context. Record the missing file as harness friction.
 Use the repository-local CLI as the durable layer:
 
 ```bash
-.agent-harness/bin/harness-cli <command>
+_harness/bin/harness-cli <command>
 ```
 
 Windows:
 
 ```powershell
-.\.agent-harness\bin\harness-cli.ps1 <command>
+.\_harness\bin\harness-cli.ps1 <command>
 ```
 
 If `harness.db` is missing and the CLI exists, run:
 
 ```bash
-.agent-harness/bin/harness-cli init
+_harness/bin/harness-cli init
 ```
 
 Record operational state through the CLI whenever possible:
 
 ```bash
-.agent-harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
-.agent-harness/bin/harness-cli query matrix
-.agent-harness/bin/harness-cli story add --id <id> --title <text> --lane <lane>
-.agent-harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0
-.agent-harness/bin/harness-cli decision add --id <id> --title <text> --doc .agent-harness/decisions/<file>.md
-.agent-harness/bin/harness-cli backlog add --title <text> --pain <text> --risk tiny
-.agent-harness/bin/harness-cli trace --summary <text> --agent codex --outcome completed
+_harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
+_harness/bin/harness-cli query matrix
+_harness/bin/harness-cli story add --id <id> --title <text> --lane <lane>
+_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0
+_harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
+_harness/bin/harness-cli backlog add --title <text> --pain <text> --risk tiny
+_harness/bin/harness-cli trace --summary <text> --agent codex --outcome completed
 ```
 
 If the CLI is unavailable, use markdown artifacts and report the missing CLI as
@@ -130,7 +130,7 @@ Use for story-sized behavior with bounded blast radius.
 
 Do:
 
-- Create or update one story from `.agent-harness/templates/story.md` when the
+- Create or update one story from `_harness/templates/story.md` when the
   work is behavior-bearing.
 - Link relevant product docs.
 - Add or update validation expectations.
@@ -145,7 +145,7 @@ roles/platforms, or validation guarantees.
 
 Do:
 
-- Create a high-risk packet from `.agent-harness/templates/high-risk-story/`.
+- Create a high-risk packet from `_harness/templates/high-risk-story/`.
 - Fill `execplan.md`, `overview.md`, `design.md`, and `validation.md`.
 - Read relevant decisions before implementation.
 - Ask the human only when product or safety direction is ambiguous.
@@ -192,10 +192,10 @@ When sources conflict, use this order:
 
 ```text
 Current user instruction
-  -> .agent-harness/product/*
-  -> .agent-harness/stories/*
-  -> .agent-harness/bin/harness-cli query matrix
-  -> .agent-harness/decisions/* plus CLI decisions
+  -> docs/product/*
+  -> docs/stories/*
+  -> _harness/bin/harness-cli query matrix
+  -> docs/decisions/* plus CLI decisions
   -> code and tests
   -> historical specs or examples
 ```
@@ -227,7 +227,7 @@ domain
 Before any optional external tool, run:
 
 ```bash
-.agent-harness/bin/harness-cli query tools --capability <capability> --status present
+_harness/bin/harness-cli query tools --capability <capability> --status present
 ```
 
 If no provider is registered, cleanly skip and note
@@ -241,11 +241,11 @@ missing, mark `Weak proof` and record the gap.
 - High-risk: run the validation plan from the high-risk packet and explain any
   skipped proof.
 
-Use:
+Record proof status with:
 
 ```bash
-.agent-harness/bin/harness-cli story verify <story-id>
-.agent-harness/bin/harness-cli story verify-all
+_harness/bin/harness-cli story update --id <story-id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands run>"
+_harness/bin/harness-cli query matrix
 ```
 
 Do not claim completion without proof or an explicit validation gap.

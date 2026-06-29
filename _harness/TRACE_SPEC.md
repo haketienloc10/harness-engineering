@@ -4,7 +4,7 @@ The `trace` table records what happened during a Harness task. This document
 defines the expected depth and format for each field so traces are useful for
 review, failure attribution, and future harness evolution.
 
-The current schema lives in `.agent-harness/scripts/schema/001-init.sql` under
+The current schema lives in `_harness/scripts/schema/001-init.sql` under
 the `trace` table.
 
 ## Field Reference
@@ -18,8 +18,8 @@ the `trace` table.
 | `story_id`         | TEXT    | Standard+ when work maps to one story           | Story id from the `story` table. Use the main story when one trace covers several; list the rest in `notes`.                                                  | `US-004`                                                                                  |
 | `agent`            | TEXT    | Optional for minimal; Standard+ expected        | Short agent/tool name.                                                                                                                                        | `codex`                                                                                   |
 | `actions_taken`    | TEXT    | Standard+                                       | JSON array text. With the current CLI, pass a comma-separated list and the CLI stores JSON text.                                                              | `["read PHASE2.md","drafted TRACE_SPEC.md","updated HARNESS.md"]`                         |
-| `files_read`       | TEXT    | Standard+                                       | JSON array text of paths or command names. With the current CLI, pass a comma-separated list.                                                                 | `["PHASE2.md",".agent-harness/HARNESS.md",".agent-harness/bin/harness-cli query matrix"]` |
-| `files_changed`    | TEXT    | Standard+                                       | JSON array text of changed file paths. With the current CLI, pass a comma-separated list; omit only when no files changed.                                    | `[".agent-harness/TRACE_SPEC.md",".agent-harness/HARNESS.md"]`                            |
+| `files_read`       | TEXT    | Standard+                                       | JSON array text of paths or command names. With the current CLI, pass a comma-separated list.                                                                 | `["PHASE2.md","_harness/HARNESS.md","_harness/bin/harness-cli query matrix"]` |
+| `files_changed`    | TEXT    | Standard+                                       | JSON array text of changed file paths. With the current CLI, pass a comma-separated list; omit only when no files changed.                                    | `["_harness/TRACE_SPEC.md","_harness/HARNESS.md"]`                            |
 | `decisions_made`   | TEXT    | Detailed                                        | JSON array text of decision strings. Include scope decisions, validation choices, and explicit non-goals.                                                     | `["Kept role changes workspace-scoped; deferred organization-level roles"]`               |
 | `errors`           | TEXT    | Standard+ if errors occurred; Detailed always   | JSON array text of error or blocker strings. Until the CLI supports empty arrays directly, use `none` when a detailed trace needs explicit no-error evidence. | `["git diff --check failed before whitespace fix"]`                                       |
 | `outcome`          | TEXT    | Yes before final response                       | One of `completed`, `blocked`, `partial`, or `failed`.                                                                                                        | `completed`                                                                               |
@@ -93,8 +93,8 @@ Required for:
 For high-risk work, `decisions_made` in the trace summarizes what was decided.
 It does not replace a durable decision record. If the work changes behavior,
 architecture, authorization, data ownership, API shape, or validation
-requirements, add a `.agent-harness/decisions/NNNN-*.md` file and record it with
-`.agent-harness/bin/harness-cli decision add`.
+requirements, add a `docs/decisions/NNNN-*.md` file and record it with
+`_harness/bin/harness-cli decision add`.
 
 ## Lane Mapping
 
@@ -122,7 +122,7 @@ How to write friction:
 - Name the concrete pain, not a vague mood.
 - Include the missing capability or contradiction.
 - If the friction should become work, also add or update a backlog item with
-  `.agent-harness/bin/harness-cli backlog add`.
+  `_harness/bin/harness-cli backlog add`.
 - If there was no friction, use `none` only for Detailed traces.
 
 Good friction:
@@ -142,7 +142,7 @@ docs confusing
 ### Good Trace (Detailed)
 
 ```bash
-.agent-harness/bin/harness-cli trace \
+_harness/bin/harness-cli trace \
   --summary "Completed high-risk auth role migration with audit proof" \
   --intake 51 \
   --story US-014 \
@@ -151,7 +151,7 @@ docs confusing
   --duration 4200 \
   --tokens 52000 \
   --actions "read access-control docs,created migration,updated audit tests,ran integration suite" \
-  --read ".agent-harness/product/permissions.md,.agent-harness/decisions/0008-auth-boundary.md,src/auth/roles.ts" \
+  --read "docs/product/permissions.md,docs/decisions/0008-auth-boundary.md,src/auth/roles.ts" \
   --changed "src/auth/roles.ts,src/audit/events.ts,tests/auth-roles.test.ts" \
   --decisions "kept manager role scoped to workspace,recorded audit event on every role change" \
   --errors "none" \
@@ -162,22 +162,22 @@ docs confusing
 ### Adequate Trace (Standard)
 
 ```bash
-.agent-harness/bin/harness-cli trace \
+_harness/bin/harness-cli trace \
   --summary "Added trace specification and Harness reference" \
   --intake 36 \
   --story US-004 \
   --agent codex \
   --outcome completed \
   --actions "read PHASE2.md,drafted TRACE_SPEC.md,updated HARNESS.md,ran rg checks" \
-  --read "PHASE2.md,.agent-harness/HARNESS.md,.agent-harness/scripts/schema/001-init.sql" \
-  --changed ".agent-harness/TRACE_SPEC.md,.agent-harness/HARNESS.md" \
+  --read "PHASE2.md,_harness/HARNESS.md,_harness/scripts/schema/001-init.sql" \
+  --changed "_harness/TRACE_SPEC.md,_harness/HARNESS.md" \
   --friction "none"
 ```
 
 ### Insufficient Trace
 
 ```bash
-.agent-harness/bin/harness-cli trace \
+_harness/bin/harness-cli trace \
   --summary "did phase 2" \
   --outcome completed
 ```
@@ -195,8 +195,8 @@ Before the final response, check:
 
 - The trace tier matches the lane.
 - Review the score printed automatically by
-  `.agent-harness/bin/harness-cli trace`. Use
-  `.agent-harness/bin/harness-cli score-trace --id N` when re-checking a
+  `_harness/bin/harness-cli trace`. Use
+  `_harness/bin/harness-cli score-trace --id N` when re-checking a
   specific historical trace.
 - `files_changed` matches the actual changed-file set at a useful level.
 - `errors` names real blockers or is `none` for Detailed traces when the current

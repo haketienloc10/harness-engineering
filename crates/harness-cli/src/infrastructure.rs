@@ -1,5 +1,6 @@
+use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 
@@ -8,12 +9,17 @@ use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput,
-    DecisionVerifyResult, HarnessContext, InitResult, IntakeInput, MigrateResult, QueryTable,
-    StoryAddInput, StoryUpdateInput, TraceInput,
+    DecisionVerifyResult, HarnessContext, InitResult, IntakeInput, InterventionAddInput,
+    InterventionFilter, MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput,
+    StoryVerifyResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
-    normalize_token, yes_no, BacklogRecord, DecisionRecord, FrictionRecord, HarnessStats,
-    IntakeRecord, RiskLane, StoryMatrixRecord, TraceRecord,
+    compiled_tool_registry, normalize_token, score_context, score_trace, validate_tool_description,
+    AuditFinding, AuditResult, BacklogFilter, BacklogRecord, ContextScoreResult,
+    ContextScoreSource, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
+    IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllItem,
+    StoryVerifyAllResult, StoryVerifyStatus, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
+    TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -26,18 +32,43 @@ pub enum HarnessInfraError {
     MissingSchema(String),
     #[error("brownfield import: missing {0}")]
     MissingBrownfieldPath(String),
-    #[error("decision {0} has no verify_command")]
+    #[error("decision {0} has no verify_command. Configure one with: harness-cli decision add --id {0} --title <title> --verify \"<command>\"")]
     MissingDecisionVerifyCommand(String),
+    #[error("story {0} has no verify_command. Configure one with: harness-cli story update --id {0} --verify \"<command>\"")]
+    MissingStoryVerifyCommand(String),
     #[error("story update: story '{0}' not found")]
     StoryNotFound(String),
+    #[error("tool register: tool '{0}' already exists with command '{1}'")]
+    ToolAlreadyExists(String, String),
+    #[error("tool remove: tool '{0}' not found")]
+    ToolNotFound(String),
+    #[error("tool register: command '{0}' was not found. Re-run with --force to register anyway.")]
+    ToolCommandNotFound(String),
+    #[error("{0}")]
+    ToolValidation(#[from] crate::domain::ToolValidationError),
     #[error("backlog close: backlog item '{0}' not found")]
     BacklogNotFound(i64),
+    #[error("trace '{0}' not found")]
+    TraceNotFound(i64),
+    #[error("no traces found")]
+    NoTraces,
     #[error("story update: nothing to update")]
     EmptyStoryUpdate,
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Outcome of one `tool check` scan. The CLI reports these facts; the agent
+/// applies policy (skip / degrade / use) based on `status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCheckResult {
+    pub name: String,
+    pub kind: String,
+    pub capability: Option<String>,
+    pub status: String,
+    pub detail: String,
 }
 
 pub trait HarnessRepository {
@@ -47,18 +78,35 @@ pub trait HarnessRepository {
     fn record_intake(&self, input: IntakeInput) -> Result<i64>;
     fn add_story(&self, input: StoryAddInput) -> Result<()>;
     fn update_story(&self, input: StoryUpdateInput) -> Result<()>;
+    fn verify_story(&self, id: &str) -> Result<StoryVerifyResult>;
+    fn verify_all_stories(&self) -> Result<StoryVerifyAllResult>;
     fn add_decision(&self, input: DecisionAddInput) -> Result<()>;
     fn verify_decision(&self, id: &str) -> Result<DecisionVerifyResult>;
     fn add_backlog(&self, input: BacklogAddInput) -> Result<i64>;
     fn close_backlog(&self, input: BacklogCloseInput) -> Result<()>;
+    fn register_tool(&self, input: ToolRegisterInput) -> Result<()>;
+    fn remove_tool(&self, name: &str) -> Result<()>;
+    fn check_tools(&self, name: Option<String>) -> Result<Vec<ToolCheckResult>>;
+    fn add_intervention(&self, input: InterventionAddInput) -> Result<i64>;
     fn record_trace(&self, input: TraceInput) -> Result<i64>;
+    fn score_trace(&self, id: Option<i64>) -> Result<TraceScoreResult>;
+    fn score_context(&self, id: i64) -> Result<ContextScoreResult>;
+    fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus>;
     fn query_matrix(&self) -> Result<Vec<StoryMatrixRecord>>;
-    fn query_backlog(&self) -> Result<Vec<BacklogRecord>>;
+    fn query_backlog(&self, filter: BacklogFilter) -> Result<Vec<BacklogRecord>>;
     fn query_decisions(&self) -> Result<Vec<DecisionRecord>>;
     fn query_intakes(&self) -> Result<Vec<IntakeRecord>>;
     fn query_traces(&self) -> Result<Vec<TraceRecord>>;
     fn query_friction(&self) -> Result<Vec<FrictionRecord>>;
+    fn query_tools(
+        &self,
+        responsibility: Option<String>,
+        capability: Option<String>,
+    ) -> Result<Vec<ToolEntry>>;
+    fn query_interventions(&self, filter: InterventionFilter) -> Result<Vec<InterventionRecord>>;
     fn query_stats(&self) -> Result<HarnessStats>;
+    fn audit(&self) -> Result<AuditResult>;
+    fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
     fn query_sql(&self, sql: &str) -> Result<QueryTable>;
 }
 
@@ -121,6 +169,22 @@ impl SqliteHarnessRepository {
         Ok(())
     }
 
+    fn apply_pending_migrations(
+        &self,
+        connection: &Connection,
+        current_version: i64,
+    ) -> Result<Vec<i64>> {
+        let mut applied = Vec::new();
+        for (version, path) in self.migration_files()? {
+            if version > current_version {
+                let sql = fs::read_to_string(path)?;
+                connection.execute_batch(&sql)?;
+                applied.push(version);
+            }
+        }
+        Ok(applied)
+    }
+
     fn migration_files(&self) -> Result<Vec<(i64, PathBuf)>> {
         let mut files = Vec::new();
         for entry in fs::read_dir(&self.schema_dir)? {
@@ -145,12 +209,14 @@ impl SqliteHarnessRepository {
     }
 
     fn import_matrix(&self, connection: &Connection) -> Result<usize> {
-        let matrix_path = self.repo_root.join("docs/TEST_MATRIX.md");
-        if !matrix_path.exists() {
-            return Err(HarnessInfraError::MissingBrownfieldPath(
-                matrix_path.display().to_string(),
-            ));
-        }
+        let (matrix_path, matrix_record_path) =
+            self.matrix_import_path()
+                .ok_or_else(|| HarnessInfraError::MissingBrownfieldPath(
+                    self.repo_root
+                        .join("_harness/TEST_MATRIX.md")
+                        .display()
+                        .to_string(),
+                ))?;
 
         let content = fs::read_to_string(matrix_path)?;
         let mut story_count = 0;
@@ -208,7 +274,7 @@ impl SqliteHarnessRepository {
                     unit_proof, integration_proof, e2e_proof, platform_proof,
                     evidence, notes
                  ) VALUES (?1, ?2, 'high_risk', ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                    'Imported from docs/TEST_MATRIX.md by harness import brownfield.'
+                    ?10
                  )
                  ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
@@ -230,12 +296,27 @@ impl SqliteHarnessRepository {
                     e2e,
                     platform,
                     evidence,
+                    format!("Imported from {matrix_record_path} by harness import brownfield."),
                 ],
             )?;
             story_count += 1;
         }
 
         Ok(story_count)
+    }
+
+    fn matrix_import_path(&self) -> Option<(PathBuf, &'static str)> {
+        let current = self.repo_root.join("_harness/TEST_MATRIX.md");
+        if current.exists() {
+            return Some((current, "_harness/TEST_MATRIX.md"));
+        }
+
+        let legacy = self.repo_root.join("docs/TEST_MATRIX.md");
+        if legacy.exists() {
+            return Some((legacy, "docs/TEST_MATRIX.md"));
+        }
+
+        None
     }
 
     fn import_decisions(&self, connection: &Connection) -> Result<usize> {
@@ -357,6 +438,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             let current = Self::schema_version(&connection).unwrap_or(0);
             if current == 0 {
                 self.apply_schema_v1(&connection)?;
+                self.apply_pending_migrations(&connection, 1)?;
                 return Ok(InitResult::MigratedExisting {
                     db_path: self.db_path.clone(),
                 });
@@ -370,6 +452,7 @@ impl HarnessRepository for SqliteHarnessRepository {
 
         let connection = self.open_or_create()?;
         self.apply_schema_v1(&connection)?;
+        self.apply_pending_migrations(&connection, 1)?;
         Ok(InitResult::Created {
             db_path: self.db_path.clone(),
         })
@@ -378,15 +461,7 @@ impl HarnessRepository for SqliteHarnessRepository {
     fn migrate(&self) -> Result<MigrateResult> {
         let connection = self.open_existing()?;
         let current_version = Self::schema_version(&connection).unwrap_or(0);
-        let mut applied = Vec::new();
-
-        for (version, path) in self.migration_files()? {
-            if version > current_version {
-                let sql = fs::read_to_string(path)?;
-                connection.execute_batch(&sql)?;
-                applied.push(version);
-            }
-        }
+        let applied = self.apply_pending_migrations(&connection, current_version)?;
 
         Ok(MigrateResult {
             current_version,
@@ -430,13 +505,14 @@ impl HarnessRepository for SqliteHarnessRepository {
     fn add_story(&self, input: StoryAddInput) -> Result<()> {
         let connection = self.open_existing()?;
         connection.execute(
-            "INSERT INTO story (id, title, risk_lane, contract_doc, notes)
-             VALUES (?1, ?2, ?3, ?4, ?5);",
+            "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
             params![
                 input.id,
                 input.title,
                 input.risk_lane.as_db_value(),
                 input.contract_doc,
+                input.verify_command,
                 input.notes,
             ],
         )?;
@@ -450,6 +526,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             && input.integration.is_none()
             && input.e2e.is_none()
             && input.platform.is_none()
+            && input.verify_command.is_none()
         {
             return Err(HarnessInfraError::EmptyStoryUpdate);
         }
@@ -462,8 +539,9 @@ impl HarnessRepository for SqliteHarnessRepository {
                 unit_proof=COALESCE(?3, unit_proof),
                 integration_proof=COALESCE(?4, integration_proof),
                 e2e_proof=COALESCE(?5, e2e_proof),
-                platform_proof=COALESCE(?6, platform_proof)
-             WHERE id=?7;",
+                platform_proof=COALESCE(?6, platform_proof),
+                verify_command=COALESCE(?7, verify_command)
+             WHERE id=?8;",
             params![
                 input.status,
                 input.evidence,
@@ -471,6 +549,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                 input.integration.map(|value| value.0),
                 input.e2e.map(|value| value.0),
                 input.platform.map(|value| value.0),
+                input.verify_command,
                 input.id,
             ],
         )?;
@@ -479,6 +558,104 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::StoryNotFound(input.id));
         }
         Ok(())
+    }
+
+    fn verify_story(&self, id: &str) -> Result<StoryVerifyResult> {
+        let connection = self.open_existing()?;
+        let verify_command = connection
+            .query_row(
+                "SELECT verify_command FROM story WHERE id=?1;",
+                params![id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| HarnessInfraError::MissingStoryVerifyCommand(id.to_owned()))?;
+
+        let (shell, flag) = verifier_shell();
+        let output = Command::new(shell)
+            .arg(flag)
+            .arg(&verify_command)
+            .current_dir(&self.repo_root)
+            .output()?;
+        let result = if output.status.success() {
+            "pass"
+        } else {
+            "fail"
+        }
+        .to_owned();
+        connection.execute(
+            "UPDATE story
+             SET last_verified_at=datetime('now'), last_verified_result=?1
+             WHERE id=?2;",
+            params![result, id],
+        )?;
+
+        Ok(StoryVerifyResult {
+            command: verify_command,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            result,
+        })
+    }
+
+    fn verify_all_stories(&self) -> Result<StoryVerifyAllResult> {
+        let connection = self.open_existing()?;
+        let mut statement =
+            connection.prepare("SELECT id, title, verify_command FROM story ORDER BY id;")?;
+        let story_rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
+        let stories = collect_rows(story_rows)?;
+        let mut items = Vec::new();
+
+        for (id, title, verify_command) in stories {
+            let Some(command) = verify_command.filter(|value| !value.trim().is_empty()) else {
+                items.push(StoryVerifyAllItem {
+                    id,
+                    title,
+                    command: None,
+                    result: "skipped".to_owned(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                });
+                continue;
+            };
+
+            let (shell, flag) = verifier_shell();
+            let output = Command::new(shell)
+                .arg(flag)
+                .arg(&command)
+                .current_dir(&self.repo_root)
+                .output()?;
+            let result = if output.status.success() {
+                "pass"
+            } else {
+                "fail"
+            }
+            .to_owned();
+            connection.execute(
+                "UPDATE story
+                 SET last_verified_at=datetime('now'), last_verified_result=?1
+                 WHERE id=?2;",
+                params![result, id],
+            )?;
+            items.push(StoryVerifyAllItem {
+                id,
+                title,
+                command: Some(command),
+                result,
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+
+        Ok(StoryVerifyAllResult { items })
     }
 
     fn add_decision(&self, input: DecisionAddInput) -> Result<()> {
@@ -512,8 +689,9 @@ impl HarnessRepository for SqliteHarnessRepository {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| HarnessInfraError::MissingDecisionVerifyCommand(id.to_owned()))?;
 
-        let status = Command::new("sh")
-            .arg("-c")
+        let (shell, flag) = verifier_shell();
+        let status = Command::new(shell)
+            .arg(flag)
             .arg(&verify_command)
             .current_dir(&self.repo_root)
             .status()?;
@@ -566,6 +744,110 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(())
     }
 
+    fn register_tool(&self, input: ToolRegisterInput) -> Result<()> {
+        validate_tool_description(&input.description)?;
+        // Only exec-probed kinds are PATH-checked at register time. mcp/skill/http
+        // are not on PATH by nature, so registering intent always succeeds; their
+        // presence is resolved later by `tool check` via scan_target.
+        let exec_probed = matches!(input.kind.as_str(), "cli" | "binary");
+        if exec_probed && !input.force && !command_available(&self.repo_root, &input.command) {
+            return Err(HarnessInfraError::ToolCommandNotFound(input.command));
+        }
+
+        let connection = self.open_existing()?;
+        let existing = connection
+            .query_row(
+                "SELECT command FROM tool WHERE name=?1;",
+                params![input.name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(command) = existing {
+            return Err(HarnessInfraError::ToolAlreadyExists(input.name, command));
+        }
+
+        connection.execute(
+            "INSERT INTO tool
+                (name, provider, command, description, args, responsibility, since,
+                 kind, capability, scan_target, status)
+             VALUES (?1, 'custom', ?2, ?3, ?4, ?5, 'registered', ?6, ?7, ?8, 'unknown');",
+            params![
+                input.name,
+                input.command,
+                input.description,
+                tool_args_json(&input.args),
+                input.responsibility,
+                input.kind,
+                input.capability,
+                input.scan_target,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn remove_tool(&self, name: &str) -> Result<()> {
+        let connection = self.open_existing()?;
+        connection.execute("DELETE FROM tool WHERE name=?1;", params![name])?;
+        if connection.changes() == 0 {
+            return Err(HarnessInfraError::ToolNotFound(name.to_owned()));
+        }
+        Ok(())
+    }
+
+    fn check_tools(&self, name: Option<String>) -> Result<Vec<ToolCheckResult>> {
+        let connection = self.open_existing()?;
+        let mut statement = connection.prepare(
+            "SELECT name, kind, command, scan_target, capability FROM tool
+             WHERE (?1 IS NULL OR name = ?1)
+             ORDER BY name;",
+        )?;
+        let rows = statement.query_map(params![name], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let tools = collect_rows(rows)?;
+
+        let mut results = Vec::with_capacity(tools.len());
+        for (name, kind, command, scan_target, capability) in tools {
+            let (status, detail) =
+                scan_tool_status(&self.repo_root, &kind, &command, scan_target.as_deref());
+            connection.execute(
+                "UPDATE tool SET status=?1, checked_at=datetime('now') WHERE name=?2;",
+                params![status, name],
+            )?;
+            results.push(ToolCheckResult {
+                name,
+                kind,
+                capability,
+                status: status.to_owned(),
+                detail,
+            });
+        }
+        Ok(results)
+    }
+
+    fn add_intervention(&self, input: InterventionAddInput) -> Result<i64> {
+        let connection = self.open_existing()?;
+        connection.execute(
+            "INSERT INTO intervention (trace_id, story_id, type, description, source, impact)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            params![
+                input.trace_id,
+                input.story_id,
+                input.intervention_type,
+                input.description,
+                input.source,
+                input.impact,
+            ],
+        )?;
+        Ok(connection.last_insert_rowid())
+    }
+
     fn record_trace(&self, input: TraceInput) -> Result<i64> {
         let connection = self.open_existing()?;
         connection.execute(
@@ -594,6 +876,119 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(connection.last_insert_rowid())
     }
 
+    fn score_trace(&self, id: Option<i64>) -> Result<TraceScoreResult> {
+        let connection = self.open_existing()?;
+        let sql = match id {
+            Some(_) => {
+                "SELECT
+                    trace.id,
+                    trace.task_summary,
+                    trace.intake_id,
+                    intake.risk_lane,
+                    trace.agent,
+                    trace.actions_taken,
+                    trace.files_read,
+                    trace.files_changed,
+                    trace.decisions_made,
+                    trace.errors,
+                    trace.outcome,
+                    trace.duration_seconds,
+                    trace.token_estimate,
+                    trace.harness_friction,
+                    trace.notes
+                 FROM trace
+                 LEFT JOIN intake ON intake.id = trace.intake_id
+                 WHERE trace.id = ?1"
+            }
+            None => {
+                "SELECT
+                    trace.id,
+                    trace.task_summary,
+                    trace.intake_id,
+                    intake.risk_lane,
+                    trace.agent,
+                    trace.actions_taken,
+                    trace.files_read,
+                    trace.files_changed,
+                    trace.decisions_made,
+                    trace.errors,
+                    trace.outcome,
+                    trace.duration_seconds,
+                    trace.token_estimate,
+                    trace.harness_friction,
+                    trace.notes
+                 FROM trace
+                 LEFT JOIN intake ON intake.id = trace.intake_id
+                 ORDER BY trace.id DESC
+                 LIMIT 1"
+            }
+        };
+
+        let source = if let Some(id) = id {
+            connection
+                .query_row(sql, params![id], trace_score_source_from_row)
+                .optional()?
+                .ok_or(HarnessInfraError::TraceNotFound(id))?
+        } else {
+            connection
+                .query_row(sql, [], trace_score_source_from_row)
+                .optional()?
+                .ok_or(HarnessInfraError::NoTraces)?
+        };
+
+        Ok(score_trace(source))
+    }
+
+    fn score_context(&self, id: i64) -> Result<ContextScoreResult> {
+        let connection = self.open_existing()?;
+        let source = connection
+            .query_row(
+                "SELECT
+                    trace.id,
+                    intake.risk_lane,
+                    trace.story_id,
+                    trace.files_read,
+                    trace.files_changed,
+                    trace.outcome
+                 FROM trace
+                 LEFT JOIN intake ON intake.id = trace.intake_id
+                 WHERE trace.id=?1;",
+                params![id],
+                |row| {
+                    Ok(ContextScoreSource {
+                        id: row.get(0)?,
+                        risk_lane: row.get(1)?,
+                        story_id: row.get(2)?,
+                        files_read: row.get(3)?,
+                        files_changed: row.get(4)?,
+                        outcome: row.get(5)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(HarnessInfraError::TraceNotFound(id))?;
+
+        Ok(score_context(source))
+    }
+
+    fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus> {
+        let connection = self.open_existing()?;
+        connection
+            .query_row(
+                "SELECT id, verify_command, last_verified_result FROM story WHERE id=?1;",
+                params![id],
+                |row| {
+                    Ok(StoryVerifyStatus {
+                        id: row.get(0)?,
+                        verify_command: row.get(1)?,
+                        last_verified_result: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| HarnessInfraError::StoryNotFound(id.to_owned()))
+    }
+
     fn query_matrix(&self) -> Result<Vec<StoryMatrixRecord>> {
         let connection = self.open_existing()?;
         let mut statement = connection.prepare(
@@ -606,10 +1001,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 status: row.get(2)?,
-                unit: yes_no(row.get::<_, i64>(3)?),
-                integration: yes_no(row.get::<_, i64>(4)?),
-                e2e: yes_no(row.get::<_, i64>(5)?),
-                platform: yes_no(row.get::<_, i64>(6)?),
+                unit: row.get(3)?,
+                integration: row.get(4)?,
+                e2e: row.get(5)?,
+                platform: row.get(6)?,
                 evidence: row.get(7)?,
             })
         })?;
@@ -617,12 +1012,18 @@ impl HarnessRepository for SqliteHarnessRepository {
         collect_rows(rows)
     }
 
-    fn query_backlog(&self) -> Result<Vec<BacklogRecord>> {
+    fn query_backlog(&self, filter: BacklogFilter) -> Result<Vec<BacklogRecord>> {
         let connection = self.open_existing()?;
-        let mut statement = connection.prepare(
+        let where_clause = match filter {
+            BacklogFilter::All => "",
+            BacklogFilter::Open => "WHERE status IN ('proposed', 'accepted')",
+            BacklogFilter::Closed => "WHERE status IN ('implemented', 'rejected')",
+        };
+        let sql = format!(
             "SELECT id, title, status, risk, predicted_impact, actual_outcome
-             FROM backlog ORDER BY status, id;",
-        )?;
+             FROM backlog {where_clause} ORDER BY status, id;"
+        );
+        let mut statement = connection.prepare(&sql)?;
 
         let rows = statement.query_map([], |row| {
             Ok(BacklogRecord {
@@ -701,20 +1102,103 @@ impl HarnessRepository for SqliteHarnessRepository {
     fn query_friction(&self) -> Result<Vec<FrictionRecord>> {
         let connection = self.open_existing()?;
         let mut statement = connection.prepare(
-            "SELECT id, created_at, task_summary, harness_friction
-             FROM trace WHERE harness_friction IS NOT NULL
-             ORDER BY id DESC;",
+            "SELECT
+                trace.id,
+                trace.created_at,
+                intake.risk_lane,
+                intake.input_type,
+                trace.task_summary,
+                trace.harness_friction
+             FROM trace
+             LEFT JOIN intake ON intake.id = trace.intake_id
+             WHERE trace.harness_friction IS NOT NULL
+             ORDER BY trace.id DESC;",
         )?;
 
         let rows = statement.query_map([], |row| {
             Ok(FrictionRecord {
                 id: row.get(0)?,
                 created_at: row.get(1)?,
-                task_summary: row.get(2)?,
-                harness_friction: row.get(3)?,
+                risk_lane: row.get(2)?,
+                input_type: row.get(3)?,
+                task_summary: row.get(4)?,
+                harness_friction: row.get(5)?,
             })
         })?;
 
+        collect_rows(rows)
+    }
+
+    fn query_tools(
+        &self,
+        responsibility: Option<String>,
+        capability: Option<String>,
+    ) -> Result<Vec<ToolEntry>> {
+        let connection = self.open_existing()?;
+        let mut tools = compiled_tool_registry();
+        let mut statement = connection.prepare(
+            "SELECT provider, name, command, description, args, responsibility, since,
+                    kind, capability, scan_target, status, checked_at
+             FROM tool ORDER BY name;",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(ToolEntry {
+                provider: row.get(0)?,
+                name: row.get(1)?,
+                command: row.get(2)?,
+                description: row.get(3)?,
+                args: parse_stored_tool_args(row.get::<_, Option<String>>(4)?.as_deref()),
+                responsibility: row.get(5)?,
+                source: "registered".to_owned(),
+                since: row.get(6)?,
+                kind: row.get(7)?,
+                capability: row.get(8)?,
+                scan_target: row.get(9)?,
+                status: row.get(10)?,
+                checked_at: row.get(11)?,
+            })
+        })?;
+        tools.extend(collect_rows(rows)?);
+        if let Some(responsibility) = responsibility {
+            let normalized = normalize_token(&responsibility);
+            tools.retain(|tool| normalize_token(&tool.responsibility) == normalized);
+        }
+        if let Some(capability) = capability {
+            let normalized = normalize_token(&capability);
+            tools.retain(|tool| {
+                tool.capability
+                    .as_deref()
+                    .is_some_and(|value| normalize_token(value) == normalized)
+            });
+        }
+        Ok(tools)
+    }
+
+    fn query_interventions(&self, filter: InterventionFilter) -> Result<Vec<InterventionRecord>> {
+        let connection = self.open_existing()?;
+        let mut statement = connection.prepare(
+            "SELECT id, created_at, trace_id, story_id, type, description, source, impact
+             FROM intervention
+             WHERE (?1 IS NULL OR trace_id = ?1)
+               AND (?2 IS NULL OR story_id = ?2)
+               AND (?3 IS NULL OR type = ?3)
+             ORDER BY id DESC;",
+        )?;
+        let rows = statement.query_map(
+            params![filter.trace_id, filter.story_id, filter.intervention_type],
+            |row| {
+                Ok(InterventionRecord {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    trace_id: row.get(2)?,
+                    story_id: row.get(3)?,
+                    intervention_type: row.get(4)?,
+                    description: row.get(5)?,
+                    source: row.get(6)?,
+                    impact: row.get(7)?,
+                })
+            },
+        )?;
         collect_rows(rows)
     }
 
@@ -740,6 +1224,173 @@ impl HarnessRepository for SqliteHarnessRepository {
                 },
             )
             .map_err(HarnessInfraError::from)
+    }
+
+    fn audit(&self) -> Result<AuditResult> {
+        let connection = self.open_existing()?;
+        let mut result = AuditResult {
+            orphaned_stories: audit_findings(
+                &connection,
+                "SELECT story.id, story.title
+                 FROM story
+                 LEFT JOIN trace ON trace.story_id = story.id
+                 WHERE story.status IN ('planned','in_progress') AND trace.id IS NULL
+                 ORDER BY story.id;",
+            )?,
+            unverified_stories: audit_findings(
+                &connection,
+                "SELECT id, title FROM story
+                 WHERE verify_command IS NOT NULL
+                   AND TRIM(verify_command) <> ''
+                   AND last_verified_result IS NULL
+                 ORDER BY id;",
+            )?,
+            unverified_decisions: audit_findings(
+                &connection,
+                "SELECT id, title FROM decision
+                 WHERE verify_command IS NOT NULL
+                   AND TRIM(verify_command) <> ''
+                   AND last_verified_result IS NULL
+                 ORDER BY id;",
+            )?,
+            backlog_without_outcomes: audit_findings(
+                &connection,
+                "SELECT CAST(id AS TEXT), title FROM backlog
+                 WHERE predicted_impact IS NOT NULL
+                   AND actual_outcome IS NULL
+                   AND status='implemented'
+                 ORDER BY id;",
+            )?,
+            stale_stories: audit_findings(
+                &connection,
+                "SELECT story.id, story.title
+                 FROM story
+                 JOIN trace ON trace.story_id = story.id
+                 WHERE story.status <> 'implemented'
+                 GROUP BY story.id, story.title
+                 HAVING julianday('now') - julianday(MAX(trace.created_at)) > 30
+                 ORDER BY story.id;",
+            )?,
+            broken_tools: Vec::new(),
+        };
+
+        let mut statement =
+            connection.prepare("SELECT name, command, kind, status FROM tool ORDER BY name;")?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        for (name, command, kind, status) in collect_rows(rows)? {
+            // Exec-probed kinds are checked live against PATH. Scanned kinds
+            // (mcp/skill/http) are only "broken" once a scan has positively
+            // found them missing; an un-scanned `unknown` is not drift.
+            let broken = match kind.as_str() {
+                "cli" | "binary" => !command_available(&self.repo_root, &command),
+                _ => status == "missing",
+            };
+            if broken {
+                result.broken_tools.push(AuditFinding {
+                    id: name,
+                    title: command,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>> {
+        let connection = self.open_existing()?;
+        let audit = self.audit()?;
+        let mut proposals = Vec::new();
+
+        for (text, count) in repeated_friction(&connection)? {
+            proposals.push(ImprovementProposal {
+                title: format!("Reduce repeated friction: {}", short_title(&text)),
+                component: "Failure attribution".to_owned(),
+                evidence: format!("{count} traces recorded similar friction: {text}"),
+                predicted_impact: "Fewer repeated harness friction entries for similar tasks.".to_owned(),
+                risk: "normal".to_owned(),
+                suggested_action: "Update the relevant Harness docs, templates, or CLI guidance for this friction pattern.".to_owned(),
+                validation_plan: "Review the next five related traces and compare friction frequency.".to_owned(),
+                confidence: confidence_for_count(count),
+                committed_backlog_id: None,
+            });
+        }
+
+        for (key, count) in repeated_interventions(&connection)? {
+            proposals.push(ImprovementProposal {
+                title: format!("Address repeated intervention: {}", short_title(&key)),
+                component: "Intervention recording".to_owned(),
+                evidence: format!("{count} interventions share the pattern: {key}"),
+                predicted_impact: "Fewer repeated human or review interventions for the same issue.".to_owned(),
+                risk: "normal".to_owned(),
+                suggested_action: "Clarify the relevant operating rule or validation gate that would have caught this earlier.".to_owned(),
+                validation_plan: "Future interventions of this type should decrease after the rule change.".to_owned(),
+                confidence: confidence_for_count(count),
+                committed_backlog_id: None,
+            });
+        }
+
+        for (category, count) in [
+            (
+                "orphaned planned or in-progress stories",
+                audit.orphaned_stories.len(),
+            ),
+            ("unverified story commands", audit.unverified_stories.len()),
+            (
+                "unverified decision commands",
+                audit.unverified_decisions.len(),
+            ),
+            (
+                "implemented backlog items without outcomes",
+                audit.backlog_without_outcomes.len(),
+            ),
+            ("stale unfinished stories", audit.stale_stories.len()),
+            ("broken registered tools", audit.broken_tools.len()),
+        ] {
+            if count > 0 {
+                proposals.push(ImprovementProposal {
+                    title: format!("Clean up {category}"),
+                    component: "Entropy auditing".to_owned(),
+                    evidence: format!("Audit found {count} {category}."),
+                    predicted_impact: "Lower entropy score and stronger completion evidence.".to_owned(),
+                    risk: "tiny".to_owned(),
+                    suggested_action: "Resolve the listed audit findings or record why they are intentionally retained.".to_owned(),
+                    validation_plan: "Run harness-cli audit and confirm the category count decreases.".to_owned(),
+                    confidence: "low".to_owned(),
+                    committed_backlog_id: None,
+                });
+            }
+        }
+
+        if commit {
+            for proposal in &mut proposals {
+                connection.execute(
+                    "INSERT INTO backlog (
+                        title, discovered_while, current_pain, suggested_improvement,
+                        risk, predicted_impact, notes
+                     ) VALUES (?1, 'harness-cli propose', ?2, ?3, ?4, ?5, ?6);",
+                    params![
+                        proposal.title,
+                        proposal.evidence,
+                        proposal.suggested_action,
+                        normalize_token(&proposal.risk),
+                        proposal.predicted_impact,
+                        format!(
+                            "component: {}; confidence: {}; validation: {}",
+                            proposal.component, proposal.confidence, proposal.validation_plan
+                        ),
+                    ],
+                )?;
+                proposal.committed_backlog_id = Some(connection.last_insert_rowid());
+            }
+        }
+
+        Ok(proposals)
     }
 
     fn query_sql(&self, sql: &str) -> Result<QueryTable> {
@@ -830,6 +1481,26 @@ fn collect_rows<T>(
 ) -> Result<Vec<T>> {
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(HarnessInfraError::from)
+}
+
+fn trace_score_source_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TraceScoreSource> {
+    Ok(TraceScoreSource {
+        id: row.get(0)?,
+        task_summary: row.get(1)?,
+        intake_id: row.get(2)?,
+        risk_lane: row.get(3)?,
+        agent: row.get(4)?,
+        actions_taken: row.get(5)?,
+        files_read: row.get(6)?,
+        files_changed: row.get(7)?,
+        decisions_made: row.get(8)?,
+        errors: row.get(9)?,
+        outcome: row.get(10)?,
+        duration_seconds: row.get(11)?,
+        token_estimate: row.get(12)?,
+        harness_friction: row.get(13)?,
+        notes: row.get(14)?,
+    })
 }
 
 fn markdown_table_fields(line: &str) -> Vec<String> {
@@ -994,6 +1665,269 @@ fn empty_to_none(value: String) -> Option<String> {
     }
 }
 
+fn command_available(repo_root: &Path, command: &str) -> bool {
+    let first = command.split_whitespace().next().unwrap_or(command);
+    if first.is_empty() {
+        return false;
+    }
+    let candidate = Path::new(first);
+    if candidate.is_absolute() {
+        return candidate.exists();
+    }
+    if first.contains('/') || first.contains('\\') {
+        return repo_root.join(first).exists();
+    }
+    env::var_os("PATH")
+        .is_some_and(|path| env::split_paths(&path).any(|dir| dir.join(first).exists()))
+}
+
+/// Kind-aware presence probe. Returns `(status, detail)` where status is one of
+/// `present` / `missing` / `unknown`. It never fails: an absent extension is a
+/// fact to report, not an error to raise.
+fn scan_tool_status(
+    repo_root: &Path,
+    kind: &str,
+    command: &str,
+    scan_target: Option<&str>,
+) -> (&'static str, String) {
+    match kind {
+        "cli" | "binary" => {
+            if command_available(repo_root, command) {
+                ("present", command.to_owned())
+            } else {
+                ("missing", command.to_owned())
+            }
+        }
+        "mcp" | "skill" => match scan_target.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(target) => {
+                if scan_target_resolves(repo_root, target) {
+                    ("present", target.to_owned())
+                } else {
+                    ("missing", target.to_owned())
+                }
+            }
+            None => (
+                "unknown",
+                "no scan target; agent confirms availability".to_owned(),
+            ),
+        },
+        "http" => match scan_target.map(str::trim).filter(|t| !t.is_empty()) {
+            Some(target) => {
+                if http_reachable(target) || scan_target_resolves(repo_root, target) {
+                    ("present", target.to_owned())
+                } else {
+                    ("missing", target.to_owned())
+                }
+            }
+            None => ("unknown", "no scan target".to_owned()),
+        },
+        _ => ("unknown", String::new()),
+    }
+}
+
+/// Resolve a declarative scan target as a filesystem path: `~` expands to HOME,
+/// absolute paths are tested directly, relative paths are tested against the
+/// repo root.
+fn scan_target_resolves(repo_root: &Path, target: &str) -> bool {
+    let expanded = expand_home(target);
+    let path = Path::new(&expanded);
+    if path.is_absolute() {
+        path.exists()
+    } else {
+        repo_root.join(&expanded).exists()
+    }
+}
+
+fn expand_home(target: &str) -> String {
+    if let Some(rest) = target.strip_prefix("~/") {
+        if let Some(home) = env::var_os("HOME") {
+            return format!("{}/{}", home.to_string_lossy(), rest);
+        }
+    }
+    target.to_owned()
+}
+
+/// Best-effort TCP reachability for `http`/`https` scan targets. Any failure
+/// (parse, DNS, timeout, refused) is reported as not reachable rather than an
+/// error, so a down endpoint degrades the capability instead of breaking intake.
+fn http_reachable(target: &str) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+
+    let (default_port, rest) = if let Some(rest) = target.strip_prefix("https://") {
+        (443u16, rest)
+    } else if let Some(rest) = target.strip_prefix("http://") {
+        (80u16, rest)
+    } else {
+        return false;
+    };
+
+    let authority = rest.split('/').next().unwrap_or("");
+    if authority.is_empty() {
+        return false;
+    }
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse::<u16>().unwrap_or(default_port)),
+        None => (authority, default_port),
+    };
+
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .into_iter()
+        .any(|address| TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_ok())
+}
+
+fn tool_args_json(args: &[ToolArgSpec]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "[{}]",
+        args.iter()
+            .map(|arg| {
+                format!(
+                    "{{\"name\":\"{}\",\"type\":\"{}\",\"required\":{},\"help\":\"{}\"}}",
+                    escape_json(&arg.name),
+                    escape_json(&arg.arg_type),
+                    arg.required,
+                    escape_json(arg.help.as_deref().unwrap_or(""))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    ))
+}
+
+fn parse_stored_tool_args(value: Option<&str>) -> Vec<ToolArgSpec> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    if !value.contains("\"name\"") {
+        return Vec::new();
+    }
+    value
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split("},{")
+        .filter_map(|raw| {
+            let item = raw.trim_matches('{').trim_matches('}');
+            let name = json_object_value(item, "name")?;
+            let arg_type = json_object_value(item, "type").unwrap_or_else(|| "string".to_owned());
+            let required = json_object_value(item, "required")
+                .map(|value| value == "true")
+                .unwrap_or(false);
+            let help = json_object_value(item, "help").filter(|value| !value.is_empty());
+            Some(ToolArgSpec {
+                name,
+                arg_type,
+                required,
+                help,
+            })
+        })
+        .collect()
+}
+
+fn json_object_value(raw: &str, key: &str) -> Option<String> {
+    let target = format!("\"{key}\":");
+    let start = raw.find(&target)? + target.len();
+    let rest = &raw[start..];
+    if let Some(rest) = rest.strip_prefix('"') {
+        let end = rest.find('"')?;
+        Some(rest[..end].to_owned())
+    } else {
+        Some(rest.split(',').next().unwrap_or_default().trim().to_owned())
+    }
+}
+
+fn escape_json(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn audit_findings(connection: &Connection, sql: &str) -> Result<Vec<AuditFinding>> {
+    let mut statement = connection.prepare(sql)?;
+    let rows = statement.query_map([], |row| {
+        Ok(AuditFinding {
+            id: row.get(0)?,
+            title: row.get(1)?,
+        })
+    })?;
+    collect_rows(rows)
+}
+
+fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
+    let mut statement = connection.prepare(
+        "SELECT harness_friction FROM trace
+         WHERE harness_friction IS NOT NULL
+           AND TRIM(harness_friction) <> ''
+           AND LOWER(TRIM(harness_friction)) <> 'none';",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let values = collect_rows(rows)?;
+    Ok(repeated_values(values))
+}
+
+fn repeated_interventions(connection: &Connection) -> Result<Vec<(String, usize)>> {
+    let mut statement = connection.prepare(
+        "SELECT type || ': ' || description FROM intervention
+         WHERE TRIM(description) <> '';",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let values = collect_rows(rows)?;
+    Ok(repeated_values(values))
+}
+
+fn repeated_values(values: Vec<String>) -> Vec<(String, usize)> {
+    let mut grouped: Vec<(String, String, usize)> = Vec::new();
+    for value in values {
+        let key = normalize_token(&value);
+        if let Some(existing) = grouped.iter_mut().find(|item| item.0 == key) {
+            existing.2 += 1;
+        } else {
+            grouped.push((key, value, 1));
+        }
+    }
+    grouped
+        .into_iter()
+        .filter(|(_, _, count)| *count >= 2)
+        .map(|(_, value, count)| (value, count))
+        .collect()
+}
+
+fn confidence_for_count(count: usize) -> String {
+    if count >= 3 {
+        "high".to_owned()
+    } else {
+        "medium".to_owned()
+    }
+}
+
+fn short_title(value: &str) -> String {
+    let words = value
+        .split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if words.len() > 72 {
+        format!("{}...", &words[..69])
+    } else {
+        words
+    }
+}
+
+fn verifier_shell() -> (&'static str, &'static str) {
+    if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    }
+}
+
 fn is_decision_file_name(file_name: &str) -> bool {
     let Some((prefix, _)) = file_name.split_once('-') else {
         return false;
@@ -1017,24 +1951,40 @@ mod tests {
 
     use super::*;
     use crate::application::{
-        BacklogAddInput, BacklogCloseInput, DecisionAddInput, IntakeInput, StoryAddInput,
-        StoryUpdateInput, TraceInput,
+        BacklogAddInput, BacklogCloseInput, DecisionAddInput, IntakeInput, InterventionAddInput,
+        InterventionFilter, StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
     };
-    use crate::domain::{BoolFlag, CsvList, InputType, RiskLane};
+    use crate::domain::{BacklogFilter, BoolFlag, CsvList, InputType, RiskLane, TraceQualityTier};
 
-    fn test_repository() -> (TempDir, SqliteHarnessRepository) {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn source_repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
             .unwrap()
-            .to_path_buf();
+            .to_path_buf()
+    }
+
+    fn test_schema_dir() -> PathBuf {
+        source_repo_root().join("_harness/scripts/schema")
+    }
+
+    fn test_repository() -> (TempDir, SqliteHarnessRepository) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = source_repo_root();
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            repo_root.join(".agent-harness/scripts/schema"),
+            test_schema_dir(),
         );
         (temp_dir, repository)
+    }
+
+    fn story_columns(connection: &Connection) -> Vec<String> {
+        let mut statement = connection.prepare("PRAGMA table_info(story);").unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap();
+        rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
     }
 
     #[test]
@@ -1045,6 +1995,89 @@ mod tests {
 
         assert!(matches!(result, InitResult::Created { .. }));
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
+        let connection = repository.open_existing().unwrap();
+        let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
+        assert_eq!(schema_version, 5);
+        let story_columns = story_columns(&connection);
+        assert!(story_columns.contains(&"verify_command".to_owned()));
+        assert!(story_columns.contains(&"last_verified_at".to_owned()));
+        assert!(story_columns.contains(&"last_verified_result".to_owned()));
+    }
+
+    #[test]
+    fn migrate_applies_story_verify_columns_to_existing_database() {
+        let (_temp_dir, repository) = test_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        drop(connection);
+
+        let result = repository.migrate().unwrap();
+
+        assert_eq!(result.current_version, 1);
+        assert_eq!(result.applied, vec![2, 3, 4, 5]);
+        let connection = repository.open_existing().unwrap();
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            5
+        );
+        let story_columns = story_columns(&connection);
+        assert!(story_columns.contains(&"verify_command".to_owned()));
+        assert!(story_columns.contains(&"last_verified_at".to_owned()));
+        assert!(story_columns.contains(&"last_verified_result".to_owned()));
+    }
+
+    #[test]
+    fn migration_005_backfills_kind_from_command_prefix() {
+        let (_temp_dir, repository) = test_repository();
+        let schema_dir = test_schema_dir();
+
+        // Build a pre-kind (v4) database: v1 base plus migrations 002-004 only.
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        for file in [
+            "002-story-verify.sql",
+            "003-tool-registry.sql",
+            "004-intervention.sql",
+        ] {
+            let sql = std::fs::read_to_string(schema_dir.join(file)).unwrap();
+            connection.execute_batch(&sql).unwrap();
+        }
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            4
+        );
+
+        // Insert tools the old way (no kind column existed yet).
+        for (name, command) in [
+            ("mcp-example", "mcp:example-server"),
+            ("skill-example", "skill:example-skill"),
+            ("cli-example", "./deploy.sh"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO tool (name, command, description, responsibility)
+                     VALUES (?1, ?2, 'pre-kind registered tool example', 'Verification');",
+                    params![name, command],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        // Upgrade: migration 005 must infer kind from the command prefix.
+        assert_eq!(repository.migrate().unwrap().applied, vec![5]);
+        let connection = repository.open_existing().unwrap();
+        let kind_of = |name: &str| -> String {
+            connection
+                .query_row(
+                    "SELECT kind FROM tool WHERE name=?1;",
+                    params![name],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(kind_of("mcp-example"), "mcp");
+        assert_eq!(kind_of("skill-example"), "skill");
+        assert_eq!(kind_of("cli-example"), "cli");
     }
 
     #[test]
@@ -1086,27 +2119,26 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_root = temp_dir.path().join("repo");
         fs::create_dir_all(&repo_root).unwrap();
-        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .to_path_buf()
-            .join(".agent-harness/scripts/schema");
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            schema_root,
+            test_schema_dir(),
         );
         repository.init().unwrap();
 
-        let pwd_output = temp_dir.path().join("verify-pwd.txt");
+        let pwd_output = repo_root.join("verify-pwd.txt");
+        let verify_command = if cfg!(windows) {
+            "cd > verify-pwd.txt".to_owned()
+        } else {
+            "pwd > verify-pwd.txt".to_owned()
+        };
         repository
             .add_decision(DecisionAddInput {
                 id: "0001-test".to_owned(),
                 title: "Verify from root".to_owned(),
                 status: "accepted".to_owned(),
                 doc_path: None,
-                verify_command: Some(format!("pwd > {}", pwd_output.display())),
+                verify_command: Some(verify_command),
                 predicted_impact: None,
                 notes: None,
             })
@@ -1122,6 +2154,461 @@ mod tests {
     }
 
     #[test]
+    fn story_add_update_and_verify_status_store_verify_command() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+
+        repository
+            .add_story(StoryAddInput {
+                id: "US-VERIFY".to_owned(),
+                title: "Verify command story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: Some("echo ok".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        assert_eq!(
+            repository
+                .story_verify_status("US-VERIFY")
+                .unwrap()
+                .verify_command
+                .as_deref(),
+            Some("echo ok")
+        );
+
+        repository
+            .update_story(StoryUpdateInput {
+                id: "US-VERIFY".to_owned(),
+                status: None,
+                evidence: None,
+                unit: None,
+                integration: None,
+                e2e: None,
+                platform: None,
+                verify_command: Some("npm test".to_owned()),
+            })
+            .unwrap();
+
+        assert_eq!(
+            repository
+                .story_verify_status("US-VERIFY")
+                .unwrap()
+                .verify_command
+                .as_deref(),
+            Some("npm test")
+        );
+    }
+
+    #[test]
+    fn story_verify_records_pass_fail_and_missing_command() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = temp_dir.path().join("repo");
+        fs::create_dir_all(&repo_root).unwrap();
+        let repository = SqliteHarnessRepository::new(
+            repo_root.clone(),
+            temp_dir.path().join("harness.db"),
+            test_schema_dir(),
+        );
+        repository.init().unwrap();
+
+        let pwd_output = repo_root.join("story-verify-pwd.txt");
+        let verify_command = if cfg!(windows) {
+            "cd > story-verify-pwd.txt".to_owned()
+        } else {
+            "pwd > story-verify-pwd.txt".to_owned()
+        };
+        repository
+            .add_story(StoryAddInput {
+                id: "US-PASS".to_owned(),
+                title: "Passing story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: Some(verify_command),
+                notes: None,
+            })
+            .unwrap();
+        let pass = repository.verify_story("US-PASS").unwrap();
+        assert_eq!(pass.result, "pass");
+        assert_eq!(
+            fs::canonicalize(fs::read_to_string(pwd_output).unwrap().trim()).unwrap(),
+            fs::canonicalize(repo_root).unwrap()
+        );
+        assert_eq!(
+            repository
+                .story_verify_status("US-PASS")
+                .unwrap()
+                .last_verified_result
+                .as_deref(),
+            Some("pass")
+        );
+
+        repository
+            .add_story(StoryAddInput {
+                id: "US-FAIL".to_owned(),
+                title: "Failing story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: Some("exit 1".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        let fail = repository.verify_story("US-FAIL").unwrap();
+        assert_eq!(fail.result, "fail");
+        assert_eq!(
+            repository
+                .story_verify_status("US-FAIL")
+                .unwrap()
+                .last_verified_result
+                .as_deref(),
+            Some("fail")
+        );
+
+        repository
+            .add_story(StoryAddInput {
+                id: "US-MISSING".to_owned(),
+                title: "Missing command story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            repository.verify_story("US-MISSING"),
+            Err(HarnessInfraError::MissingStoryVerifyCommand(id)) if id == "US-MISSING"
+        ));
+    }
+
+    #[test]
+    fn story_verify_all_reports_pass_fail_and_skipped() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        for (id, command) in [
+            ("US-PASS", Some("exit 0")),
+            ("US-FAIL", Some("exit 1")),
+            ("US-SKIP", None),
+        ] {
+            repository
+                .add_story(StoryAddInput {
+                    id: id.to_owned(),
+                    title: id.to_owned(),
+                    risk_lane: RiskLane::Normal,
+                    contract_doc: None,
+                    verify_command: command.map(str::to_owned),
+                    notes: None,
+                })
+                .unwrap();
+        }
+
+        let result = repository.verify_all_stories().unwrap();
+
+        assert_eq!(result.passed(), 1);
+        assert_eq!(result.failed(), 1);
+        assert_eq!(result.skipped(), 1);
+        assert_eq!(
+            repository
+                .story_verify_status("US-PASS")
+                .unwrap()
+                .last_verified_result
+                .as_deref(),
+            Some("pass")
+        );
+        assert_eq!(
+            repository
+                .story_verify_status("US-FAIL")
+                .unwrap()
+                .last_verified_result
+                .as_deref(),
+            Some("fail")
+        );
+    }
+
+    #[test]
+    fn tool_registry_register_query_and_remove_work() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+
+        repository
+            .register_tool(ToolRegisterInput {
+                name: "deploy-check".to_owned(),
+                command: "definitely-missing-tool".to_owned(),
+                description: "Verify deploy health before release".to_owned(),
+                responsibility: "Verification".to_owned(),
+                args: Vec::new(),
+                force: true,
+                kind: "cli".to_owned(),
+                capability: Some("deploy-verification".to_owned()),
+                scan_target: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            repository.register_tool(ToolRegisterInput {
+                name: "deploy-check".to_owned(),
+                command: "definitely-missing-tool".to_owned(),
+                description: "Verify deploy health before release".to_owned(),
+                responsibility: "Verification".to_owned(),
+                args: Vec::new(),
+                force: true,
+                kind: "cli".to_owned(),
+                capability: Some("deploy-verification".to_owned()),
+                scan_target: None,
+            }),
+            Err(HarnessInfraError::ToolAlreadyExists(_, _))
+        ));
+
+        let verification_tools = repository
+            .query_tools(Some("Verification".to_owned()), None)
+            .unwrap();
+        assert!(verification_tools
+            .iter()
+            .any(|tool| tool.name == "deploy-check" && tool.source == "registered"));
+
+        // Capability lookup returns the registered provider.
+        let by_capability = repository
+            .query_tools(None, Some("deploy-verification".to_owned()))
+            .unwrap();
+        assert!(by_capability.iter().any(|tool| tool.name == "deploy-check"));
+
+        repository.remove_tool("deploy-check").unwrap();
+        assert!(!repository
+            .query_tools(None, None)
+            .unwrap()
+            .iter()
+            .any(|tool| tool.name == "deploy-check"));
+    }
+
+    #[test]
+    fn tool_check_scans_and_persists_status_per_kind() {
+        let (temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+
+        // Absolute scan targets keep the test hermetic: test_repository's
+        // repo_root points at the real project, so relative targets would
+        // resolve against the checkout rather than the temp dir.
+        let present_target = temp_dir.path().join("skill-present");
+        std::fs::create_dir_all(&present_target).unwrap();
+        let missing_target = temp_dir.path().join("mcp-missing");
+
+        // An mcp tool whose scan target does not exist -> missing.
+        repository
+            .register_tool(ToolRegisterInput {
+                name: "mcp-example".to_owned(),
+                command: "mcp:example-server".to_owned(),
+                description: "Example MCP-backed provider".to_owned(),
+                responsibility: "Verification".to_owned(),
+                args: Vec::new(),
+                force: false,
+                kind: "mcp".to_owned(),
+                capability: Some("impact-analysis".to_owned()),
+                scan_target: Some(missing_target.to_string_lossy().into_owned()),
+            })
+            .unwrap();
+
+        // A skill tool whose scan target exists -> present.
+        repository
+            .register_tool(ToolRegisterInput {
+                name: "skill-example".to_owned(),
+                command: "skill:example-skill".to_owned(),
+                description: "Example skill-backed provider".to_owned(),
+                responsibility: "Verification".to_owned(),
+                args: Vec::new(),
+                force: false,
+                kind: "skill".to_owned(),
+                capability: Some("impact-analysis".to_owned()),
+                scan_target: Some(present_target.to_string_lossy().into_owned()),
+            })
+            .unwrap();
+
+        let results = repository.check_tools(None).unwrap();
+        let mcp_tool = results.iter().find(|r| r.name == "mcp-example").unwrap();
+        let skill_tool = results.iter().find(|r| r.name == "skill-example").unwrap();
+        assert_eq!(mcp_tool.status, "missing");
+        assert_eq!(skill_tool.status, "present");
+
+        // Status is persisted, not just returned.
+        let stored = repository
+            .query_tools(None, Some("impact-analysis".to_owned()))
+            .unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(stored
+            .iter()
+            .all(|tool| tool.checked_at.as_deref().is_some_and(|v| !v.is_empty())));
+        assert_eq!(
+            stored
+                .iter()
+                .find(|t| t.name == "skill-example")
+                .unwrap()
+                .status,
+            "present"
+        );
+    }
+
+    #[test]
+    fn interventions_can_be_added_and_filtered() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "US-I".to_owned(),
+                title: "Intervention story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        let trace_id = repository
+            .record_trace(TraceInput {
+                task_summary: "Trace for intervention".to_owned(),
+                intake_id: None,
+                story_id: Some("US-I".to_owned()),
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("none".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        repository
+            .add_intervention(InterventionAddInput {
+                trace_id: Some(trace_id),
+                story_id: Some("US-I".to_owned()),
+                intervention_type: "correction".to_owned(),
+                description: "Use error handling instead of unwrap".to_owned(),
+                source: "human".to_owned(),
+                impact: Some("Reduced panic risk".to_owned()),
+            })
+            .unwrap();
+
+        assert_eq!(
+            repository
+                .query_interventions(InterventionFilter {
+                    trace_id: Some(trace_id),
+                    story_id: None,
+                    intervention_type: None,
+                })
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            repository
+                .query_interventions(InterventionFilter {
+                    trace_id: None,
+                    story_id: Some("US-I".to_owned()),
+                    intervention_type: Some("override".to_owned()),
+                })
+                .unwrap()
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn audit_detects_drift_and_propose_can_commit_backlog_items() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "US-AUDIT".to_owned(),
+                title: "Audit story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: Some("exit 0".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .update_story(StoryUpdateInput {
+                id: "US-AUDIT".to_owned(),
+                status: Some("in_progress".to_owned()),
+                evidence: None,
+                unit: None,
+                integration: None,
+                e2e: None,
+                platform: None,
+                verify_command: None,
+            })
+            .unwrap();
+        repository
+            .add_backlog(BacklogAddInput {
+                title: "Implemented without outcome".to_owned(),
+                discovered_while: None,
+                current_pain: None,
+                suggestion: None,
+                risk: Some(RiskLane::Tiny),
+                predicted_impact: Some("Expected improvement".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .close_backlog(BacklogCloseInput {
+                id: 1,
+                status: "implemented".to_owned(),
+                actual_outcome: None,
+            })
+            .unwrap();
+        repository
+            .register_tool(ToolRegisterInput {
+                name: "missing-tool".to_owned(),
+                command: "definitely-missing-tool".to_owned(),
+                description: "Missing command for audit coverage".to_owned(),
+                responsibility: "Verification".to_owned(),
+                args: Vec::new(),
+                force: true,
+                kind: "cli".to_owned(),
+                capability: None,
+                scan_target: None,
+            })
+            .unwrap();
+        for _ in 0..2 {
+            repository
+                .record_trace(TraceInput {
+                    task_summary: "Repeated friction trace".to_owned(),
+                    intake_id: None,
+                    story_id: None,
+                    agent: Some("codex".to_owned()),
+                    outcome: Some("completed".to_owned()),
+                    duration_seconds: None,
+                    token_estimate: None,
+                    friction: Some("Context rules missed schema decision".to_owned()),
+                    notes: None,
+                    actions: CsvList::from_optional(Some("read".to_owned())),
+                    files_read: CsvList::from_optional(Some("_harness/HARNESS.md".to_owned())),
+                    files_changed: CsvList::from_optional(Some(
+                        "_harness/scripts/schema/003-tool-registry.sql".to_owned(),
+                    )),
+                    decisions: CsvList::from_optional(None),
+                    errors: CsvList::from_optional(None),
+                })
+                .unwrap();
+        }
+
+        let audit = repository.audit().unwrap();
+        assert_eq!(audit.orphaned_stories.len(), 1);
+        assert_eq!(audit.unverified_stories.len(), 1);
+        assert_eq!(audit.backlog_without_outcomes.len(), 1);
+        assert_eq!(audit.broken_tools.len(), 1);
+        assert!(audit.entropy_score() > 0);
+
+        let proposals = repository.propose(true).unwrap();
+        assert!(proposals.iter().any(|proposal| proposal
+            .evidence
+            .contains("Context rules missed schema decision")));
+        assert!(proposals
+            .iter()
+            .all(|proposal| proposal.committed_backlog_id.is_some()));
+        assert!(repository.query_backlog(BacklogFilter::Open).unwrap().len() >= 1);
+    }
+
+    #[test]
     fn story_backlog_trace_and_queries_work() {
         let (_temp_dir, repository) = test_repository();
         repository.init().unwrap();
@@ -1132,6 +2619,7 @@ mod tests {
                 title: "Test story".to_owned(),
                 risk_lane: RiskLane::Normal,
                 contract_doc: None,
+                verify_command: None,
                 notes: None,
             })
             .unwrap();
@@ -1144,9 +2632,10 @@ mod tests {
                 integration: None,
                 e2e: None,
                 platform: None,
+                verify_command: None,
             })
             .unwrap();
-        assert_eq!(repository.query_matrix().unwrap()[0].unit, "yes");
+        assert_eq!(repository.query_matrix().unwrap()[0].unit, 1);
 
         let backlog_id = repository
             .add_backlog(BacklogAddInput {
@@ -1167,7 +2656,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(
-            repository.query_backlog().unwrap()[0]
+            repository.query_backlog(BacklogFilter::All).unwrap()[0]
                 .actual_outcome
                 .as_deref(),
             Some("done")
@@ -1200,6 +2689,85 @@ mod tests {
             repository.query_friction().unwrap()[0].harness_friction,
             "none"
         );
+    }
+
+    #[test]
+    fn friction_query_includes_intake_context_and_filters_null_friction() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let intake_id = repository
+            .record_intake(IntakeInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Friction query context".to_owned(),
+                risk_lane: RiskLane::Normal,
+                risk_flags: CsvList::from_optional(None),
+                affected_docs: CsvList::from_optional(None),
+                story_id: None,
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: "Trace without friction".to_owned(),
+                intake_id: Some(intake_id),
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: None,
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: "Trace with linked friction".to_owned(),
+                intake_id: Some(intake_id),
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("Linked friction".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: "Trace with unlinked friction".to_owned(),
+                intake_id: None,
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("Unlinked friction".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+
+        let friction = repository.query_friction().unwrap();
+
+        assert_eq!(friction.len(), 2);
+        assert_eq!(friction[0].risk_lane, None);
+        assert_eq!(friction[0].input_type, None);
+        assert_eq!(friction[1].risk_lane.as_deref(), Some("normal"));
+        assert_eq!(friction[1].input_type.as_deref(), Some("change_request"));
     }
 
     #[test]
@@ -1284,15 +2852,10 @@ implemented
         )
         .unwrap();
 
-        let source_repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .to_path_buf();
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            source_repo_root.join(".agent-harness/scripts/schema"),
+            test_schema_dir(),
         );
         repository.init().unwrap();
 
@@ -1313,15 +2876,15 @@ implemented
         assert_eq!(matrix[0].id, "US-010");
         assert_eq!(matrix[0].title, "docs/product/tasks.md");
         assert_eq!(matrix[0].status, "implemented");
-        assert_eq!(matrix[0].unit, "yes");
-        assert_eq!(matrix[0].integration, "no");
-        assert_eq!(matrix[0].platform, "yes");
+        assert_eq!(matrix[0].unit, 1);
+        assert_eq!(matrix[0].integration, 0);
+        assert_eq!(matrix[0].platform, 1);
 
         let decisions = repository.query_decisions().unwrap();
         assert_eq!(decisions[0].id, "0007-test-decision");
         assert_eq!(decisions[0].status, "accepted");
 
-        let backlog = repository.query_backlog().unwrap();
+        let backlog = repository.query_backlog(BacklogFilter::All).unwrap();
         assert_eq!(backlog.len(), 2);
         assert!(backlog
             .iter()
@@ -1333,5 +2896,125 @@ implemented
             .any(|item| item.title == "Keep installer checksum"
                 && item.status == "implemented"
                 && item.risk.as_deref() == Some("high_risk")));
+    }
+
+    #[test]
+    fn filters_open_and_closed_backlog_items() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+
+        let proposed_id = repository
+            .add_backlog(BacklogAddInput {
+                title: "Proposed item".to_owned(),
+                discovered_while: None,
+                current_pain: None,
+                suggestion: None,
+                risk: Some(RiskLane::Tiny),
+                predicted_impact: Some("Should improve trace review.".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        let implemented_id = repository
+            .add_backlog(BacklogAddInput {
+                title: "Implemented item".to_owned(),
+                discovered_while: None,
+                current_pain: None,
+                suggestion: None,
+                risk: Some(RiskLane::Normal),
+                predicted_impact: Some("Should reduce missing proof.".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .close_backlog(BacklogCloseInput {
+                id: implemented_id,
+                status: "implemented".to_owned(),
+                actual_outcome: Some("Proof gaps were found earlier.".to_owned()),
+            })
+            .unwrap();
+
+        let all = repository.query_backlog(BacklogFilter::All).unwrap();
+        let open = repository.query_backlog(BacklogFilter::Open).unwrap();
+        let closed = repository.query_backlog(BacklogFilter::Closed).unwrap();
+
+        assert_eq!(all.len(), 2);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, proposed_id);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].id, implemented_id);
+        assert_eq!(
+            closed[0].actual_outcome.as_deref(),
+            Some("Proof gaps were found earlier.")
+        );
+    }
+
+    #[test]
+    fn scores_latest_and_specific_trace_with_lane_lookup() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let intake_id = repository
+            .record_intake(IntakeInput {
+                input_type: InputType::HarnessImprovement,
+                summary: "High risk trace quality test".to_owned(),
+                risk_lane: RiskLane::HighRisk,
+                risk_flags: CsvList::from_optional(None),
+                affected_docs: CsvList::from_optional(None),
+                story_id: None,
+                notes: None,
+            })
+            .unwrap();
+        let first_trace = repository
+            .record_trace(TraceInput {
+                task_summary: "Minimal trace test".to_owned(),
+                intake_id: None,
+                story_id: None,
+                agent: None,
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: None,
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: "Standard trace linked to high risk intake".to_owned(),
+                intake_id: Some(intake_id),
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("none".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(Some("read,patched".to_owned())),
+                files_read: CsvList::from_optional(Some("PHASE3.md".to_owned())),
+                files_changed: CsvList::from_optional(Some(
+                    "crates/harness-cli/src/domain.rs".to_owned(),
+                )),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+
+        let latest = repository.score_trace(None).unwrap();
+        assert_eq!(latest.achieved, TraceQualityTier::Standard);
+        assert_eq!(latest.required, Some(TraceQualityTier::Detailed));
+        assert!(!latest.meets_requirement);
+        assert!(latest
+            .missing_detailed
+            .iter()
+            .any(|field| field.starts_with("decisions_made")));
+
+        let specific = repository.score_trace(Some(first_trace)).unwrap();
+        assert_eq!(specific.trace_id, first_trace);
+        assert_eq!(specific.achieved, TraceQualityTier::Minimal);
+        assert_eq!(specific.required, None);
+        assert!(specific.meets_requirement);
     }
 }

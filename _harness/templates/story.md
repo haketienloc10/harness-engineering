@@ -14,7 +14,7 @@ Describe the behavior this story must make true.
 
 ## Relevant Product Docs
 
-- `.agent-harness/product/...`
+- `docs/product/...`
 
 ## Acceptance Criteria
 
@@ -34,7 +34,7 @@ Describe the behavior this story must make true.
 ## Validation
 
 When updating durable proof status, use numeric booleans:
-`.agent-harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0`.
+`_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0`.
 
 | Layer       | Expected proof |
 | ----------- | -------------- |

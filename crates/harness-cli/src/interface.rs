@@ -7,17 +7,23 @@ use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, HarnessContext,
-    HarnessService, InitResult, IntakeInput, MigrateResult, QueryTable, StoryAddInput,
-    StoryUpdateInput, TraceInput,
+    HarnessService, InitResult, IntakeInput, InterventionAddInput, InterventionFilter,
+    MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
-    parse_optional_integer, BacklogRecord, BoolFlag, CsvList, DecisionRecord, FrictionRecord,
-    HarnessStats, InputType, IntakeRecord, RiskLane, StoryMatrixRecord, TraceRecord,
+    normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
+    validate_responsibility, validate_tool_kind, BacklogFilter, BacklogRecord, BoolFlag,
+    ContextScoreResult, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
+    InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
+    ToolEntry, TraceQualityTier, TraceRecord, TraceScoreResult, RISK_LANE_HELP,
 };
+use crate::infrastructure::ToolCheckResult;
 
 #[derive(Parser, Debug)]
-#[command(name = "harness")]
+#[command(name = "harness-cli")]
+#[command(bin_name = "_harness/bin/harness-cli")]
 #[command(about = "durable layer for the project harness", long_about = None)]
+#[command(version)]
 pub struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -39,19 +45,32 @@ enum Command {
     Decision(DecisionArgs),
     /// Add or close a backlog item.
     Backlog(BacklogArgs),
+    /// Register or remove external tools.
+    Tool(ToolArgs),
+    /// Record a human, review, CI, or agent intervention.
+    Intervention(InterventionArgs),
     /// Record an agent execution trace.
     Trace(TraceArgs),
+    /// Score a trace against the trace quality tiers.
+    ScoreTrace(ScoreTraceArgs),
+    /// Score trace context reads against CONTEXT_RULES.md.
+    ScoreContext { trace_id: String },
+    /// Run drift audit and entropy score.
+    Audit,
+    /// Generate improvement proposals from observed patterns.
+    Propose(ProposeArgs),
     /// Query harness data.
     Query(QueryArgs),
 }
 
 #[derive(Args, Debug)]
+#[command(after_help = RISK_LANE_HELP)]
 struct IntakeArgs {
     #[arg(long = "type")]
     input_type: String,
     #[arg(long)]
     summary: String,
-    #[arg(long)]
+    #[arg(long, value_name = "tiny|normal|high-risk")]
     lane: String,
     #[arg(long)]
     flags: Option<String>,
@@ -83,8 +102,21 @@ struct StoryArgs {
 
 #[derive(Subcommand, Debug)]
 enum StoryAction {
+    #[command(after_help = RISK_LANE_HELP)]
     Add(StoryAddArgs),
+    #[command(
+        after_help = "Proof flags use numeric booleans: --unit 1 --integration 1 --e2e 0 --platform 0. Do not use yes/no."
+    )]
     Update(StoryUpdateArgs),
+    #[command(
+        after_help = "story verify only accepts the story id. Configure proof with story add/update --verify, then record proof flags with story update."
+    )]
+    Verify {
+        /// Story id to verify.
+        id: String,
+    },
+    /// Verify every story, skipping stories without verify_command.
+    VerifyAll,
 }
 
 #[derive(Args, Debug)]
@@ -93,10 +125,12 @@ struct StoryAddArgs {
     id: String,
     #[arg(long)]
     title: String,
-    #[arg(long)]
+    #[arg(long, value_name = "tiny|normal|high-risk")]
     lane: String,
     #[arg(long)]
     contract: Option<String>,
+    #[arg(long)]
+    verify: Option<String>,
     #[arg(long)]
     notes: Option<String>,
 }
@@ -109,14 +143,16 @@ struct StoryUpdateArgs {
     status: Option<String>,
     #[arg(long)]
     evidence: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "0|1")]
     unit: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "0|1")]
     integration: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "0|1")]
     e2e: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "0|1")]
     platform: Option<String>,
+    #[arg(long)]
+    verify: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -157,6 +193,7 @@ struct BacklogArgs {
 
 #[derive(Subcommand, Debug)]
 enum BacklogAction {
+    #[command(after_help = RISK_LANE_HELP)]
     Add(BacklogAddArgs),
     Close(BacklogCloseArgs),
 }
@@ -171,7 +208,7 @@ struct BacklogAddArgs {
     pain: Option<String>,
     #[arg(long)]
     suggestion: Option<String>,
-    #[arg(long)]
+    #[arg(long, value_name = "tiny|normal|high-risk")]
     risk: Option<String>,
     #[arg(long)]
     predicted: Option<String>,
@@ -187,6 +224,84 @@ struct BacklogCloseArgs {
     status: String,
     #[arg(long)]
     outcome: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct ToolArgs {
+    #[command(subcommand)]
+    action: ToolAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum ToolAction {
+    Register(ToolRegisterArgs),
+    /// Scan registered tools and persist present/missing/unknown status.
+    Check(ToolCheckArgs),
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ToolRegisterArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long)]
+    command: String,
+    #[arg(long)]
+    description: String,
+    #[arg(long)]
+    responsibility: String,
+    #[arg(long)]
+    args: Option<String>,
+    #[arg(long)]
+    force: bool,
+    /// How the tool is reached and probed: cli, binary, mcp, skill, http.
+    #[arg(long, default_value = "cli")]
+    kind: String,
+    /// Workflow purpose a step looks the tool up by (kebab-case).
+    #[arg(long)]
+    capability: Option<String>,
+    /// Declarative path/URL `tool check` resolves to decide presence.
+    #[arg(long)]
+    scan: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct ToolCheckArgs {
+    /// Check one tool by name; omit to check every registered tool.
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct InterventionArgs {
+    #[command(subcommand)]
+    action: InterventionAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum InterventionAction {
+    Add(InterventionAddArgs),
+}
+
+#[derive(Args, Debug)]
+struct InterventionAddArgs {
+    #[arg(long)]
+    trace: Option<String>,
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long = "type")]
+    intervention_type: String,
+    #[arg(long)]
+    description: String,
+    #[arg(long)]
+    source: String,
+    #[arg(long)]
+    impact: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -222,17 +337,47 @@ struct TraceArgs {
 }
 
 #[derive(Args, Debug)]
+struct ScoreTraceArgs {
+    /// Score a specific trace id. Defaults to the latest trace.
+    #[arg(long)]
+    id: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct ProposeArgs {
+    #[arg(long)]
+    commit: bool,
+}
+
+#[derive(Args, Debug)]
 struct QueryArgs {
     #[command(subcommand)]
     view: QueryView,
 }
 
+#[derive(Args, Debug)]
+struct MatrixQueryArgs {
+    /// Render proof flags as CLI input values, 1 and 0, instead of yes and no.
+    #[arg(long)]
+    numeric: bool,
+}
+
+#[derive(Args, Debug)]
+struct BacklogQueryArgs {
+    /// Show only proposed and accepted backlog items.
+    #[arg(long, conflicts_with = "closed")]
+    open: bool,
+    /// Show only implemented and rejected backlog items.
+    #[arg(long)]
+    closed: bool,
+}
+
 #[derive(Subcommand, Debug)]
 enum QueryView {
     /// Test matrix.
-    Matrix,
+    Matrix(MatrixQueryArgs),
     /// Harness improvement proposals.
-    Backlog,
+    Backlog(BacklogQueryArgs),
     /// Decision records.
     Decisions,
     /// Recent intake classifications.
@@ -241,16 +386,48 @@ enum QueryView {
     Traces,
     /// Traces with harness friction.
     Friction,
+    /// Machine-readable and registered tool manifest.
+    Tools(ToolsQueryArgs),
+    /// Intervention records.
+    Interventions(InterventionsQueryArgs),
     /// Summary counts.
     Stats,
     /// Run arbitrary SQL.
     Sql { query: Vec<String> },
 }
 
+#[derive(Args, Debug)]
+struct ToolsQueryArgs {
+    #[arg(long)]
+    json: bool,
+    #[arg(long)]
+    summary: bool,
+    #[arg(long)]
+    responsibility: Option<String>,
+    /// Filter to tools that provide this capability.
+    #[arg(long)]
+    capability: Option<String>,
+    /// Filter to tools with this scanned status: present, missing, unknown.
+    #[arg(long)]
+    status: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct InterventionsQueryArgs {
+    #[arg(long)]
+    trace: Option<String>,
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long = "type")]
+    intervention_type: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum InterfaceError {
     #[error("{0}")]
     ParseHarnessValue(#[from] crate::domain::ParseHarnessValueError),
+    #[error("{0}")]
+    ToolValidation(#[from] crate::domain::ToolValidationError),
     #[error("{0}")]
     Infrastructure(#[from] crate::infrastructure::HarnessInfraError),
     #[error("could not determine current directory: {0}")]
@@ -289,6 +466,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     title: args.title,
                     risk_lane: RiskLane::from_str(&args.lane)?,
                     contract_doc: args.contract,
+                    verify_command: args.verify,
                     notes: args.notes,
                 })?;
                 println!("Story {} added.", args.id);
@@ -305,8 +483,26 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     )?,
                     e2e: parse_optional_bool("story update: --e2e", args.e2e)?,
                     platform: parse_optional_bool("story update: --platform", args.platform)?,
+                    verify_command: args.verify,
                 })?;
                 println!("Story {} updated.", args.id);
+            }
+            StoryAction::Verify { id } => {
+                let result = service.verify_story(&id)?;
+                println!("Running: {}", result.command);
+                print!("{}", result.stdout);
+                print!("{}", result.stderr);
+                println!("Story {id} verification: {}", result.result);
+                if result.result == "fail" {
+                    std::process::exit(1);
+                }
+            }
+            StoryAction::VerifyAll => {
+                let result = service.verify_all_stories()?;
+                print_story_verify_all(&result);
+                if result.failed() > 0 {
+                    std::process::exit(1);
+                }
             }
         },
         Command::Decision(args) => match args.action {
@@ -326,6 +522,9 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 let result = service.verify_decision(&id)?;
                 println!("Running: {}", result.command);
                 println!("Decision {id} verification: {}", result.result);
+                if result.result == "fail" {
+                    std::process::exit(1);
+                }
             }
         },
         Command::Backlog(args) => match args.action {
@@ -356,7 +555,55 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 println!("Backlog #{id} closed as {status}.");
             }
         },
+        Command::Tool(args) => match args.action {
+            ToolAction::Register(args) => {
+                let kind = validate_tool_kind(&args.kind)?;
+                let capability = args
+                    .capability
+                    .as_deref()
+                    .map(normalize_capability)
+                    .transpose()?;
+                service.register_tool(ToolRegisterInput {
+                    name: args.name.clone(),
+                    command: args.command,
+                    description: args.description,
+                    responsibility: validate_responsibility(&args.responsibility)?,
+                    args: parse_tool_args(args.args)?,
+                    force: args.force,
+                    kind,
+                    capability,
+                    scan_target: args.scan,
+                })?;
+                println!("Tool {} registered.", args.name);
+            }
+            ToolAction::Check(args) => {
+                let results = service.check_tools(args.name)?;
+                if args.json {
+                    print_tool_check_json(&results);
+                } else {
+                    print_tool_check_summary(&results);
+                }
+            }
+            ToolAction::Remove { name } => {
+                service.remove_tool(&name)?;
+                println!("Tool {name} removed.");
+            }
+        },
+        Command::Intervention(args) => match args.action {
+            InterventionAction::Add(args) => {
+                let id = service.add_intervention(InterventionAddInput {
+                    trace_id: parse_optional_integer("intervention add: --trace", args.trace)?,
+                    story_id: args.story,
+                    intervention_type: args.intervention_type,
+                    description: args.description,
+                    source: args.source,
+                    impact: args.impact,
+                })?;
+                println!("Intervention #{id} recorded.");
+            }
+        },
         Command::Trace(args) => {
+            let story_id = args.story.clone();
             let id = service.record_trace(TraceInput {
                 task_summary: args.summary,
                 intake_id: parse_optional_integer("trace: --intake", args.intake)?,
@@ -374,14 +621,66 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 errors: CsvList::from_optional(args.errors),
             })?;
             println!("Trace #{id} recorded.");
+            let result = service.score_trace(Some(id))?;
+            print_trace_score(&result, false);
+            println!("Reminder: Record any human corrections with: harness-cli intervention add");
+            if let Some(story_id) = story_id {
+                print_story_verify_warning(&service, &story_id)?;
+            }
         }
+        Command::ScoreTrace(args) => {
+            let id = parse_optional_integer("score-trace: --id", args.id)?;
+            let result = service.score_trace(id)?;
+            print_trace_score(&result, id.is_none());
+            if !result.meets_requirement {
+                std::process::exit(1);
+            }
+        }
+        Command::ScoreContext { trace_id } => {
+            let id = parse_optional_integer("score-context: trace-id", Some(trace_id))?
+                .expect("value provided");
+            print_context_score(&service.score_context(id)?);
+        }
+        Command::Audit => print_audit(&service.audit()?),
+        Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
         Command::Query(args) => match args.view {
-            QueryView::Matrix => print_matrix(&service.query_matrix()?),
-            QueryView::Backlog => print_backlog(&service.query_backlog()?),
+            QueryView::Matrix(args) => print_matrix(&service.query_matrix()?, args.numeric),
+            QueryView::Backlog(args) => {
+                print_backlog(&service.query_backlog(backlog_filter(&args))?)
+            }
             QueryView::Decisions => print_decisions(&service.query_decisions()?),
             QueryView::Intakes => print_intakes(&service.query_intakes()?),
             QueryView::Traces => print_traces(&service.query_traces()?),
             QueryView::Friction => print_friction(&service.query_friction()?),
+            QueryView::Tools(args) => {
+                let responsibility = args
+                    .responsibility
+                    .map(|value| validate_responsibility(&value))
+                    .transpose()?;
+                let capability = args
+                    .capability
+                    .as_deref()
+                    .map(normalize_capability)
+                    .transpose()?;
+                let mut tools = service.query_tools(responsibility, capability)?;
+                if let Some(status) = args.status.as_deref() {
+                    let normalized = status.trim().to_lowercase();
+                    tools.retain(|tool| tool.status == normalized);
+                }
+                if args.json {
+                    print_tools_json(&tools);
+                } else {
+                    print_tools_summary(&tools);
+                }
+            }
+            QueryView::Interventions(args) => {
+                let trace_id = parse_optional_integer("query interventions: --trace", args.trace)?;
+                print_interventions(&service.query_interventions(InterventionFilter {
+                    trace_id,
+                    story_id: args.story,
+                    intervention_type: args.intervention_type,
+                })?);
+            }
             QueryView::Stats => print_stats(&service.query_stats()?),
             QueryView::Sql { query } => {
                 if query.is_empty() {
@@ -393,6 +692,217 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
     }
 
     Ok(())
+}
+
+fn print_trace_score(result: &TraceScoreResult, latest: bool) {
+    if latest {
+        println!("Trace #{} (latest):", result.trace_id);
+    } else {
+        println!("Trace #{}:", result.trace_id);
+    }
+    println!(
+        "  Tier achieved: {} ({}/3)",
+        result.achieved.label(),
+        result.achieved.score()
+    );
+
+    match (&result.risk_lane, result.required) {
+        (Some(lane), Some(required)) => {
+            println!(
+                "  Lane: {} -> required tier: {} ({}/3)",
+                lane,
+                required.label(),
+                required.score()
+            );
+            if result.meets_requirement {
+                println!("  MEETS REQUIREMENT");
+            } else {
+                println!("  BELOW REQUIREMENT");
+            }
+        }
+        _ => {
+            println!("  Lane: unknown (no linked intake)");
+        }
+    }
+
+    print_missing_fields(
+        "minimal",
+        TraceQualityTier::Minimal,
+        &result.missing_minimal,
+    );
+    print_missing_fields(
+        "standard",
+        TraceQualityTier::Standard,
+        &result.missing_standard,
+    );
+    print_missing_fields(
+        "detailed",
+        TraceQualityTier::Detailed,
+        &result.missing_detailed,
+    );
+}
+
+fn print_story_verify_all(result: &StoryVerifyAllResult) {
+    for item in &result.items {
+        match item.result.as_str() {
+            "skipped" => println!("Story {}: skipped (no verify_command)", item.id),
+            status => {
+                println!("Story {}: {status}", item.id);
+                if !item.stdout.is_empty() {
+                    print!("{}", item.stdout);
+                }
+                if !item.stderr.is_empty() {
+                    print!("{}", item.stderr);
+                }
+            }
+        }
+    }
+    println!(
+        "{} stories verified: {} passed, {} failed, {} skipped (no verify_command)",
+        result.items.len(),
+        result.passed(),
+        result.failed(),
+        result.skipped()
+    );
+}
+
+fn print_context_score(result: &ContextScoreResult) {
+    println!(
+        "Trace #{} | Lane: {} | Phase: {}",
+        result.trace_id, result.lane, result.phase
+    );
+    println!();
+    let must_met = result.must.iter().filter(|item| item.met).count();
+    println!("Must-read compliance: {must_met}/{}", result.must.len());
+    for item in &result.must {
+        println!(
+            "  {} {} ({})",
+            if item.met { "OK" } else { "MISSING" },
+            item.label,
+            item.target
+        );
+    }
+    let should_met = result.should.iter().filter(|item| item.met).count();
+    println!(
+        "Should-read compliance: {should_met}/{}",
+        result.should.len()
+    );
+    for item in &result.should {
+        println!(
+            "  {} {} ({})",
+            if item.met { "OK" } else { "MISSING" },
+            item.label,
+            item.target
+        );
+    }
+    println!("Over-reading: {} item(s)", result.over_read.len());
+    for item in &result.over_read {
+        println!("  - {item}");
+    }
+}
+
+fn print_audit(result: &crate::domain::AuditResult) {
+    println!("=== Harness Drift Audit ===");
+    print_audit_category(
+        "Orphaned stories (planned/in-progress, no traces)",
+        &result.orphaned_stories,
+    );
+    print_audit_category("Unverified stories", &result.unverified_stories);
+    print_audit_category("Unverified decisions", &result.unverified_decisions);
+    print_audit_category(
+        "Open backlog without outcomes",
+        &result.backlog_without_outcomes,
+    );
+    print_audit_category("Stale stories", &result.stale_stories);
+    print_audit_category("Broken tools", &result.broken_tools);
+    println!(
+        "Entropy score: {}/100 (lower is better)",
+        result.entropy_score()
+    );
+}
+
+fn print_audit_category(label: &str, findings: &[crate::domain::AuditFinding]) {
+    println!();
+    println!("{label}: {}", findings.len());
+    for finding in findings {
+        println!("  - {}: {}", finding.id, finding.title);
+    }
+}
+
+fn print_proposals(proposals: &[ImprovementProposal]) {
+    println!("=== Improvement Proposals ===");
+    if proposals.is_empty() {
+        println!("No proposals generated.");
+        return;
+    }
+    for (index, proposal) in proposals.iter().enumerate() {
+        println!();
+        println!(
+            "Proposal {} ({} confidence):",
+            index + 1,
+            proposal.confidence
+        );
+        println!("  Title: {}", proposal.title);
+        println!("  Component: {}", proposal.component);
+        println!("  Evidence: {}", proposal.evidence);
+        println!("  Predicted impact: {}", proposal.predicted_impact);
+        println!("  Risk: {}", proposal.risk);
+        println!("  Suggested action: {}", proposal.suggested_action);
+        println!("  Validation: {}", proposal.validation_plan);
+        if let Some(id) = proposal.committed_backlog_id {
+            println!("  Created backlog item #{id}");
+        }
+    }
+    println!();
+    println!(
+        "{} proposals generated. Use --commit to create backlog items.",
+        proposals.len()
+    );
+}
+
+fn print_story_verify_warning(
+    service: &HarnessService,
+    story_id: &str,
+) -> Result<(), InterfaceError> {
+    let status = service.story_verify_status(story_id)?;
+    let has_command = status
+        .verify_command
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    if has_command && status.last_verified_result.as_deref() != Some("pass") {
+        println!();
+        println!(
+            "Warning: Story {} has verify_command but verification has not passed.",
+            status.id
+        );
+        println!("Run: harness-cli story verify {}", status.id);
+    }
+    Ok(())
+}
+
+fn print_missing_fields(label: &str, tier: TraceQualityTier, fields: &[String]) {
+    if fields.is_empty() {
+        return;
+    }
+    println!();
+    println!("  Missing for {label}:");
+    for field in fields {
+        println!("    - {field}");
+    }
+    if tier == TraceQualityTier::Detailed {
+        println!();
+    }
+}
+
+fn backlog_filter(args: &BacklogQueryArgs) -> BacklogFilter {
+    if args.open {
+        BacklogFilter::Open
+    } else if args.closed {
+        BacklogFilter::Closed
+    } else {
+        BacklogFilter::All
+    }
 }
 
 fn print_brownfield_import_result(result: BrownfieldImportResult) {
@@ -416,7 +926,7 @@ fn print_init_result(result: InitResult) {
     match result {
         InitResult::Created { db_path } => {
             println!("Creating harness database at {}", db_path.display());
-            println!("Schema version 1 applied.");
+            println!("Schema applied.");
         }
         InitResult::Existing { db_path, version } => {
             println!("Database already exists at {}", db_path.display());
@@ -424,8 +934,8 @@ fn print_init_result(result: InitResult) {
         }
         InitResult::MigratedExisting { db_path } => {
             println!("Database already exists at {}", db_path.display());
-            println!("No schema version found. Applying schema version 1.");
-            println!("Schema version 1 applied.");
+            println!("No schema version found. Applying schema.");
+            println!("Schema applied.");
         }
     }
 }
@@ -451,7 +961,7 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root.join("harness.db"));
 
-    let schema_dir = repo_root.join("scripts/schema");
+    let schema_dir = resolve_schema_dir(&repo_root);
 
     Ok(HarnessContext {
         repo_root,
@@ -460,7 +970,16 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
     })
 }
 
-fn print_matrix(records: &[StoryMatrixRecord]) {
+fn resolve_schema_dir(repo_root: &std::path::Path) -> PathBuf {
+    let harness_relative = repo_root.join("_harness/scripts/schema");
+    if harness_relative.exists() {
+        return harness_relative;
+    }
+
+    repo_root.join("scripts/schema")
+}
+
+fn print_matrix(records: &[StoryMatrixRecord], numeric: bool) {
     let rows = records
         .iter()
         .map(|record| {
@@ -468,10 +987,10 @@ fn print_matrix(records: &[StoryMatrixRecord]) {
                 record.id.clone(),
                 record.title.clone(),
                 record.status.clone(),
-                record.unit.clone(),
-                record.integration.clone(),
-                record.e2e.clone(),
-                record.platform.clone(),
+                proof_display(record.unit, numeric),
+                proof_display(record.integration, numeric),
+                proof_display(record.e2e, numeric),
+                proof_display(record.platform, numeric),
                 record.evidence.clone().unwrap_or_default(),
             ]
         })
@@ -588,15 +1107,187 @@ fn print_friction(records: &[FrictionRecord]) {
             vec![
                 record.id.to_string(),
                 record.created_at.clone(),
+                record.risk_lane.clone().unwrap_or_else(|| "-".to_owned()),
+                record.input_type.clone().unwrap_or_else(|| "-".to_owned()),
                 record.task_summary.clone(),
                 record.harness_friction.clone(),
             ]
         })
         .collect::<Vec<_>>();
     print_table(
-        &["id", "created_at", "task_summary", "harness_friction"],
+        &[
+            "id",
+            "created_at",
+            "risk_lane",
+            "input_type",
+            "task_summary",
+            "harness_friction",
+        ],
         &rows,
     );
+}
+
+fn print_tools_summary(records: &[ToolEntry]) {
+    let rows = records
+        .iter()
+        .map(|record| {
+            vec![
+                record.name.clone(),
+                record.kind.clone(),
+                record.capability.clone().unwrap_or_else(|| "-".to_owned()),
+                record.responsibility.clone(),
+                record.status.clone(),
+                record.source.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(
+        &[
+            "name",
+            "kind",
+            "capability",
+            "responsibility",
+            "status",
+            "source",
+        ],
+        &rows,
+    );
+}
+
+fn print_tools_json(records: &[ToolEntry]) {
+    println!("[");
+    for (index, record) in records.iter().enumerate() {
+        let comma = if index + 1 == records.len() { "" } else { "," };
+        println!("  {{");
+        println!("    \"provider\": \"{}\",", json_escape(&record.provider));
+        println!("    \"name\": \"{}\",", json_escape(&record.name));
+        println!("    \"command\": \"{}\",", json_escape(&record.command));
+        println!(
+            "    \"description\": \"{}\",",
+            json_escape(&record.description)
+        );
+        println!("    \"args\": [");
+        for (arg_index, arg) in record.args.iter().enumerate() {
+            let arg_comma = if arg_index + 1 == record.args.len() {
+                ""
+            } else {
+                ","
+            };
+            println!(
+                "      {{\"name\":\"{}\",\"type\":\"{}\",\"required\":{},\"help\":\"{}\"}}{}",
+                json_escape(&arg.name),
+                json_escape(&arg.arg_type),
+                arg.required,
+                json_escape(arg.help.as_deref().unwrap_or("")),
+                arg_comma
+            );
+        }
+        println!("    ],");
+        println!(
+            "    \"responsibility\": \"{}\",",
+            json_escape(&record.responsibility)
+        );
+        println!("    \"source\": \"{}\",", json_escape(&record.source));
+        println!("    \"since\": \"{}\",", json_escape(&record.since));
+        println!("    \"kind\": \"{}\",", json_escape(&record.kind));
+        println!(
+            "    \"capability\": {},",
+            json_optional(record.capability.as_deref())
+        );
+        println!(
+            "    \"scan_target\": {},",
+            json_optional(record.scan_target.as_deref())
+        );
+        println!("    \"status\": \"{}\",", json_escape(&record.status));
+        println!(
+            "    \"checked_at\": {}",
+            json_optional(record.checked_at.as_deref())
+        );
+        println!("  }}{comma}");
+    }
+    println!("]");
+}
+
+fn print_tool_check_summary(records: &[ToolCheckResult]) {
+    let rows = records
+        .iter()
+        .map(|record| {
+            vec![
+                record.name.clone(),
+                record.kind.clone(),
+                record.capability.clone().unwrap_or_else(|| "-".to_owned()),
+                record.status.clone(),
+                record.detail.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(&["name", "kind", "capability", "status", "detail"], &rows);
+}
+
+fn print_tool_check_json(records: &[ToolCheckResult]) {
+    println!("[");
+    for (index, record) in records.iter().enumerate() {
+        let comma = if index + 1 == records.len() { "" } else { "," };
+        println!("  {{");
+        println!("    \"name\": \"{}\",", json_escape(&record.name));
+        println!("    \"kind\": \"{}\",", json_escape(&record.kind));
+        println!(
+            "    \"capability\": {},",
+            json_optional(record.capability.as_deref())
+        );
+        println!("    \"status\": \"{}\",", json_escape(&record.status));
+        println!("    \"detail\": \"{}\"", json_escape(&record.detail));
+        println!("  }}{comma}");
+    }
+    println!("]");
+}
+
+fn json_optional(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{}\"", json_escape(value)),
+        None => "null".to_owned(),
+    }
+}
+
+fn print_interventions(records: &[InterventionRecord]) {
+    let rows = records
+        .iter()
+        .map(|record| {
+            vec![
+                record.id.to_string(),
+                record.created_at.clone(),
+                record
+                    .trace_id
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+                record.story_id.clone().unwrap_or_default(),
+                record.intervention_type.clone(),
+                record.source.clone(),
+                record.description.clone(),
+                record.impact.clone().unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    print_table(
+        &[
+            "id",
+            "created_at",
+            "trace",
+            "story",
+            "type",
+            "source",
+            "description",
+            "impact",
+        ],
+        &rows,
+    );
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 fn print_stats(stats: &HarnessStats) {
@@ -670,5 +1361,72 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn story_help_documents_proof_command_shape() {
+        let mut command = Cli::command();
+        let story = command.find_subcommand_mut("story").unwrap();
+
+        let update_help = story
+            .find_subcommand_mut("update")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(update_help.contains("--unit <0|1>"));
+        assert!(update_help.contains("--integration <0|1>"));
+        assert!(update_help.contains("Proof flags use numeric booleans"));
+
+        let verify_help = story
+            .find_subcommand_mut("verify")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(verify_help.contains("story verify only accepts the story id"));
+        assert!(verify_help.contains("Configure proof with story add/update --verify"));
+    }
+
+    #[test]
+    fn command_help_documents_lane_values_and_version() {
+        let mut command = Cli::command();
+        let root_help = command.render_long_help().to_string();
+        assert!(root_help.contains("Usage: _harness/bin/harness-cli <COMMAND>"));
+        assert!(root_help.contains("--version"));
+
+        let intake_help = command
+            .find_subcommand_mut("intake")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(intake_help.contains("--lane <tiny|normal|high-risk>"));
+        assert!(intake_help.contains("Use tiny instead of low"));
+
+        let story_add_help = command
+            .find_subcommand_mut("story")
+            .unwrap()
+            .find_subcommand_mut("add")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(story_add_help.contains("--lane <tiny|normal|high-risk>"));
+
+        let backlog_add_help = command
+            .find_subcommand_mut("backlog")
+            .unwrap()
+            .find_subcommand_mut("add")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(backlog_add_help.contains("--risk <tiny|normal|high-risk>"));
+        assert!(backlog_add_help.contains("Accepted lanes"));
+
+        let matrix_help = command
+            .find_subcommand_mut("query")
+            .unwrap()
+            .find_subcommand_mut("matrix")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(matrix_help.contains("--numeric"));
     }
 }

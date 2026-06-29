@@ -17,11 +17,11 @@ What product are we building, for whom, and why?
 ## Candidate Product Docs
 
 List the product contract files that should be created under
-`.agent-harness/product/`.
+`docs/product/`.
 
 | File                                 | Purpose | Source sections |
 | ------------------------------------ | ------- | --------------- |
-| `.agent-harness/product/overview.md` |         |                 |
+| `docs/product/overview.md` |         |                 |
 
 ## Candidate Epics
 

@@ -82,7 +82,9 @@ append_gitignore_rules() {
     "harness.db-shm" \
     ".harness-backup/" \
     ".agent-harness/bin/harness-cli.bin" \
-    ".agent-harness/bin/harness-cli.exe"
+    ".agent-harness/bin/harness-cli.exe" \
+    "_harness/bin/harness-cli.bin" \
+    "_harness/bin/harness-cli.exe"
   do
     if ! grep -Fxq "$rule" "$target"; then
       if [ "$changed" -eq 0 ]; then
@@ -107,7 +109,7 @@ install_cli() {
     return 0
   fi
 
-  tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SRC/.agent-harness/install/harness-cli-release-tag" 2>/dev/null || true)"
+  tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SRC/_harness/harness-cli-release-tag" 2>/dev/null || true)"
   [ -n "$tag" ] || tag="latest"
 
   if [ -n "${HARNESS_CLI_BASE_URL:-}" ]; then
@@ -122,7 +124,7 @@ install_cli() {
   fi
 
   name="harness-cli-$platform"
-  binary="$TARGET_DIR/.agent-harness/bin/harness-cli.bin"
+  binary="$TARGET_DIR/_harness/bin/harness-cli.bin"
   checksum="$TMP/$name.sha256"
 
   if ! curl -fsSL "$base/$name" -o "$binary" 2>/dev/null; then
@@ -148,12 +150,12 @@ install_cli() {
     checksum_status="checksum verified"
   fi
 
-  if ! "$binary" --version >/dev/null 2>&1; then
+  if ! "$binary" --help >/dev/null 2>&1; then
     rm -f "$binary"
     printf 'warn    CLI binary not installed: downloaded binary cannot run on this system\n' >&2
     return 0
   fi
-  printf 'install .agent-harness/bin/harness-cli.bin (%s, %s)\n' "$platform" "$checksum_status"
+  printf 'install _harness/bin/harness-cli (%s, %s)\n' "$platform" "$checksum_status"
   CLI_INSTALLED=1
 }
 
@@ -193,9 +195,9 @@ build_cli_from_source() {
     return 0
   fi
 
-  cp "$binary" "$TARGET_DIR/.agent-harness/bin/harness-cli.bin"
-  chmod 755 "$TARGET_DIR/.agent-harness/bin/harness-cli.bin"
-  printf 'install .agent-harness/bin/harness-cli.bin (built from source)\n'
+  cp "$binary" "$TARGET_DIR/_harness/bin/harness-cli.bin"
+  chmod 755 "$TARGET_DIR/_harness/bin/harness-cli.bin"
+  printf 'install _harness/bin/harness-cli (built from source)\n'
   CLI_INSTALLED=1
 }
 
@@ -213,7 +215,7 @@ mkdir -p "$TARGET_DIR"
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd -P || true)"
 
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/AGENTS.md" ] && [ -d "$SCRIPT_DIR/.agent-harness" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/AGENTS.md" ] && [ -d "$SCRIPT_DIR/_harness" ]; then
   SRC="$SCRIPT_DIR"
   printf 'source  %s\n' "$SRC"
 else
@@ -234,11 +236,22 @@ printf 'target  %s\n' "$TARGET_DIR"
 
 backup_path "$TARGET_DIR/AGENTS.md"
 backup_path "$TARGET_DIR/.agent-harness"
+backup_path "$TARGET_DIR/_harness"
+backup_path "$TARGET_DIR/docs/product"
+backup_path "$TARGET_DIR/docs/stories"
+backup_path "$TARGET_DIR/docs/decisions"
 
 cp -R "$SRC/AGENTS.md" "$TARGET_DIR/AGENTS.md"
-cp -R "$SRC/.agent-harness" "$TARGET_DIR/.agent-harness"
+cp -R "$SRC/_harness" "$TARGET_DIR/_harness"
+mkdir -p "$TARGET_DIR/docs"
+cp -R "$SRC/docs/product" "$TARGET_DIR/docs/product"
+cp -R "$SRC/docs/stories" "$TARGET_DIR/docs/stories"
+cp -R "$SRC/docs/decisions" "$TARGET_DIR/docs/decisions"
 printf 'install AGENTS.md\n'
-printf 'install .agent-harness/\n'
+printf 'install _harness/\n'
+printf 'install docs/product/\n'
+printf 'install docs/stories/\n'
+printf 'install docs/decisions/\n'
 
 append_gitignore_rules
 install_cli
@@ -246,8 +259,8 @@ build_cli_from_source
 
 printf '\nDone. Next:\n'
 if [ "$CLI_INSTALLED" -eq 1 ]; then
-  printf '  .agent-harness/bin/harness-cli init\n'
-  printf '  .agent-harness/bin/harness-cli query matrix\n'
+  printf '  _harness/bin/harness-cli init\n'
+  printf '  _harness/bin/harness-cli query matrix\n'
 else
-  printf '  publish a CLI release asset or set HARNESS_CLI_BASE_URL, then run .agent-harness/bin/harness-cli init\n'
+  printf '  publish a CLI release asset or set HARNESS_CLI_BASE_URL, then run _harness/bin/harness-cli init\n'
 fi

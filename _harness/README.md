@@ -12,13 +12,16 @@ target repository.
 - `TOOL_REGISTRY.md`: optional tool capability lookup and degrade rules.
 - `TRACE_SPEC.md`: trace fields and required detail by lane.
 - `TEST_MATRIX.md`: fallback proof map; prefer
-  `.agent-harness/bin/harness-cli query matrix`.
+  `_harness/bin/harness-cli query matrix`.
 
-## Memory Directories
+## Product Record Directories
 
-- `product/`: living product contract derived from accepted input.
-- `stories/`: story packets and progress evidence.
-- `decisions/`: durable decision records.
+- `docs/product/`: living product contract derived from accepted input.
+- `docs/stories/`: story packets and progress evidence.
+- `docs/decisions/`: durable decision records.
+
+## Harness Support Directories
+
 - `templates/`: required formats for specs, stories, decisions, high-risk work,
   and validation reports.
 

@@ -26,13 +26,13 @@ prebuilt binary downloaded by the installer.
 The command path for users and agents is the installed Rust binary:
 
 ```bash
-.agent-harness/bin/harness-cli <command>
+_harness/bin/harness-cli <command>
 ```
 
 On Windows, the repository-local binary is installed as:
 
 ```powershell
-.\.agent-harness\bin\harness-cli.ps1 <command>
+.\_harness\bin\harness-cli.ps1 <command>
 ```
 
 The installer should download, verify, and install the platform-specific Rust
@@ -69,7 +69,7 @@ Positive:
 
 - The durable-layer CLI can move to typed command parsing and tested use cases.
 - Target projects do not need a Rust toolchain just to use Harness.
-- The `.agent-harness/bin/harness-cli` command is the stable entrypoint for
+- The `_harness/bin/harness-cli` command is the stable entrypoint for
   agents on macOS/Linux; Windows uses the same repo-local path with the `.exe`
   suffix.
 - Prebuilt releases can include a known SQLite linkage strategy.

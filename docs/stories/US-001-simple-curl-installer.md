@@ -17,21 +17,23 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 ```
 
 The installer targets the current directory by default, accepts one optional
-target directory argument, backs up existing `AGENTS.md` and `.agent-harness/`,
-installs the Harness payload, appends local `.gitignore` rules, and installs the
-CLI by downloading a compatible release binary or building from
+target directory argument, backs up existing `AGENTS.md`, legacy
+`.agent-harness/`, `_harness/`, `docs/product/`, `docs/stories/`, and
+`docs/decisions/`, installs the Harness payload, appends local `.gitignore`
+rules, and installs the CLI by downloading a compatible release binary or
+building from
 `crates/harness-cli` when source and `cargo` are available.
 
 ## Relevant Product Docs
 
 - `README.md`
-- `.agent-harness/install/README.md`
+- `install.sh`
 
 ## Acceptance Criteria
 
 - A root `install.sh` supports the one-line curl install command.
-- The documented install path no longer requires `.agent-harness/install/install-harness.sh --directory ... --yes`.
-- Existing target `AGENTS.md` and `.agent-harness/` are backed up before replacement.
+- The documented install path no longer requires the removed option-heavy installer.
+- Existing target `AGENTS.md`, legacy `.agent-harness/`, `_harness/`, and managed product record directories are backed up before replacement.
 - Installer output names the source, target, installed payload, and next CLI commands.
 
 ## Design Notes
@@ -40,7 +42,7 @@ CLI by downloading a compatible release binary or building from
 - Queries: none.
 - API: none.
 - Tables: none.
-- Domain rules: install only Harness runtime surface, not product `docs/` or app folders.
+- Domain rules: install Harness runtime under `_harness/` and Harness-managed product records under `docs/`; do not touch unrelated app folders.
 - UI surfaces: shell output only.
 
 ## Validation
@@ -62,20 +64,21 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
 
 - `bash -n install.sh` passed.
 - `cargo test` passed for the Harness CLI crate.
-- `./install.sh "$tmp"` installed `AGENTS.md`, `.agent-harness/`, schema files,
-  CLI wrapper, and `.gitignore` rules into a temporary target.
-- `(cd "$tmp" && .agent-harness/bin/harness-cli init &&
-  .agent-harness/bin/harness-cli query matrix)` passed after install.
-- `./install.sh "$tmp"` with pre-existing `AGENTS.md` and `.agent-harness/`
-  backed both paths up under `.harness-backup/<timestamp>/` before replacing
-  them.
-- Temporary install confirmed old `.agent-harness/install/install-harness.sh`
-  was not present in the installed payload.
+- `./install.sh "$tmp"` installed `AGENTS.md`, `_harness/`, `docs/product/`,
+  `docs/stories/`, `docs/decisions/`, schema files, CLI wrapper, and
+  `.gitignore` rules into a temporary target.
+- `(cd "$tmp" && _harness/bin/harness-cli init &&
+  _harness/bin/harness-cli query matrix)` passed after install.
+- `./install.sh "$tmp"` with pre-existing `AGENTS.md`, legacy
+  `.agent-harness/`, `_harness/`, and managed product record directories backed
+  those paths up under `.harness-backup/<timestamp>/` before replacing them.
+- Temporary install confirmed old option-heavy installer files were not present
+  in the installed payload.
 - `git diff --check` passed.
 - CLI binary download fallback reached a release asset, but the binary could
   not run in this environment because of the system libc version; installer
   removed the unusable binary and tried the source-build fallback.
 - Source-build fallback expects either root workspace `Cargo.toml` with package
   `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout has tracked
-  Rust source under `crates/harness-cli/`, and the fallback built
-  `.agent-harness/bin/harness-cli.bin` successfully in the temporary target.
+  Rust source under `crates/harness-cli/`, and the fallback installed the
+  `_harness/bin/harness-cli` command successfully in the temporary target.

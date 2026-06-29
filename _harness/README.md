@@ -13,6 +13,10 @@ target repository.
 - `TRACE_SPEC.md`: trace fields and required detail by lane.
 - `TEST_MATRIX.md`: fallback proof map; prefer
   `_harness/bin/harness-cli query matrix`.
+- `HARNESS_AUDIT.md`: durable-state drift checks and entropy score.
+- `HARNESS_COMPONENTS.md`: workflow component taxonomy and file inventory.
+- `HARNESS_MATURITY.md`: measurable H0-H5 harness capability ladder.
+- `IMPROVEMENT_PROTOCOL.md`: friction-to-proposal improvement loop.
 
 ## Product Record Directories
 

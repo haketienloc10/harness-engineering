@@ -78,6 +78,10 @@ Requirements:
 - Implement the smallest vertical slice when implementation exists.
 - Record or update proof status with `_harness/bin/harness-cli story add`
   and `_harness/bin/harness-cli story update`.
+- When a repeatable proof command exists, store it with `story add --verify`
+  or `story update --verify`, run `_harness/bin/harness-cli story verify <id>`,
+  and use `_harness/bin/harness-cli story verify-all` before merges, maturity
+  claims, release work, or benchmark work.
 
 ### High-Risk
 

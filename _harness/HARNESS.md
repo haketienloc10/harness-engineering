@@ -110,6 +110,10 @@ _harness/bin/harness-cli intake  --type <type> --summary <text> --lane <lane>
 _harness/bin/harness-cli story   add --id <id> --title <text> --lane <lane>
 _harness/bin/harness-cli story   update --id <id> --status <status>
 _harness/bin/harness-cli story   update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0
+_harness/bin/harness-cli story   add --id <id> --title <text> --lane <lane> --verify "<command>"
+_harness/bin/harness-cli story   update --id <id> --verify "<command>"
+_harness/bin/harness-cli story   verify <id>
+_harness/bin/harness-cli story   verify-all
 _harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
 _harness/bin/harness-cli trace   --summary <text> --outcome <outcome>
 _harness/bin/harness-cli score-trace
@@ -232,15 +236,17 @@ For every task:
 3. Locate the affected product docs and story files.
 4. Check proof status with `_harness/bin/harness-cli query matrix`.
 5. Work only inside the selected lane: tiny, normal, or high-risk.
-6. Before finishing, ask whether product truth, validation expectations,
+6. Run `_harness/bin/harness-cli tool check` before optional external tool
+   capability lookups.
+7. Before finishing, ask whether product truth, validation expectations,
    architecture rules, repeated failure patterns, or next-agent instructions
    changed.
-7. Record a trace with `_harness/bin/harness-cli trace`, using
+8. Record a trace with `_harness/bin/harness-cli trace`, using
    `_harness/TRACE_SPEC.md` for the expected trace tier and field depth.
-8. Review the trace score printed by `_harness/bin/harness-cli trace`; use
+9. Review the trace score printed by `_harness/bin/harness-cli trace`; use
    `_harness/bin/harness-cli score-trace --id <id>` only when re-checking
    a specific historical trace.
-9. If harness friction was found, either fix it directly or record it with
+10. If harness friction was found, either fix it directly or record it with
    `_harness/bin/harness-cli backlog add`.
 
 ## Story Proof
@@ -248,14 +254,23 @@ For every task:
 Stories store proof flags and evidence in the durable layer:
 
 ```bash
-_harness/bin/harness-cli story add --id US-012 --title "Story proof" --lane normal
+_harness/bin/harness-cli story add --id US-012 --title "Story proof" --lane normal --verify "cargo test --workspace"
+_harness/bin/harness-cli story verify US-012
 _harness/bin/harness-cli story update --id US-012 --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "cargo test --workspace"
 _harness/bin/harness-cli query matrix
 ```
 
-Run the relevant validation command yourself, then record proof booleans with
-`story update`, using numeric values: `1` means yes and `0` means no. The Rust
-CLI rejects text values such as `yes` and `no`.
+Run the relevant validation command yourself. If a story has a repeatable proof
+command, store it with `story add --verify` or `story update --verify`, then run
+`story verify <id>`. Use `story verify-all` before merges, maturity claims, and
+release or benchmark work. It runs every configured story verification command,
+prints one result per story, skips stories without `verify_command`, and exits
+1 if any configured story fails.
+
+`story verify` accepts only the story id. It records `last_verified_at` and
+`last_verified_result`; proof booleans still belong on `story update`. Record
+proof booleans with numeric values: `1` means yes and `0` means no. The Rust CLI
+rejects text values such as `yes` and `no`.
 
 Use `_harness/bin/harness-cli query matrix --numeric` when copying proof
 values back into `story update`. The default matrix output is human-readable
@@ -266,10 +281,16 @@ values back into `story update`. The default matrix output is human-readable
 Tool discovery:
 
 ```bash
+_harness/bin/harness-cli tool check
 _harness/bin/harness-cli query tools --summary
 _harness/bin/harness-cli query tools --json
 _harness/bin/harness-cli tool register --name <name> --command <cmd> --description <text> --responsibility Verification
 ```
+
+Run `tool check` at intake start, and again before any optional external tool,
+so `query tools --capability <name> --status present` reflects the current
+machine. Missing registered tools are a degraded proof signal; unregistered
+capabilities are inactive and can be skipped cleanly.
 
 Context and drift checks:
 

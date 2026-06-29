@@ -23,6 +23,7 @@ Read to classify the request, find the affected surface, and choose a lane.
 | Relevant `docs/product/*`           | Skip if unrelated | Must if product behavior changes                    | Must      |
 | Relevant `docs/stories/*`           | Skip if unrelated | Must if a story exists                              | Must      |
 | `docs/decisions/*`                  | Skip              | Should if architecture or durable rules are touched | Must      |
+| `_harness/HARNESS_COMPONENTS.md`    | Skip              | Should for Harness improvements                     | Must for observability or benchmark work |
 
 ### Planning Phase
 
@@ -37,6 +38,7 @@ Read to decide the smallest safe approach and expected proof.
 | `_harness/TEST_MATRIX.md` or `_harness/bin/harness-cli query matrix` | Should | Must                                | Must                              |
 | Relevant decisions                                                               | Skip   | Should                              | Must                              |
 | `_harness/bin/harness-cli query backlog`                                   | Skip   | Should if friction repeats          | Must if changing Harness behavior |
+| `_harness/HARNESS_MATURITY.md`                                         | Skip   | Should for Harness improvements     | Must for maturity or process changes |
 
 ### Implementation Phase
 
@@ -66,6 +68,7 @@ Read to prove the change and avoid claiming unsupported completion.
 | `_harness/templates/validation-report.md`                                  | Skip             | Should for notable proof | Must for high-risk proof                |
 | Relevant commands from README/package docs                                       | Should           | Must                     | Must                                    |
 | External benchmark or release protocol, when supplied                            | Skip             | Skip unless requested    | Must if the story depends on that proof |
+| `_harness/HARNESS_MATURITY.md`                                                   | Skip             | Should for Harness improvements | Must for maturity claims |
 
 ### Trace Phase
 
@@ -79,6 +82,7 @@ Read to leave useful evidence for the next agent.
 | Changed-file list from `git status --short`    | Must             | Must                        | Must      |
 | Validation command output                      | Should           | Must                        | Must      |
 | Story packet or progress log                   | Skip if no story | Must                        | Must      |
+| `_harness/HARNESS_COMPONENTS.md`               | Skip             | Should if attributing friction | Must if failure attribution is needed |
 
 ## Retrieval Triggers
 
@@ -89,8 +93,8 @@ Read to leave useful evidence for the next agent.
 | Task touches auth, authorization, audit/security, data loss, or external providers             | Treat as high-risk, read `_harness/templates/high-risk-story/*`, and check prior decisions before implementation.                                                       |
 | Task changes public API shape, product behavior, or user-visible workflow                      | Read relevant `docs/product/*`, story packets, and validation expectations before editing.                                                                          |
 | Task changes Harness policy, source hierarchy, risk classification, or validation requirements | Read `_harness/HARNESS.md`, `_harness/FEATURE_INTAKE.md`, `_harness/ARCHITECTURE.md`, and `docs/decisions/*`; pause if direction is ambiguous.    |
-| Task discovers repeated confusion, stale docs, or missing proof                                | Query backlog, record `harness_friction`, and add a backlog item when the fix is out of scope.                                                                                |
-| Task makes an observability, trace quality, release, or benchmark claim                        | Read `_harness/TRACE_SPEC.md`, validation evidence, and any supplied external protocol.                                                                                 |
+| Task discovers repeated confusion, stale docs, or missing proof                                | Query backlog, read `_harness/IMPROVEMENT_PROTOCOL.md`, record `harness_friction`, and add a backlog item when the fix is out of scope.                                                                                |
+| Task makes a maturity, observability, trace quality, release, or benchmark claim               | Read `_harness/HARNESS_COMPONENTS.md`, `_harness/HARNESS_MATURITY.md`, `_harness/TRACE_SPEC.md`, validation evidence, and any supplied external protocol.                                                                                 |
 | Task is normal or high-risk and spans multiple iterations                                      | Create or update a story/progress file under `docs/stories/` and keep it current.                                                                                   |
 | Final response is being prepared                                                               | Re-read the validation evidence, `git status --short`, and `_harness/TRACE_SPEC.md` before recording the final trace.                                                   |
 

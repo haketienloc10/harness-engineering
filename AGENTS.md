@@ -68,8 +68,11 @@ Record operational state through the CLI whenever possible:
 ```bash
 _harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
 _harness/bin/harness-cli query matrix
+_harness/bin/harness-cli tool check
 _harness/bin/harness-cli story add --id <id> --title <text> --lane <lane>
 _harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0
+_harness/bin/harness-cli story verify <id>
+_harness/bin/harness-cli story verify-all
 _harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
 _harness/bin/harness-cli backlog add --title <text> --pain <text> --risk tiny
 _harness/bin/harness-cli trace --summary <text> --agent codex --outcome completed
@@ -88,7 +91,8 @@ For every task, execute this order:
 4. Record intake when the CLI exists.
 5. Locate affected product docs, stories, decisions, code, and tests.
 6. Query proof matrix when the CLI exists.
-7. Query optional tool capability before external tool use.
+7. Run `tool check`, then query optional tool capability before external tool
+   use.
 8. Implement the smallest safe slice for the lane.
 9. Update product docs, story state, proof, decisions, and templates if changed.
 10. Validate according to lane.
@@ -227,6 +231,7 @@ domain
 Before any optional external tool, run:
 
 ```bash
+_harness/bin/harness-cli tool check
 _harness/bin/harness-cli query tools --capability <capability> --status present
 ```
 
@@ -244,6 +249,7 @@ missing, mark `Weak proof` and record the gap.
 Record proof status with:
 
 ```bash
+_harness/bin/harness-cli story verify <story-id>
 _harness/bin/harness-cli story update --id <story-id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands run>"
 _harness/bin/harness-cli query matrix
 ```

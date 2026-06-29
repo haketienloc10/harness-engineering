@@ -1,18 +1,17 @@
 # Install Runtime
 
-This directory contains installer metadata and installer scripts for the
-agent-first harness.
+This directory contains installer metadata for the agent-first harness.
 
-Install from a checkout:
+Install into the current repository:
 
 ```bash
-.agent-harness/install/install-harness.sh --directory /path/to/target --yes
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash
 ```
 
-Windows:
+Install into another directory:
 
-```powershell
-.\.agent-harness\install\install-harness.ps1 -Directory C:\path\to\target -Yes
+```bash
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash -s -- /path/to/target
 ```
 
 Installed runtime paths:
@@ -24,3 +23,8 @@ Installed runtime paths:
 - `.gitignore`
 
 Do not install files into `scripts/` or `docs/` in the target repository.
+
+The installer first tries to install a compatible CLI release binary. If that
+binary is unavailable or cannot run on the target system, it falls back to
+building from `crates/harness-cli` when the Rust source and `cargo` are
+available.

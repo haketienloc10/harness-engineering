@@ -48,29 +48,28 @@ Initialize local durable state after install:
 
 ## Install Commands
 
-From this repository checkout:
+Install into the current repository:
 
 ```bash
-.agent-harness/install/install-harness.sh --directory /path/to/target --yes
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash
 ```
 
-Windows PowerShell:
-
-```powershell
-.\.agent-harness\install\install-harness.ps1 -Directory C:\path\to\target -Yes
-```
-
-Use merge mode when refreshing an existing target:
+Install into another directory:
 
 ```bash
-.agent-harness/install/install-harness.sh --directory /path/to/target --merge --yes
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash -s -- /path/to/target
 ```
 
-```powershell
-.\.agent-harness\install\install-harness.ps1 -Directory C:\path\to\target -Merge -Yes
+From a local checkout, run the same installer:
+
+```bash
+./install.sh /path/to/target
 ```
 
-Use override only when replacing the target's harness surface is intentional.
+The installer backs up existing `AGENTS.md` and `.agent-harness/` under
+`.harness-backup/`, installs the current payload, appends local Harness ignore
+rules, and installs the CLI by downloading a compatible release binary or
+building from `crates/harness-cli` when source and `cargo` are available.
 
 ## Payload Structure
 

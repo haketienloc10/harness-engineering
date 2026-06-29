@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(pwd -P)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
+harness_root="$(cd "$script_dir/.." && pwd -P)"
+binary="$script_dir/harness-cli.bin"
+
+if [ ! -x "$binary" ]; then
+  printf 'Error: Harness CLI binary missing: %s\n' "$binary" >&2
+  exit 127
+fi
+
+export HARNESS_DB="${HARNESS_DB:-$repo_root/harness.db}"
+
+case "${1:-}" in
+  init|migrate)
+    export HARNESS_REPO_ROOT="${HARNESS_REPO_ROOT:-$harness_root}"
+    ;;
+esac
+
+exec "$binary" "$@"

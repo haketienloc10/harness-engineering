@@ -18,10 +18,10 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 
 The installer targets the current directory by default, accepts one optional
 target directory argument, backs up existing `AGENTS.md`, legacy
-`.agent-harness/`, `_harness/`, `docs/product/`, `docs/stories/`, and
-`docs/decisions/`, installs the Harness payload, appends local `.gitignore`
-rules, and installs the CLI by downloading a compatible release binary or
-building from
+`.agent-harness/`, and `_harness/`, then replaces `_harness/` with the current
+Harness runtime. It snapshots `docs/` and updates it file by file without
+deleting target-only files, appends local `.gitignore` rules, and installs the
+CLI by downloading a compatible release binary or building from
 `crates/harness-cli` when source and `cargo` are available.
 
 ## Relevant Product Docs
@@ -33,7 +33,8 @@ building from
 
 - A root `install.sh` supports the one-line curl install command.
 - The documented install path no longer requires the removed option-heavy installer.
-- Existing target `AGENTS.md`, legacy `.agent-harness/`, `_harness/`, and managed product record directories are backed up before replacement.
+- Existing target `AGENTS.md`, legacy `.agent-harness/`, and `_harness/` are backed up before replacement.
+- Existing `docs/` is snapshotted before file-level updates, and target-only docs are preserved.
 - Installer output names the source, target, installed payload, and next CLI commands.
 
 ## Design Notes
@@ -42,7 +43,7 @@ building from
 - Queries: none.
 - API: none.
 - Tables: none.
-- Domain rules: install Harness runtime under `_harness/` and Harness-managed product records under `docs/`; do not touch unrelated app folders.
+- Domain rules: replace Harness runtime under `_harness/`; update Harness-managed product record files under `docs/` without deleting target-only docs; do not touch unrelated app folders.
 - UI surfaces: shell output only.
 
 ## Validation
@@ -82,3 +83,6 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
   `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout has tracked
   Rust source under `crates/harness-cli/`, and the fallback installed the
   `_harness/bin/harness-cli` command successfully in the temporary target.
+- 2026-06-29 follow-up: installer behavior was changed to replace `_harness/`
+  as a full runtime tree while updating `docs/` file by file and preserving
+  target-only documentation.

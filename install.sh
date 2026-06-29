@@ -71,6 +71,33 @@ backup_path() {
   printf 'backup  %s -> %s\n' "$path" "$BACKUP_DIR/$(basename "$path")"
 }
 
+snapshot_path() {
+  local path="$1"
+  [ -e "$path" ] || return 0
+  mkdir -p "$BACKUP_DIR"
+  cp -R "$path" "$BACKUP_DIR/$(basename "$path")"
+  printf 'backup  %s -> %s\n' "$path" "$BACKUP_DIR/$(basename "$path")"
+}
+
+copy_tree_files() {
+  local src_dir="$1"
+  local dest_dir="$2"
+  local label="$3"
+  local count=0
+
+  [ -d "$src_dir" ] || return 0
+  mkdir -p "$dest_dir"
+
+  while IFS= read -r -d '' file; do
+    local rel="${file#"$src_dir"/}"
+    mkdir -p "$(dirname "$dest_dir/$rel")"
+    cp "$file" "$dest_dir/$rel"
+    count=$((count + 1))
+  done < <(find "$src_dir" -type f -print0)
+
+  printf 'update  %s (%s files)\n' "$label" "$count"
+}
+
 append_gitignore_rules() {
   local target="$TARGET_DIR/.gitignore"
   touch "$target"
@@ -237,21 +264,13 @@ printf 'target  %s\n' "$TARGET_DIR"
 backup_path "$TARGET_DIR/AGENTS.md"
 backup_path "$TARGET_DIR/.agent-harness"
 backup_path "$TARGET_DIR/_harness"
-backup_path "$TARGET_DIR/docs/product"
-backup_path "$TARGET_DIR/docs/stories"
-backup_path "$TARGET_DIR/docs/decisions"
+snapshot_path "$TARGET_DIR/docs"
 
 cp -R "$SRC/AGENTS.md" "$TARGET_DIR/AGENTS.md"
 cp -R "$SRC/_harness" "$TARGET_DIR/_harness"
-mkdir -p "$TARGET_DIR/docs"
-cp -R "$SRC/docs/product" "$TARGET_DIR/docs/product"
-cp -R "$SRC/docs/stories" "$TARGET_DIR/docs/stories"
-cp -R "$SRC/docs/decisions" "$TARGET_DIR/docs/decisions"
+copy_tree_files "$SRC/docs" "$TARGET_DIR/docs" "docs/"
 printf 'install AGENTS.md\n'
 printf 'install _harness/\n'
-printf 'install docs/product/\n'
-printf 'install docs/stories/\n'
-printf 'install docs/decisions/\n'
 
 append_gitignore_rules
 install_cli

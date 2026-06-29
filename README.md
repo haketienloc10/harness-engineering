@@ -68,12 +68,13 @@ From a local checkout, run the same installer:
 ./install.sh /path/to/target
 ```
 
-The installer backs up existing `AGENTS.md`, legacy `.agent-harness/`,
-`_harness/`, and the managed `docs/product/`, `docs/stories/`, and
-`docs/decisions/` directories under `.harness-backup/`. It installs the current
-payload, appends local Harness ignore rules, and installs the CLI by downloading
-a compatible release binary or building from `crates/harness-cli` when source
-and `cargo` are available.
+The installer backs up existing `AGENTS.md`, legacy `.agent-harness/`, and
+`_harness/` under `.harness-backup/`, then replaces `_harness/` with the current
+runtime payload. Existing `docs/` is snapshotted before being updated file by
+file; files that are not present in the Harness payload are preserved. The
+installer also appends local Harness ignore rules and installs the CLI by
+downloading a compatible release binary or building from `crates/harness-cli`
+when source and `cargo` are available.
 
 ## Payload Structure
 

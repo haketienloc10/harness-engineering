@@ -4,7 +4,7 @@ Date: 2026-06-29
 
 ## Status
 
-Accepted
+Accepted, amended 2026-06-29
 
 ## Context
 
@@ -30,6 +30,9 @@ The installer should:
 - Download the repository snapshot when run through curl.
 - Use the local checkout as source when run as `./install.sh`.
 - Back up existing `AGENTS.md` and `_harness/` before replacing them.
+- Replace `_harness/` as a complete runtime tree on every install.
+- Snapshot existing `docs/`, then update Harness-provided docs files without
+  deleting target-only docs.
 - Append Harness local-state rules to `.gitignore`.
 - Try to install the platform CLI binary, but remove it and report a clear
   follow-up if the binary cannot run on the target system.

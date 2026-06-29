@@ -5,7 +5,7 @@ target repository.
 
 ## Policy Files
 
-- `HARNESS.md`: full task loop and durable-layer contract.
+- `HARNESS.md`: operating index, core loop, and durable-layer contract.
 - `FEATURE_INTAKE.md`: input types, risk flags, and lane selection.
 - `CONTEXT_RULES.md`: read targets by phase and lane.
 - `ARCHITECTURE.md`: boundary and layering rules.

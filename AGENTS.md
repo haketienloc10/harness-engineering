@@ -1,27 +1,11 @@
 # Agent-First Harness
 
-This file is the agent entrypoint. Obey it before changing the target repo.
+Entrypoint for agents. The app is what users touch; the harness is what agents
+operate. Do not edit before intake.
 
-The app is what users touch. The harness is what agents operate.
+## Start Every Task
 
-## Non-Negotiables
-
-- Do not edit first. Classify the request first.
-- Do not invent product truth. Derive it from user intent, product docs,
-  stories, code, tests, and durable records.
-- Do not grow a monolithic spec. Convert specs into product docs, stories,
-  decisions, and proof.
-- Do not skip validation silently. Run the right checks or state exactly why no
-  check could run.
-- Do not use optional tools by assumption. Query capability first.
-- Do not ask the human for routine execution choices. Ask only when ambiguity or
-  risk requires a real decision.
-- Do not leave the next agent blind. Update records, docs, traces, or backlog
-  friction when the task changes them.
-
-## Required Read Order
-
-At task start, read:
+Read in order:
 
 1. `AGENTS.md`
 2. `_harness/HARNESS.md`
@@ -29,33 +13,16 @@ At task start, read:
 4. `_harness/CONTEXT_RULES.md`
 5. `_harness/bin/harness-cli query matrix` when the CLI exists
 
-Then read conditionally:
+Then read only what the lane and task require:
 
-- `_harness/ARCHITECTURE.md` for code structure, boundaries, data,
-  providers, runtime, public contracts, or app surfaces.
+- `_harness/ARCHITECTURE.md` for structure, boundaries, data, providers,
+  runtime, public contracts, or app surfaces.
 - `_harness/TOOL_REGISTRY.md` before optional external tools.
 - `docs/product/*` when product behavior changes.
-- `docs/stories/*` when work maps to an existing story.
-- `docs/decisions/*` when architecture, source hierarchy, durable
-  records, validation, or high-risk behavior changes.
+- `docs/stories/*` when work maps to a story.
+- `docs/decisions/*` when architecture, source hierarchy, durable records,
+  validation, or high-risk behavior changes.
 - `_harness/templates/*` before creating harness artifacts.
-
-If a required harness file is missing, continue only if the task is safe from
-local context. Record the missing file as harness friction.
-
-## CLI Contract
-
-Use the repository-local CLI as the durable layer:
-
-```bash
-_harness/bin/harness-cli <command>
-```
-
-Windows:
-
-```powershell
-.\_harness\bin\harness-cli.ps1 <command>
-```
 
 If `harness.db` is missing and the CLI exists, run:
 
@@ -63,136 +30,71 @@ If `harness.db` is missing and the CLI exists, run:
 _harness/bin/harness-cli init
 ```
 
-Record operational state through the CLI whenever possible:
+If the CLI is unavailable, use markdown artifacts and record the missing CLI as
+harness friction.
 
-```bash
-_harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
-_harness/bin/harness-cli query matrix
-_harness/bin/harness-cli tool check
-_harness/bin/harness-cli story add --id <id> --title <text> --lane <lane>
-_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0
-_harness/bin/harness-cli story verify <id>
-_harness/bin/harness-cli story verify-all
-_harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
-_harness/bin/harness-cli backlog add --title <text> --pain <text> --risk tiny
-_harness/bin/harness-cli trace --summary <text> --agent codex --outcome completed
-```
+## Non-Negotiables
 
-If the CLI is unavailable, use markdown artifacts and report the missing CLI as
-friction.
+- Classify first: input type, risk flags, lane.
+- Derive product truth from current user intent, product docs, stories,
+  decisions, matrix proof, code, and tests.
+- Convert specs into product docs, stories, decisions, and proof; do not grow a
+  monolithic spec.
+- Do not skip validation silently.
+- Query capability before optional external tool use.
+- Ask humans only for real ambiguity, high-risk direction, credentials, paid or
+  destructive actions, or explicit approval gates.
+- Leave durable records for the next agent.
 
 ## Work Loop
 
-For every task, execute this order:
-
-1. Classify input type.
-2. Run the risk checklist.
-3. Select lane: `tiny`, `normal`, or `high-risk`.
-4. Record intake when the CLI exists.
-5. Locate affected product docs, stories, decisions, code, and tests.
-6. Query proof matrix when the CLI exists.
-7. Run `tool check`, then query optional tool capability before external tool
-   use.
+1. Classify input type with `_harness/FEATURE_INTAKE.md`.
+2. Run the risk checklist and choose `tiny`, `normal`, or `high-risk`.
+3. Record intake when the CLI exists:
+   `_harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>`.
+4. Locate affected docs, stories, decisions, code, and tests.
+5. Query proof matrix when the CLI exists.
+6. Run `_harness/bin/harness-cli tool check` when the CLI exists.
+7. Before optional external tools, run:
+   `_harness/bin/harness-cli query tools --capability <capability> --status present`.
 8. Implement the smallest safe slice for the lane.
-9. Update product docs, story state, proof, decisions, and templates if changed.
-10. Validate according to lane.
-11. Record trace when the CLI exists.
+9. Update product docs, story state, proof, decisions, templates, or backlog
+   when the task changes them.
+10. Validate for the lane.
+11. Record a trace when the CLI exists.
 12. Fix harness friction immediately or record backlog.
 
-## Input Types
+## Lanes
 
-Use exactly one:
+Tiny:
 
-| Type                  | Use when                                                                     |
-| --------------------- | ---------------------------------------------------------------------------- |
-| `New spec`            | User supplies a project spec or large product idea.                          |
-| `Spec slice`          | A selected behavior from an accepted spec is ready.                          |
-| `Change request`      | Accepted behavior changes, breaks, or needs refinement.                      |
-| `New initiative`      | Multiple stories are needed.                                                 |
-| `Maintenance request` | Dependencies, architecture, performance, security, CI, or operations change. |
-| `Harness improvement` | Agent workflow, templates, proof, tool registry, or instructions change.     |
+- Use for low-risk docs, copy, naming, narrow edits, or limited setup without
+  schema, CRUD, auth, authorization, provider integration, or migrations.
+- Record intake, patch directly, run quick checks, update changed docs.
 
-## Risk Lanes
+Normal:
 
-### Tiny
-
-Use only for low-risk docs, copy, naming, narrow edits, or limited setup without
-domain schema, CRUD behavior, auth, authorization, provider integration, or
-migration behavior.
-
-Do:
-
-- Record intake if CLI exists.
-- Patch directly.
-- Run quick checks.
-- Update changed docs.
-- Record friction only if found.
-
-### Normal
-
-Use for story-sized behavior with bounded blast radius.
-
-Do:
-
-- Create or update one story from `_harness/templates/story.md` when the
-  work is behavior-bearing.
-- Link relevant product docs.
-- Add or update validation expectations.
-- Implement the smallest vertical slice.
-- Update durable story status and proof when CLI exists.
+- Use for story-sized behavior with bounded blast radius.
+- Create or update one story when behavior-bearing.
+- Record proof with `story update`; store repeatable proof with `--verify` and
+  run `story verify <id>` when available.
 - Record a Standard trace.
 
-### High-Risk
+High-risk:
 
-Use when the work can affect security, data, scope, public contracts, multiple
-roles/platforms, or validation guarantees.
-
-Do:
-
+- Use for security, data, scope, public contracts, multiple roles/platforms, or
+  validation guarantees.
 - Create a high-risk packet from `_harness/templates/high-risk-story/`.
-- Fill `execplan.md`, `overview.md`, `design.md`, and `validation.md`.
 - Read relevant decisions before implementation.
-- Ask the human only when product or safety direction is ambiguous.
 - Add a durable decision for meaningful behavior, architecture, authorization,
   data ownership, API shape, or validation changes.
 - Record a Detailed trace.
 
-## Risk Checklist
-
-Mark every applicable flag:
-
-| Risk flag         | Applies when touched                                            |
-| ----------------- | --------------------------------------------------------------- |
-| Auth              | login, logout, sessions, JWT, passwords, refresh tokens         |
-| Authorization     | roles, permissions, tenant/company/workspace scope              |
-| Data model        | schema, migrations, uniqueness, deletion, retention             |
-| Audit/security    | audit logs, privacy, sensitive data, access logs                |
-| External systems  | email, payments, cloud services, SDKs, queues, webhooks         |
-| Public contracts  | API shape, response envelope, client-visible behavior           |
-| Cross-platform    | desktop/mobile/browser split, native shell behavior, deep links |
-| Existing behavior | implemented or test-covered behavior changes                    |
-| Weak proof        | unclear or missing tests around the affected area               |
-| Multi-domain      | more than one product domain changes                            |
-
-Classification:
-
-- `0-1` flags: `tiny` or `normal`, based on code impact.
-- `2-3` flags: `normal` with stronger validation.
-- `4+` flags: `high-risk`.
-- Any hard gate is `high-risk` unless the human explicitly narrows scope.
-
-Hard gates:
-
-- Auth.
-- Authorization.
-- Data loss or migration.
-- Audit/security.
-- External provider behavior.
-- Removing or weakening validation.
+Hard gates are high-risk unless the user explicitly narrows scope: auth,
+authorization, data loss or migration, audit/security, external provider
+behavior, or removing/weakening validation.
 
 ## Source Hierarchy
-
-When sources conflict, use this order:
 
 ```text
 Current user instruction
@@ -204,49 +106,9 @@ Current user instruction
   -> historical specs or examples
 ```
 
-User-provided specs are input material. Living truth belongs in product docs,
-stories, proof, and decisions.
+## Validation And Proof
 
-## Architecture Rules
-
-- Create stack folders only when a selected story needs them.
-- Keep inner layers independent from outer layers.
-- Parse unknown data at boundaries before inner code receives it.
-- Keep commands and queries separate when the product has reads and writes.
-- Treat audit logs as product records and application logs as operational
-  records.
-
-Default dependency direction:
-
-```text
-domain
-  <- application
-      <- infrastructure
-          <- interface
-              <- app surfaces
-```
-
-## Tool Rule
-
-Before any optional external tool, run:
-
-```bash
-_harness/bin/harness-cli tool check
-_harness/bin/harness-cli query tools --capability <capability> --status present
-```
-
-If no provider is registered, cleanly skip and note
-`capability <name>: inactive` in the trace. If a provider is registered but
-missing, mark `Weak proof` and record the gap.
-
-## Validation Rule
-
-- Tiny: run quick checks available for the touched files.
-- Normal: run focused tests and configured story verification.
-- High-risk: run the validation plan from the high-risk packet and explain any
-  skipped proof.
-
-Record proof status with:
+Use the right checks or state the exact gap. For normal/high-risk story work:
 
 ```bash
 _harness/bin/harness-cli story verify <story-id>
@@ -254,45 +116,17 @@ _harness/bin/harness-cli story update --id <story-id> --unit 1 --integration 1 -
 _harness/bin/harness-cli query matrix
 ```
 
-Do not claim completion without proof or an explicit validation gap.
+Proof booleans use `1`/`0`, not `yes`/`no`.
 
-## Trace Rule
+## Trace And Final Response
 
-Before final response, record a trace when CLI exists.
+Before the final response:
 
-Minimum by lane:
+1. Re-check validation evidence.
+2. Run `git status --short`.
+3. Record a trace with `_harness/bin/harness-cli trace` when the CLI exists.
+4. Confirm changed harness artifacts when relevant.
+5. Confirm trace/friction status or name the gap.
 
-| Lane        | Trace tier                                                   |
-| ----------- | ------------------------------------------------------------ |
-| `tiny`      | Minimal; Standard if harness docs or durable records changed |
-| `normal`    | Standard                                                     |
-| `high-risk` | Detailed                                                     |
-
-Trace decisions do not replace decision records.
-
-## Human Interaction Rule
-
-Proceed without asking when a conservative, repo-consistent choice exists.
-
-Ask only when:
-
-- Product behavior is ambiguous and outcomes materially differ.
-- High-risk implementation needs a security, data, authorization, provider, or
-  public-contract decision.
-- Credentials, private systems, paid actions, destructive operations, or scope
-  expansion are required.
-- The user explicitly requested approval before edits.
-
-Ask one concrete question. Then continue.
-
-## Final Response Rule
-
-Before final response:
-
-- Run `git status --short`.
-- Confirm validation evidence or name the gap.
-- Confirm changed harness artifacts when relevant.
-- Confirm trace/friction status when CLI exists.
-
-Respond concisely: changed surface, validation, durable records, and remaining
-gap only.
+Final response stays concise: changed surface, validation, durable records, and
+remaining gap only.

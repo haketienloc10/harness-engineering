@@ -54,6 +54,35 @@ decision records.
   `_harness/` paths instead of restoring `docs/HARNESS.md` or `scripts/bin`.
 - UI surfaces: agent-facing markdown and CLI output only.
 
+## Comparison Baseline
+
+Last careful workflow comparison:
+
+- `harness-engineering`: `5de760f26ee9c667328007cc1a31d9e59e483842`
+- `harness-experimental`: `f07cd06db8f329cbe4009b730704d67ed8c3016e`
+
+Scope checked:
+
+- `AGENTS.md`
+- `_harness/HARNESS.md` against `docs/HARNESS.md`
+- `_harness/FEATURE_INTAKE.md` against `docs/FEATURE_INTAKE.md`
+- `_harness/CONTEXT_RULES.md` against `docs/CONTEXT_RULES.md`
+- `_harness/TOOL_REGISTRY.md` against `docs/TOOL_REGISTRY.md`
+- `_harness/TRACE_SPEC.md` against `docs/TRACE_SPEC.md`
+- `_harness/TEST_MATRIX.md` against `docs/TEST_MATRIX.md`
+- `_harness/IMPROVEMENT_PROTOCOL.md` against `docs/IMPROVEMENT_PROTOCOL.md`
+
+Result:
+
+- Workflow concepts are aligned after adapting paths from `docs/*` and
+  `scripts/bin/harness-cli` to `_harness/*` and
+  `_harness/bin/harness-cli`.
+- Intentional differences: `harness-engineering` keeps runtime policy in
+  `_harness/`, product records in `docs/product`, `docs/stories`, and
+  `docs/decisions`, and uses a compact command-style `AGENTS.md`.
+- Follow-up fixed in this pass: outbound command manifest now lists
+  `story verify` and `story verify-all`.
+
 ## Validation
 
 When updating durable proof status, use numeric booleans:
@@ -74,6 +103,20 @@ fallback matrix, and seeded durable decision records.
 
 ## Evidence
 
+- 2026-06-30 cautious `_harness/` compact pass: `_harness/HARNESS.md`
+  converted to an operating index that delegates detail to focused references;
+  `_harness/HARNESS_MATURITY.md` converted to compact status tables. Detailed
+  reference files such as `_harness/TRACE_SPEC.md` and
+  `_harness/TOOL_REGISTRY.md` were intentionally kept detailed.
+- 2026-06-30 compact review restored concise core workflow value in
+  `_harness/HARNESS.md`: product/harness deltas, spec lifecycle,
+  friction/intervention growth, and future validation ladder.
+- 2026-06-30 comparison baseline recorded:
+  `harness-engineering` `5de760f26ee9c667328007cc1a31d9e59e483842`
+  against `harness-experimental`
+  `f07cd06db8f329cbe4009b730704d67ed8c3016e`; `AGENTS.md` compacted;
+  `_harness/TOOL_REGISTRY.md` outbound manifest fixed for `story verify` and
+  `story verify-all`.
 - `cargo test -p harness-cli` passed with 27 tests.
 - `bash -n install.sh` passed.
 - `git diff --check` passed.

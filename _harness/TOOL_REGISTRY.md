@@ -77,6 +77,9 @@ _harness/bin/harness-cli tool check --name c3  # scan one
 _harness/bin/harness-cli tool check --json     # machine-readable for agents
 ```
 
+When no external tools are registered, human-readable `tool check` output says
+optional tool capabilities are inactive. `--json` still returns an empty array.
+
 Probe per kind:
 
 | Kind            | Probe                                            | `present` means             |

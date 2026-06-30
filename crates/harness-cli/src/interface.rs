@@ -1209,6 +1209,11 @@ fn print_tools_json(records: &[ToolEntry]) {
 }
 
 fn print_tool_check_summary(records: &[ToolCheckResult]) {
+    if records.is_empty() {
+        println!("No external tools registered. Optional tool capabilities are inactive.");
+        return;
+    }
+
     let rows = records
         .iter()
         .map(|record| {

@@ -9,12 +9,11 @@ constraints, and high-risk approvals.
 Install these paths into a target repo:
 
 - `AGENTS.md`: mandatory root entrypoint for agents.
-- `_harness/`: agent policy, templates, schema migrations, and CLI wrappers.
+- `_harness/`: agent policy, templates, schema migrations, and the local CLI.
 - `docs/product/`: living product contract derived from accepted input.
 - `docs/stories/`: story packets and progress evidence.
 - `docs/decisions/`: durable decision records.
-- `_harness/scripts/schema/`: durable-layer database migrations used by
-  the wrapped CLI.
+- `_harness/scripts/schema/`: durable-layer database migrations used by the CLI.
 - `_harness/bin/harness-cli`: repository-local CLI command for agents.
 - `.gitignore`: durable local state rules for `harness.db` and CLI binaries.
 
@@ -59,23 +58,27 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 Install into another directory:
 
 ```bash
-curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash -s -- /path/to/target
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | HARNESS_LITE_TARGET_DIR=/path/to/target bash
 ```
 
 From a local checkout, run the same installer:
 
 ```bash
-./install.sh /path/to/target
+HARNESS_LITE_TARGET_DIR=/path/to/target ./install.sh
 ```
 
-The installer backs up existing `AGENTS.md`, legacy `.agent-harness/`, and
-`_harness/` under `.harness-backup/`, then replaces `_harness/` with the current
-runtime payload. Existing `docs/` is snapshotted before file-level installation;
-existing target docs are kept, and only missing Harness docs are added. The
-installer writes `_harness/.harness-manifest`, skips local runtime artifacts,
-appends local Harness ignore rules, and installs the CLI by downloading a
-compatible release binary or building from `crates/harness-cli` when source and
-`cargo` are available.
+The installer downloads the source archive from
+`haketienloc10/harness-engineering`, installs the shared scaffold files, updates
+`_harness/` files, preserves existing target files outside `_harness/`, embeds a
+Harness block into the target `AGENTS.md`, filters source-only artifacts, and
+writes `_harness/.harness-manifest`.
+
+The root installer does not build the CLI. In this source repository, refresh the
+repository-local CLI binary from the Rust source with:
+
+```bash
+./install-harness-cli.sh
+```
 
 ## Payload Structure
 
@@ -92,7 +95,7 @@ target-repo/
     TEST_MATRIX.md
     templates/
     scripts/schema/
-    bin/harness-cli      # repository-local CLI command
+    bin/harness-cli      # repository-local Rust CLI binary
   docs/
     product/
     stories/

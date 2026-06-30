@@ -35,7 +35,7 @@ migrations remain under `_harness/scripts/schema/`. Templates remain under
 1. Keep all records under `.agent-harness/`. Rejected because product records
    should be visible product documentation in the target repo.
 2. Move all harness files under `docs/`. Rejected because agent runtime policy,
-   schema, templates, and CLI wrappers are not product docs.
+   schema, templates, and CLI runtime are not product docs.
 
 ## Consequences
 

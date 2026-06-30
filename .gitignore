@@ -8,7 +8,7 @@ harness.db-shm
 target/
 dist/
 
-# Downloaded Harness CLI binary for installed project instances.
+# Legacy downloaded Harness CLI artifacts for installed project instances.
 .agent-harness/bin/harness-cli.bin
 .agent-harness/bin/harness-cli.exe
 _harness/bin/harness-cli.bin

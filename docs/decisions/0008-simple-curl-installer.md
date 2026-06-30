@@ -4,7 +4,7 @@ Date: 2026-06-29
 
 ## Status
 
-Accepted, amended 2026-06-29
+Accepted, amended 2026-06-29, amended 2026-06-30
 
 ## Context
 
@@ -22,24 +22,25 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 ## Decision
 
 Use a root `install.sh` as the primary install contract. By default it installs
-into the current directory. It may accept one optional positional target
-directory for local testing or scripted setup.
+into the current directory. It may accept `HARNESS_LITE_TARGET_DIR` for local
+testing or scripted setup.
 
-The installer should:
+As of 2026-06-30, align the root installer with the lightweight
+`repo-harness/install.sh` mechanism while keeping this repository as the source:
 
-- Download the repository snapshot when run through curl.
-- Use the local checkout as source when run as `./install.sh`.
-- Back up existing `AGENTS.md` and `_harness/` before replacing them.
-- Replace `_harness/` as a complete runtime tree on every install.
-- Snapshot existing `docs/`, then add missing Harness-provided docs files
-  without overwriting existing target docs.
-- Skip local runtime artifacts and write `_harness/.harness-manifest` with the
-  installed payload file list.
-- Append Harness local-state rules to `.gitignore`.
-- Try to install the platform CLI binary, but remove it and report a clear
-  follow-up if the binary cannot run on the target system.
-- Build the CLI from `crates/harness-cli` as a fallback when release binary
-  installation fails and `cargo` plus source files are available.
+- Download the repository snapshot from `haketienloc10/harness-engineering`
+  through `codeload.github.com`.
+- Target the current directory by default, or `HARNESS_LITE_TARGET_DIR` when set.
+- Install the shared scaffold whitelist.
+- Update `_harness/` files, but preserve existing target files outside
+  `_harness/`.
+- Embed or refresh a marked Harness block inside target `AGENTS.md` instead of
+  copying the source `AGENTS.md`.
+- Filter source-only artifacts from `docs/`, `_harness/`, generated knowledge
+  docs, and durable local state.
+- Write `_harness/.harness-manifest` with the installed payload file list.
+- Leave CLI build/install behavior to `install-harness-cli.sh`, which builds the
+  Rust CLI from source and copies the binary directly to `_harness/bin/harness-cli`.
 
 Do not reintroduce the old option-heavy installer surface unless a concrete
 target repository need requires it.
@@ -58,19 +59,22 @@ target repository need requires it.
 Positive:
 
 - The install command is short enough to paste into a target repo.
-- Existing Harness surfaces are backed up automatically.
-- The payload no longer carries multiple installer implementations.
+- Target-specific `AGENTS.md` content is preserved while Harness instructions
+  are refreshed idempotently.
+- Source-specific story, decision, and generated docs are filtered from target
+  installs.
 
 Tradeoffs:
 
 - Windows-specific installation is no longer a first-class script in the
   payload.
 - Advanced merge and dry-run workflows are removed from the primary path.
-- CLI install can still succeed without release assets when Rust source and
-  `cargo` are available.
-- Source-build fallback takes longer than copying a release binary.
+- This installer no longer performs CLI binary download or inline source-build
+  fallback; CLI bootstrapping is handled by `install-harness-cli.sh`.
+- Target directory selection uses an environment variable rather than a
+  positional argument.
 
 ## Follow-Up
 
-- Ensure `crates/harness-cli` source files are tracked in this repository if
-  source-build fallback is expected to work from the curl installer.
+- Future release automation may publish platform binaries, but the local source
+  bootstrap is `./install-harness-cli.sh`.

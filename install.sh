@@ -1,115 +1,204 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
-REPO_URL="${HARNESS_REPO_URL:-https://github.com/haketienloc10/harness-engineering}"
-REF="${HARNESS_REF:-main}"
-TARGET_DIR="${1:-$PWD}"
+REPO_OWNER="${HARNESS_LITE_OWNER:-haketienloc10}"
+REPO_NAME="${HARNESS_LITE_REPO:-harness-engineering}"
+REF="${HARNESS_LITE_REF:-main}"
+TARGET_DIR="${HARNESS_LITE_TARGET_DIR:-$PWD}"
 
+ARCHIVE_URL="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/${REF}"
+
+# Khung mẫu (scaffold) được cài vào repo đích. CHỈ liệt kê những thứ là bộ
+# khung dùng chung cho mọi repo - KHÔNG liệt kê tài nguyên riêng của repo
+# harness-engineering (xem EXCLUDE_PATHS bên dưới để lọc artifact lẫn trong các thư mục).
 INSTALL_ITEMS=(
-  "AGENTS.md"
+  ".editorconfig"
+  ".prettierignore"
+  ".prettierrc"
   "_harness"
   "docs"
+  ".agents"
 )
 
+# AGENTS.md KHÔNG nằm trong INSTALL_ITEMS: thay vì copy nguyên file, ta NHÚNG
+# block Harness vào AGENTS.md của repo đích (xem install_agents_md). Nhờ vậy nội
+# dung "đây là tooling, KHÔNG phải source sản phẩm" chỉ xuất hiện ở repo ĐÍCH -
+# còn harness-engineering (nơi _harness/ chính LÀ sản phẩm) không bị dính rule đó.
+HARNESS_BLOCK_BEGIN="<!-- HARNESS:BEGIN -->"
+HARNESS_BLOCK_END="<!-- HARNESS:END -->"
+
+# Danh sách file thực sự được copy - ghi vào _harness/.harness-manifest ở cuối.
+# Vừa là DẤU HIỆU "repo này đã cài Harness", vừa phục vụ gỡ/nâng cấp về sau.
 INSTALLED_FILES=()
-SKIPPED_FILES=0
-EXISTING_FILES=0
 
-usage() {
-  cat <<'EOF'
-Usage:
-  curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash
-  curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash -s -- /path/to/target
-
-Environment:
-  HARNESS_REPO_URL       GitHub repository URL. Default: https://github.com/haketienloc10/harness-engineering
-  HARNESS_REF            Branch or tag to install. Default: main
-  HARNESS_CLI_BASE_URL   Override CLI release asset base URL.
-EOF
+# Artifact là TÀI NGUYÊN riêng của harness-engineering - không phải khung mẫu,
+# không được sao chép sang repo đích. So khớp theo đường dẫn tương đối tính từ gốc
+# repo (xem is_excluded). Quy ước:
+#   - "dir/*"      => bỏ MỌI file dưới dir đó
+#   - "dir/keep/*" cộng nhánh keep ở is_excluded => giữ lại ngoại lệ
+# Các thư mục product/stories/decisions/proposals chỉ giữ README/backlog/template
+# generic; nội dung thực (story, decision record, proposal, read-model...) bị loại.
+ensure_empty_dir() {
+  # Một số thư mục scaffold (vd: proposals) sau khi lọc sẽ rỗng. Tạo sẵn để
+  # agent có chỗ ghi mà không kéo theo artifact của repo nguồn.
+  mkdir -p "$TARGET_DIR/_harness/docs/proposals"
 }
 
-case "${1:-}" in
-  -h|--help)
-    usage
-    exit 0
-    ;;
-esac
-
-need() {
-  command -v "$1" >/dev/null 2>&1 || {
-    printf 'Error: %s is required\n' "$1" >&2
-    exit 1
-  }
-}
-
-abs_path() {
-  case "$1" in
-    "~") printf '%s\n' "$HOME" ;;
-    "~/"*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
-    /*) printf '%s\n' "$1" ;;
-    *) printf '%s/%s\n' "$PWD" "$1" ;;
-  esac
-}
-
-detect_platform() {
-  case "$(uname -s):$(uname -m)" in
-    Darwin:arm64) printf 'macos-arm64' ;;
-    Darwin:x86_64) printf 'macos-x64' ;;
-    Linux:x86_64) printf 'linux-x64' ;;
-    Linux:aarch64|Linux:arm64) printf 'linux-arm64' ;;
-    *)
-      printf 'unsupported'
-      ;;
-  esac
-}
-
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{ print $1 }'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" | awk '{ print $1 }'
-  else
-    return 1
-  fi
-}
-
-backup_path() {
-  local path="$1"
-  [ -e "$path" ] || return 0
-  mkdir -p "$BACKUP_DIR"
-  mv "$path" "$BACKUP_DIR/$(basename "$path")"
-  printf 'backup  %s -> %s\n' "$path" "$BACKUP_DIR/$(basename "$path")"
-}
-
-snapshot_path() {
-  local path="$1"
-  [ -e "$path" ] || return 0
-  mkdir -p "$BACKUP_DIR"
-  cp -R "$path" "$BACKUP_DIR/$(basename "$path")"
-  printf 'backup  %s -> %s\n' "$path" "$BACKUP_DIR/$(basename "$path")"
-}
-
+# Trả về 0 (true => LOẠI) nếu path tương đối là artifact riêng của repo nguồn.
 is_excluded() {
-  local path="$1"
-  case "$path" in
-    harness.db|harness.db-wal|harness.db-shm) return 0 ;;
+  local p="$1"
+  case "$p" in
+    # Dữ liệu vận hành / evidence / CSDL riêng của repo nguồn (đều trong _harness/)
+    _harness/harness.db) return 0 ;;
     _harness/.harness-manifest) return 0 ;;
-    _harness/bin/harness-cli.bin) return 0 ;;
-    _harness/bin/harness-cli.exe) return 0 ;;
+    _harness/evidence/*) return 0 ;;
+    # Ma trận test được generate riêng cho repo nguồn
+    _harness/docs/TEST_MATRIX.md) return 0 ;;
+    # Bản đồ orient + wiki được generate riêng cho repo nguồn
+    docs/KNOWLEDGE_INDEX.md) return 0 ;;
+    docs/wiki/*) return 0 ;;
+    # Thư mục scaffold: chỉ giữ hướng dẫn generic, bỏ nội dung thực của repo nguồn
+    _harness/docs/proposals/*)
+      case "$p" in _harness/docs/proposals/README.md) return 1 ;; *) return 0 ;; esac ;;
+    docs/decisions/*)
+      case "$p" in docs/decisions/README.md) return 1 ;; *) return 0 ;; esac ;;
+    docs/product/*)
+      case "$p" in docs/product/README.md) return 1 ;; *) return 0 ;; esac ;;
+    docs/stories/epics/*)
+      case "$p" in docs/stories/epics/README.md) return 1 ;; *) return 0 ;; esac ;;
+    docs/stories/*)
+      case "$p" in
+        docs/stories/README.md | docs/stories/backlog.md) return 1 ;;
+        *) return 0 ;;
+      esac ;;
   esac
   return 1
 }
 
-copy_payload_file() {
-  local rel="$1"
-  local src="$2"
-  local dest="$TARGET_DIR/$rel"
+# Sinh block Harness (kèm marker) để nhúng vào AGENTS.md của repo đích.
+build_harness_block() {
+  printf '%s\n' "$HARNESS_BLOCK_BEGIN"
+  cat <<'EOF'
 
+## Harness
+
+Repo này **CÀI Harness** (xem `_harness/.harness-manifest`). Toàn bộ **tầng vận
+hành** của Harness nằm gọn trong MỘT thư mục:
+
+- `_harness/` — engine (`_harness/bin/harness-cli`, `_harness/schema/`), CSDL vận
+  hành (`_harness/harness.db`), tài liệu khung + template (`_harness/docs/`), và
+  skill. Đây **KHÔNG** phải mã nguồn sản phẩm của repo: đừng sửa/test/review/
+  refactor như source, đừng mô tả như "the codebase" trong orient/wiki. Chỉ chạm
+  khi tác vụ là **Harness Delta**.
+
+➡️ **MỌI THỨ NGOÀI `_harness/` là của repo này** — gồm mã nguồn sản phẩm và tài
+liệu sản phẩm trong `docs/` (`product/`, `stories/`, `decisions/`, `wiki/`,
+`KNOWLEDGE_INDEX.md`) mà Harness chỉ quản lý ĐỊNH DẠNG; được sửa khi làm story.
+
+**GATE (chặn cứng — không bỏ qua):** Hành động ĐẦU TIÊN của bạn trong repo này là
+đọc `_harness/00-AGENTS.md`. Khi chưa đọc xong: KHÔNG đọc code, KHÔNG lập kế
+hoạch, KHÔNG sửa/chạy bất cứ thứ gì. Áp dụng cho MỌI tác vụ — kể cả tác vụ trông
+như một dòng. File đó định nghĩa quy trình bắt buộc của repo; bỏ qua = output sai
+quy trình.
+EOF
+  printf '%s\n' "$HARNESS_BLOCK_END"
+}
+
+# Thay nội dung giữa marker HARNESS:BEGIN/END bằng block mới (idempotent khi
+# cài lại / nâng cấp). Block mới đã chứa sẵn cả hai marker.
+replace_harness_block() {
+  local file="$1" block="$2" tmp
+  tmp="$(mktemp)"
+  BLOCK="$block" awk -v b="$HARNESS_BLOCK_BEGIN" -v e="$HARNESS_BLOCK_END" '
+    $0 == b { print ENVIRON["BLOCK"]; skip=1; next }
+    $0 == e { skip=0; next }
+    !skip   { print }
+  ' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
+# Đảm bảo AGENTS.md repo đích có block Harness, KHÔNG ghi đè hướng dẫn riêng của
+# họ: tạo mới nếu chưa có; thay block nếu đã có marker; chèn cuối nếu chưa có.
+install_agents_md() {
+  local dest="$TARGET_DIR/AGENTS.md" block
+  block="$(build_harness_block)"
+
+  if [ ! -e "$dest" ]; then
+    {
+      printf '# Agent Instructions\n\n'
+      printf 'Add project-specific agent instructions here.\n\n'
+      printf '%s\n' "$block"
+    } >"$dest"
+    log "Tạo mới AGENTS.md + nhúng block Harness"
+  elif grep -qF "$HARNESS_BLOCK_BEGIN" "$dest"; then
+    replace_harness_block "$dest" "$block"
+    log "Cập nhật block Harness trong AGENTS.md có sẵn"
+  else
+    printf '\n%s\n' "$block" >>"$dest"
+    log "Chèn block Harness vào cuối AGENTS.md có sẵn"
+  fi
+}
+
+# Ghi _harness/.harness-manifest: đánh dấu repo đã cài Harness + liệt kê file.
+write_manifest() {
+  local manifest="$TARGET_DIR/_harness/.harness-manifest"
+  mkdir -p "$(dirname "$manifest")"
+  {
+    printf '# Harness manifest - sinh tự động bởi install.sh, KHÔNG sửa tay.\n'
+    printf '# Sự hiện diện của file này = repo CÀI Harness (không phải repo nguồn).\n'
+    printf 'source = %s/%s\n' "$REPO_OWNER" "$REPO_NAME"
+    printf 'ref = %s\n' "$REF"
+    printf '\n[files]\n'
+    if [ "${#INSTALLED_FILES[@]}" -gt 0 ]; then
+      printf '%s\n' "${INSTALLED_FILES[@]}" | LC_ALL=C sort
+    fi
+  } >"$manifest"
+  log "Ghi manifest: _harness/.harness-manifest (${#INSTALLED_FILES[@]} file)"
+}
+
+log() {
+  printf '[harness-engineering] %s\n' "$*"
+}
+
+fail() {
+  printf '[harness-engineering] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+command -v curl >/dev/null 2>&1 || fail "Thiếu curl"
+command -v tar >/dev/null 2>&1 || fail "Thiếu tar"
+
+[ -d "$TARGET_DIR" ] || fail "TARGET_DIR không tồn tại: $TARGET_DIR"
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+log "Đang tải ${REPO_OWNER}/${REPO_NAME}@${REF}..."
+curl -fsSL "$ARCHIVE_URL" -o "$TMP_DIR/source.tar.gz"
+
+log "Đang giải nén..."
+tar -xzf "$TMP_DIR/source.tar.gz" -C "$TMP_DIR"
+
+SRC_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+[ -n "$SRC_DIR" ] || fail "Không tìm thấy thư mục source sau khi giải nén"
+
+log "Cài khung mẫu vào workspace: $TARGET_DIR"
+
+MISSING_ITEMS=()
+SKIPPED_FILES=0
+EXISTING_FILES=0
+
+# Copy một file đơn lẻ, tôn trọng is_excluded + KHÔNG ghi đè file của repo đích.
+copy_file() {
+  local rel="$1" src="$2"
   if is_excluded "$rel"; then
     SKIPPED_FILES=$((SKIPPED_FILES + 1))
     return 0
   fi
-
+  local dest="$TARGET_DIR/$rel"
+  # _harness/ thuộc Harness hoàn toàn -> luôn ghi đè để NÂNG CẤP khung. Mọi path
+  # khác (dotfile, docs/ workspace) có thể là tài sản của repo đích -> KHÔNG đè
+  # nếu đã tồn tại, tránh nuốt config/nội dung sẵn có của họ.
   case "$rel" in
     _harness/*) : ;;
     *)
@@ -119,237 +208,52 @@ copy_payload_file() {
       fi
       ;;
   esac
-
   mkdir -p "$(dirname "$dest")"
   cp "$src" "$dest"
   INSTALLED_FILES+=("$rel")
 }
 
-install_payload_item() {
-  local item="$1"
-  local src="$SRC/$item"
+for item in "${INSTALL_ITEMS[@]}"; do
+  src="$SRC_DIR/$item"
 
   if [ ! -e "$src" ]; then
-    printf 'warn    payload item missing: %s\n' "$item" >&2
-    return 0
+    MISSING_ITEMS+=("$item")
+    continue
   fi
 
   if [ -d "$src" ]; then
-    while IFS= read -r -d '' file; do
-      copy_payload_file "${file#"$SRC"/}" "$file"
+    # Duyệt từng file, bỏ qua artifact theo is_excluded.
+    while IFS= read -r -d '' f; do
+      rel="${f#"$SRC_DIR"/}"
+      copy_file "$rel" "$f"
     done < <(find "$src" -type f -print0)
-    printf 'update  %s/\n' "$item"
+    log "Copied dir: $item"
   else
-    copy_payload_file "$item" "$src"
-    printf 'update  %s\n' "$item"
+    copy_file "$item" "$src"
+    log "Copied file: $item"
   fi
-}
-
-write_manifest() {
-  local manifest="$TARGET_DIR/_harness/.harness-manifest"
-  mkdir -p "$(dirname "$manifest")"
-  {
-    printf '# Harness manifest generated by install.sh. Do not edit by hand.\n'
-    printf 'source = %s\n' "$REPO_URL"
-    printf 'ref = %s\n' "$REF"
-    printf '\n[files]\n'
-    if [ "${#INSTALLED_FILES[@]}" -gt 0 ]; then
-      printf '%s\n' "${INSTALLED_FILES[@]}" | LC_ALL=C sort
-    fi
-  } > "$manifest"
-  printf 'write   _harness/.harness-manifest (%s files)\n' "${#INSTALLED_FILES[@]}"
-}
-
-append_gitignore_rules() {
-  local target="$TARGET_DIR/.gitignore"
-  touch "$target"
-
-  local changed=0
-  for rule in \
-    "harness.db" \
-    "harness.db-wal" \
-    "harness.db-shm" \
-    ".harness-backup/" \
-    ".agent-harness/bin/harness-cli.bin" \
-    ".agent-harness/bin/harness-cli.exe" \
-    "_harness/bin/harness-cli.bin" \
-    "_harness/bin/harness-cli.exe"
-  do
-    if ! grep -Fxq "$rule" "$target"; then
-      if [ "$changed" -eq 0 ]; then
-        {
-          [ -s "$target" ] && printf '\n'
-          printf '# Harness local state\n'
-        } >> "$target"
-      fi
-      printf '%s\n' "$rule" >> "$target"
-      changed=1
-    fi
-  done
-
-  [ "$changed" -eq 0 ] && printf 'skip    .gitignore\n' || printf 'update  .gitignore\n'
-}
-
-install_cli() {
-  local platform tag base fallback_base name binary checksum expected actual
-  platform="$(detect_platform)"
-  if [ "$platform" = "unsupported" ]; then
-    printf 'warn    CLI binary not installed: unsupported platform %s/%s\n' "$(uname -s)" "$(uname -m)" >&2
-    return 0
-  fi
-
-  tag="$(awk 'NF && $1 !~ /^#/ { print $1; exit }' "$SRC/_harness/harness-cli-release-tag" 2>/dev/null || true)"
-  [ -n "$tag" ] || tag="latest"
-
-  if [ -n "${HARNESS_CLI_BASE_URL:-}" ]; then
-    base="${HARNESS_CLI_BASE_URL%/}"
-    fallback_base=""
-  elif [ "$tag" = "latest" ]; then
-    base="$REPO_URL/releases/latest/download"
-    fallback_base="https://github.com/hoangnb24/repository-harness/releases/latest/download"
-  else
-    base="$REPO_URL/releases/download/$tag"
-    fallback_base="https://github.com/hoangnb24/repository-harness/releases/download/$tag"
-  fi
-
-  name="harness-cli-$platform"
-  binary="$TARGET_DIR/_harness/bin/harness-cli.bin"
-  checksum="$TMP/$name.sha256"
-
-  if ! curl -fsSL "$base/$name" -o "$binary" 2>/dev/null; then
-    if [ -n "$fallback_base" ] && curl -fsSL "$fallback_base/$name" -o "$binary" 2>/dev/null; then
-      base="$fallback_base"
-    else
-      printf 'warn    CLI binary not installed: could not download %s/%s\n' "$base" "$name" >&2
-      rm -f "$binary"
-      return 0
-    fi
-  fi
-  chmod 755 "$binary"
-
-  local checksum_status="unverified"
-  if curl -fsSL "$base/$name.sha256" -o "$checksum" 2>/dev/null; then
-    expected="$(awk '{ print $1; exit }' "$checksum")"
-    actual="$(sha256 "$binary" || true)"
-    if [ -n "$expected" ] && [ -n "$actual" ] && [ "$expected" != "$actual" ]; then
-      rm -f "$binary"
-      printf 'Error: checksum mismatch for %s\n' "$name" >&2
-      exit 1
-    fi
-    checksum_status="checksum verified"
-  fi
-
-  if ! "$binary" --help >/dev/null 2>&1; then
-    rm -f "$binary"
-    printf 'warn    CLI binary not installed: downloaded binary cannot run on this system\n' >&2
-    return 0
-  fi
-  printf 'install _harness/bin/harness-cli (%s, %s)\n' "$platform" "$checksum_status"
-  CLI_INSTALLED=1
-}
-
-build_cli_from_source() {
-  [ "$CLI_INSTALLED" -eq 0 ] || return 0
-
-  local manifest binary source_name package_args
-  package_args=""
-  if [ -f "$SRC/Cargo.toml" ]; then
-    manifest="$SRC/Cargo.toml"
-    package_args="-p harness-cli"
-  elif [ -f "$SRC/crates/harness-cli/Cargo.toml" ]; then
-    manifest="$SRC/crates/harness-cli/Cargo.toml"
-  else
-    printf 'warn    CLI source not built: Cargo.toml not found at repo root or crates/harness-cli\n' >&2
-    return 0
-  fi
-
-  if ! command -v cargo >/dev/null 2>&1; then
-    printf 'warn    CLI source not built: cargo is not installed\n' >&2
-    return 0
-  fi
-
-  printf 'build   harness-cli from %s\n' "${manifest#$SRC/}"
-  if ! cargo build --release --manifest-path "$manifest" $package_args; then
-    printf 'warn    CLI source build failed\n' >&2
-    return 0
-  fi
-
-  source_name="harness-cli"
-  binary="$(dirname "$manifest")/target/release/$source_name"
-  if [ ! -x "$binary" ] && [ -x "$SRC/target/release/$source_name" ]; then
-    binary="$SRC/target/release/$source_name"
-  fi
-  if [ ! -x "$binary" ]; then
-    printf 'warn    CLI source built, but target/release/harness-cli was not found\n' >&2
-    return 0
-  fi
-
-  cp "$binary" "$TARGET_DIR/_harness/bin/harness-cli.bin"
-  chmod 755 "$TARGET_DIR/_harness/bin/harness-cli.bin"
-  printf 'install _harness/bin/harness-cli (built from source)\n'
-  CLI_INSTALLED=1
-}
-
-need curl
-need tar
-
-TARGET_DIR="$(abs_path "$TARGET_DIR")"
-TMP="$(mktemp -d)"
-BACKUP_DIR="$TARGET_DIR/.harness-backup/$(date +%Y%m%d%H%M%S)"
-CLI_INSTALLED=0
-trap 'rm -rf "$TMP"' EXIT
-
-mkdir -p "$TARGET_DIR"
-
-SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" 2>/dev/null && pwd -P || true)"
-
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/AGENTS.md" ] && [ -d "$SCRIPT_DIR/_harness" ]; then
-  SRC="$SCRIPT_DIR"
-  printf 'source  %s\n' "$SRC"
-else
-  ARCHIVE="$REPO_URL/archive/refs/heads/$REF.tar.gz"
-  if ! curl -fsSL "$ARCHIVE" | tar -xz -C "$TMP"; then
-    ARCHIVE="$REPO_URL/archive/refs/tags/$REF.tar.gz"
-    curl -fsSL "$ARCHIVE" | tar -xz -C "$TMP"
-  fi
-
-  SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-  [ -n "$SRC" ] || {
-    printf 'Error: downloaded archive did not contain a source directory\n' >&2
-    exit 1
-  }
-  printf 'source  %s#%s\n' "$REPO_URL" "$REF"
-fi
-printf 'target  %s\n' "$TARGET_DIR"
-
-backup_path "$TARGET_DIR/AGENTS.md"
-backup_path "$TARGET_DIR/.agent-harness"
-backup_path "$TARGET_DIR/_harness"
-snapshot_path "$TARGET_DIR/docs"
-
-for item in "${INSTALL_ITEMS[@]}"; do
-  install_payload_item "$item"
 done
 
+ensure_empty_dir
+
+# Nhúng block Harness vào AGENTS.md repo đích (sau khi _harness/ đã có mặt) và
+# ghi manifest đánh dấu chế độ "đã cài Harness".
+install_agents_md
 write_manifest
 
 if [ "$SKIPPED_FILES" -gt 0 ]; then
-  printf 'skip    %s source artifact files\n' "$SKIPPED_FILES"
+  log "Đã bỏ qua $SKIPPED_FILES file artifact (tài nguyên riêng của repo nguồn)."
 fi
 
 if [ "$EXISTING_FILES" -gt 0 ]; then
-  printf 'keep    %s existing target files outside _harness/\n' "$EXISTING_FILES"
+  log "Giữ nguyên $EXISTING_FILES file đã có sẵn của repo đích (không ghi đè)."
 fi
 
-append_gitignore_rules
-install_cli
-build_cli_from_source
-
-printf '\nDone. Next:\n'
-if [ "$CLI_INSTALLED" -eq 1 ]; then
-  printf '  _harness/bin/harness-cli init\n'
-  printf '  _harness/bin/harness-cli query matrix\n'
-else
-  printf '  publish a CLI release asset or set HARNESS_CLI_BASE_URL, then run _harness/bin/harness-cli init\n'
+if [ "${#MISSING_ITEMS[@]}" -gt 0 ]; then
+  log "Một số item không tồn tại trong repo source:"
+  for item in "${MISSING_ITEMS[@]}"; do
+    printf '  - %s\n' "$item"
+  done
 fi
+
+log "Hoàn tất."

@@ -16,14 +16,15 @@ Harness installs from one curl-piped root script:
 curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | bash
 ```
 
-The installer targets the current directory by default, accepts one optional
-target directory argument, backs up existing `AGENTS.md`, legacy
-`.agent-harness/`, and `_harness/`, then replaces `_harness/` with the current
-Harness runtime. It snapshots `docs/` and installs docs file by file while
-keeping existing target docs, writes `_harness/.harness-manifest`, skips local
-runtime artifacts, appends local `.gitignore` rules, and installs the CLI by
-downloading a compatible release binary or building from `crates/harness-cli`
-when source and `cargo` are available.
+The installer follows the repo-harness lightweight install mechanism: it
+downloads the source archive from `haketienloc10/harness-engineering`, targets
+`$PWD` by default or `HARNESS_LITE_TARGET_DIR` when set, installs the shared
+scaffold whitelist, keeps existing target files outside `_harness/`, updates
+`_harness/`, embeds or refreshes the Harness block in target `AGENTS.md`, filters
+source-only artifacts, and writes `_harness/.harness-manifest`.
+
+CLI build/install is handled by `install-harness-cli.sh`: it builds the Rust CLI
+with Cargo and copies the release binary directly to `_harness/bin/harness-cli`.
 
 ## Relevant Product Docs
 
@@ -33,26 +34,28 @@ when source and `cargo` are available.
 ## Acceptance Criteria
 
 - A root `install.sh` supports the one-line curl install command.
-- The documented install path no longer requires the removed option-heavy installer.
-- Existing target `AGENTS.md`, legacy `.agent-harness/`, and `_harness/` are backed up before replacement.
-- Existing `docs/` is snapshotted before file-level updates, and existing target docs are preserved.
-- Installer records installed payload files in `_harness/.harness-manifest` and skips local runtime artifacts.
-- Installer output names the source, target, installed payload, and next CLI commands.
+- The installer source defaults to `haketienloc10/harness-engineering`.
+- Existing target `AGENTS.md` is preserved and receives an idempotent Harness block.
+- Existing target files outside `_harness/` are preserved.
+- Installer records installed payload files in `_harness/.harness-manifest` and skips source-only artifacts.
+- Installer output names the source, target, copied payload, skipped artifacts, kept files, and missing optional scaffold items.
+- `install-harness-cli.sh` installs the local Rust CLI binary directly at `_harness/bin/harness-cli`.
 
 ## Design Notes
 
-- Commands: `install.sh [target-dir]`.
+- Commands: `HARNESS_LITE_TARGET_DIR=/path/to/target install.sh`;
+  `./install-harness-cli.sh`.
 - Queries: none.
 - API: none.
 - Tables: none.
-- Domain rules: replace Harness runtime under `_harness/`; add missing Harness-managed product record files under `docs/` without overwriting existing target docs; do not touch unrelated app folders.
+- Domain rules: update Harness runtime files under `_harness/`; add missing Harness-managed scaffold files without overwriting existing target files outside `_harness/`; do not touch unrelated app folders.
 - UI surfaces: shell output only.
 
 ## Validation
 
 | Layer       | Expected proof |
 | ----------- | -------------- |
-| Unit        | `bash -n install.sh` |
+| Unit        | `bash -n install.sh`; `bash -n install-harness-cli.sh` |
 | Integration | local install into a temporary target |
 | E2E         | not applicable |
 | Platform    | Linux shell execution in this workspace |
@@ -66,26 +69,15 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
 ## Evidence
 
 - `bash -n install.sh` passed.
+- 2026-06-30 follow-up: installer behavior was aligned with
+  `/home/locdt/Notes/VSCode/repo-harness/install.sh`, with the source path set
+  to `haketienloc10/harness-engineering`.
+- `HARNESS_LITE_TARGET_DIR="$tmp" ./install.sh` installed the GitHub archive
+  payload into a temporary directory, wrote manifest source
+  `haketienloc10/harness-engineering`, embedded the Harness markers in
+  `AGENTS.md`, skipped source artifacts, and reported missing optional `.agents`.
+- `./install-harness-cli.sh` built `harness-cli` with Cargo and installed the
+  binary at `_harness/bin/harness-cli`.
+- `_harness/bin/harness-cli --version` passed after direct binary install.
 - `cargo test` passed for the Harness CLI crate.
-- `./install.sh "$tmp"` installed `AGENTS.md`, `_harness/`, `docs/product/`,
-  `docs/stories/`, `docs/decisions/`, schema files, CLI wrapper, and
-  `.gitignore` rules into a temporary target.
-- `(cd "$tmp" && _harness/bin/harness-cli init &&
-  _harness/bin/harness-cli query matrix)` passed after install.
-- `./install.sh "$tmp"` with pre-existing `AGENTS.md`, legacy
-  `.agent-harness/`, `_harness/`, and managed product record directories backed
-  those paths up under `.harness-backup/<timestamp>/` before replacing them.
-- Temporary install confirmed old option-heavy installer files were not present
-  in the installed payload.
 - `git diff --check` passed.
-- CLI binary download fallback reached a release asset, but the binary could
-  not run in this environment because of the system libc version; installer
-  removed the unusable binary and tried the source-build fallback.
-- Source-build fallback expects either root workspace `Cargo.toml` with package
-  `harness-cli` or `crates/harness-cli/Cargo.toml`; this checkout has tracked
-  Rust source under `crates/harness-cli/`, and the fallback installed the
-  `_harness/bin/harness-cli` command successfully in the temporary target.
-- 2026-06-29 follow-up: installer behavior was changed to replace `_harness/`
-  as a full runtime tree while installing `docs/` file by file, preserving
-  existing target documentation, skipping runtime artifacts, and writing a
-  manifest.

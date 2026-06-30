@@ -74,6 +74,22 @@ Operational data lives in ignored local `harness.db`; schema migrations live in
 `_harness/scripts/schema/`. If the CLI is unavailable, use markdown artifacts
 and record the missing CLI as harness friction.
 
+## Command Ordering
+
+The durable CLI is stateful. Serialize every producer -> consumer sequence.
+Parallel tool calls are only for independent commands.
+
+Do not combine dependent commands in one parallel batch:
+
+- `init` -> `query ...`
+- `story add/update/verify` -> `query matrix`
+- `tool check` -> `query tools`
+- file edits -> lint/test/typecheck
+- proof recording -> `trace`
+
+If violated, rerun the dependent read or validation sequentially and use only
+the rerun result. Record friction only if the ordered rerun still fails.
+
 ## Source Hierarchy
 
 When sources conflict:

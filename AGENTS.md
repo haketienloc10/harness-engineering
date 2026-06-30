@@ -42,6 +42,8 @@ harness friction.
   monolithic spec.
 - Do not skip validation silently.
 - Query capability before optional external tool use.
+- Run dependent commands sequentially. Do not put a durable write and its
+  follow-up read or verification in `multi_tool_use.parallel`.
 - Ask humans only for real ambiguity, high-risk direction, credentials, paid or
   destructive actions, or explicit approval gates.
 - Leave durable records for the next agent.
@@ -63,6 +65,22 @@ harness friction.
 10. Validate for the lane.
 11. Record a trace when the CLI exists.
 12. Fix harness friction immediately or record backlog.
+
+## Command Ordering
+
+Parallelize only independent commands. Serialize every producer -> consumer
+sequence.
+
+Run these sequences in separate tool calls, in order:
+
+- `harness-cli init` before any `harness-cli query ...`.
+- `harness-cli story add/update/verify` before `harness-cli query matrix`.
+- `harness-cli tool check` before `harness-cli query tools`.
+- File edits before validation commands that read those files.
+- Validation and durable story updates before `harness-cli trace`.
+
+If violated, rerun the dependent read or validation sequentially and use only
+the rerun result.
 
 ## Lanes
 

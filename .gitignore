@@ -8,6 +8,15 @@ harness.db-shm
 target/
 dist/
 
+# JavaScript dependencies and local Symphony UI output.
+node_modules/
+desktop-dist/
+test-results/
+*.tsbuildinfo
+
+# Local Symphony runtime state.
+.symphony/
+
 # Legacy downloaded Harness CLI artifacts for installed project instances.
 .agent-harness/bin/harness-cli.bin
 .agent-harness/bin/harness-cli.exe

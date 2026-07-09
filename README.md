@@ -80,6 +80,24 @@ repository-local CLI binary from the Rust source with:
 ./install-harness-cli.sh
 ```
 
+## Harness Symphony
+
+The source workspace also includes `crates/harness-symphony`, a local story
+runner and review controller. It uses the same stable runtime paths:
+`_harness/bin/harness-cli`, `_harness/scripts/schema/`, and `harness.db`.
+
+Start with:
+
+```bash
+cargo build -p harness-symphony
+target/debug/harness-symphony doctor
+target/debug/harness-symphony work list
+```
+
+See `docs/SYMPHONY_QUICKSTART.md` and `docs/SYMPHONY_SCOPE.md`.
+
+Experimental feature ports are tracked in `_harness/EXPERIMENTAL_SYNC.md`.
+
 ## Payload Structure
 
 ```text

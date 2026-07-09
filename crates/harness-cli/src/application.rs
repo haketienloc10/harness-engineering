@@ -125,6 +125,20 @@ pub struct TraceInput {
     pub errors: CsvList,
 }
 
+#[derive(Debug)]
+pub struct ChangesetApplyResult {
+    pub id: String,
+    pub applied: bool,
+    pub operations: usize,
+}
+
+#[derive(Debug)]
+pub struct DbRebuildResult {
+    pub db_path: PathBuf,
+    pub changesets: usize,
+    pub operations: usize,
+}
+
 pub struct HarnessService {
     repository: SqliteHarnessRepository,
 }
@@ -285,6 +299,20 @@ impl HarnessService {
 
     pub fn query_sql(&self, sql: &str) -> crate::infrastructure::Result<QueryTable> {
         self.repository.query_sql(sql)
+    }
+
+    pub fn apply_changeset(
+        &self,
+        path: &std::path::Path,
+    ) -> crate::infrastructure::Result<ChangesetApplyResult> {
+        self.repository.apply_changeset(path)
+    }
+
+    pub fn rebuild_db(
+        &self,
+        changeset_dir: &std::path::Path,
+    ) -> crate::infrastructure::Result<DbRebuildResult> {
+        self.repository.rebuild_db(changeset_dir)
     }
 }
 

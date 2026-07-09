@@ -1,17 +1,19 @@
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 
-use rusqlite::{params, types::ValueRef, Connection, OptionalExtension};
+use rusqlite::{params, types::ValueRef, Connection, OptionalExtension, Transaction};
+use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::application::{
-    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput,
-    DecisionVerifyResult, HarnessContext, InitResult, IntakeInput, InterventionAddInput,
-    InterventionFilter, MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput,
-    StoryVerifyResult, ToolRegisterInput, TraceInput,
+    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
+    DbRebuildResult, DecisionAddInput, DecisionVerifyResult, HarnessContext, InitResult,
+    IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, QueryTable,
+    StoryAddInput, StoryUpdateInput, StoryVerifyResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, normalize_token, score_context, score_trace, validate_tool_description,
@@ -54,10 +56,20 @@ pub enum HarnessInfraError {
     NoTraces,
     #[error("story update: nothing to update")]
     EmptyStoryUpdate,
+    #[error("changeset apply: {0}")]
+    InvalidChangeset(String),
+    #[error("changeset apply: unsupported operation '{0}'")]
+    UnsupportedChangesetOp(String),
+    #[error(
+        "db rebuild: database already exists at {0}; remove it or choose an empty HARNESS_DB_PATH"
+    )]
+    RebuildDatabaseExists(String),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
 }
 
 /// Outcome of one `tool check` scan. The CLI reports these facts; the agent
@@ -108,6 +120,8 @@ pub trait HarnessRepository {
     fn audit(&self) -> Result<AuditResult>;
     fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
     fn query_sql(&self, sql: &str) -> Result<QueryTable>;
+    fn apply_changeset(&self, path: &Path) -> Result<ChangesetApplyResult>;
+    fn rebuild_db(&self, changeset_dir: &Path) -> Result<DbRebuildResult>;
 }
 
 #[derive(Debug)]
@@ -115,6 +129,12 @@ pub struct SqliteHarnessRepository {
     repo_root: PathBuf,
     db_path: PathBuf,
     schema_dir: PathBuf,
+}
+
+#[derive(Debug)]
+struct ChangesetAppend {
+    path: PathBuf,
+    original_len: u64,
 }
 
 impl SqliteHarnessRepository {
@@ -208,15 +228,99 @@ impl SqliteHarnessRepository {
         Ok(files)
     }
 
+    fn run_id() -> Option<String> {
+        env::var("HARNESS_RUN_ID")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn changeset_path(&self, run_id: &str) -> PathBuf {
+        self.repo_root
+            .join(".harness")
+            .join("changesets")
+            .join(format!("{run_id}.changeset.jsonl"))
+    }
+
+    fn with_logged_write<T>(
+        &self,
+        connection: &mut Connection,
+        write: impl FnOnce(&Transaction<'_>) -> Result<(T, Vec<Value>)>,
+    ) -> Result<T> {
+        let run_id = Self::run_id();
+        self.with_logged_write_for_run(connection, run_id.as_deref(), write)
+    }
+
+    fn with_logged_write_for_run<T>(
+        &self,
+        connection: &mut Connection,
+        run_id: Option<&str>,
+        write: impl FnOnce(&Transaction<'_>) -> Result<(T, Vec<Value>)>,
+    ) -> Result<T> {
+        let transaction = connection.transaction()?;
+        let (result, operations) = write(&transaction)?;
+        let append = if let Some(run_id) = run_id {
+            self.append_changeset_operations(&transaction, run_id, operations)?
+        } else {
+            None
+        };
+
+        match transaction.commit() {
+            Ok(()) => Ok(result),
+            Err(error) => {
+                if let Some(append) = append {
+                    rollback_changeset_append(&append)?;
+                }
+                Err(error.into())
+            }
+        }
+    }
+
+    fn append_changeset_operations(
+        &self,
+        connection: &Connection,
+        run_id: &str,
+        operations: Vec<Value>,
+    ) -> Result<Option<ChangesetAppend>> {
+        if operations.is_empty() {
+            return Ok(None);
+        }
+
+        let path = self.changeset_path(run_id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let original_len = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+
+        if original_len == 0 {
+            let header = json!({
+                "op": "changeset.header",
+                "version": 1,
+                "run_id": run_id,
+                "base_schema_version": Self::schema_version(connection)?,
+            });
+            writeln!(file, "{}", serde_json::to_string(&header)?)?;
+        }
+
+        for operation in operations {
+            writeln!(file, "{}", serde_json::to_string(&operation)?)?;
+        }
+        file.flush()?;
+        file.sync_all()?;
+
+        Ok(Some(ChangesetAppend { path, original_len }))
+    }
+
     fn import_matrix(&self, connection: &Connection) -> Result<usize> {
-        let (matrix_path, matrix_record_path) =
-            self.matrix_import_path()
-                .ok_or_else(|| HarnessInfraError::MissingBrownfieldPath(
-                    self.repo_root
-                        .join("_harness/TEST_MATRIX.md")
-                        .display()
-                        .to_string(),
-                ))?;
+        let matrix_path = self.repo_root.join("_harness/TEST_MATRIX.md");
+        if !matrix_path.exists() {
+            return Err(HarnessInfraError::MissingBrownfieldPath(
+                matrix_path.display().to_string(),
+            ));
+        }
 
         let content = fs::read_to_string(matrix_path)?;
         let mut story_count = 0;
@@ -274,7 +378,7 @@ impl SqliteHarnessRepository {
                     unit_proof, integration_proof, e2e_proof, platform_proof,
                     evidence, notes
                  ) VALUES (?1, ?2, 'high_risk', ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                    ?10
+                    'Imported from _harness/TEST_MATRIX.md by harness import brownfield.'
                  )
                  ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title,
@@ -296,27 +400,12 @@ impl SqliteHarnessRepository {
                     e2e,
                     platform,
                     evidence,
-                    format!("Imported from {matrix_record_path} by harness import brownfield."),
                 ],
             )?;
             story_count += 1;
         }
 
         Ok(story_count)
-    }
-
-    fn matrix_import_path(&self) -> Option<(PathBuf, &'static str)> {
-        let current = self.repo_root.join("_harness/TEST_MATRIX.md");
-        if current.exists() {
-            return Some((current, "_harness/TEST_MATRIX.md"));
-        }
-
-        let legacy = self.repo_root.join("docs/TEST_MATRIX.md");
-        if legacy.exists() {
-            return Some((legacy, "docs/TEST_MATRIX.md"));
-        }
-
-        None
     }
 
     fn import_decisions(&self, connection: &Connection) -> Result<usize> {
@@ -387,7 +476,7 @@ impl SqliteHarnessRepository {
     }
 
     fn import_backlog(&self, connection: &Connection) -> Result<usize> {
-        let backlog_path = self.repo_root.join("docs/HARNESS_BACKLOG.md");
+        let backlog_path = self.repo_root.join("_harness/HARNESS_BACKLOG.md");
         if !backlog_path.exists() {
             return Ok(0);
         }
@@ -418,7 +507,7 @@ impl SqliteHarnessRepository {
                     risk, status, notes
                  )
                  SELECT ?1, ?2, ?3, ?4, ?5, ?6,
-                    'Imported from docs/HARNESS_BACKLOG.md by harness import brownfield.'
+                    'Imported from _harness/HARNESS_BACKLOG.md by harness import brownfield.'
                  WHERE NOT EXISTS (
                     SELECT 1 FROM backlog WHERE title=?1
                  );",
@@ -483,40 +572,80 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn record_intake(&self, input: IntakeInput) -> Result<i64> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO intake (
-                input_type, summary, risk_lane, risk_flags, affected_docs, story_id, notes
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-            params![
-                input.input_type.as_db_value(),
-                input.summary,
-                input.risk_lane.as_db_value(),
-                input.risk_flags.as_json_text(),
-                input.affected_docs.as_json_text(),
-                input.story_id,
-                input.notes,
-            ],
-        )?;
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let input_type = input.input_type.as_db_value().to_owned();
+            let risk_lane = input.risk_lane.as_db_value().to_owned();
+            let risk_flags = input.risk_flags.as_json_text();
+            let affected_docs = input.affected_docs.as_json_text();
+            transaction.execute(
+                "INSERT INTO intake (
+                    input_type, summary, risk_lane, risk_flags, affected_docs, story_id, notes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![
+                    input_type,
+                    input.summary,
+                    risk_lane,
+                    risk_flags,
+                    affected_docs,
+                    input.story_id,
+                    input.notes,
+                ],
+            )?;
 
-        Ok(connection.last_insert_rowid())
+            let id = transaction.last_insert_rowid();
+            Ok((
+                id,
+                vec![json!({
+                    "op": "intake.add",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "input_type": input_type,
+                        "summary": input.summary,
+                        "risk_lane": risk_lane,
+                        "risk_flags": risk_flags,
+                        "affected_docs": affected_docs,
+                        "story_id": input.story_id,
+                        "notes": input.notes,
+                    },
+                })],
+            ))
+        })
     }
 
     fn add_story(&self, input: StoryAddInput) -> Result<()> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-            params![
-                input.id,
-                input.title,
-                input.risk_lane.as_db_value(),
-                input.contract_doc,
-                input.verify_command,
-                input.notes,
-            ],
-        )?;
-        Ok(())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let risk_lane = input.risk_lane.as_db_value().to_owned();
+            transaction.execute(
+                "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                params![
+                    input.id,
+                    input.title,
+                    risk_lane,
+                    input.contract_doc,
+                    input.verify_command,
+                    input.notes,
+                ],
+            )?;
+            Ok((
+                (),
+                vec![json!({
+                    "op": "story.add",
+                    "version": 1,
+                    "id": input.id,
+                    "payload": {
+                        "title": input.title,
+                        "risk_lane": risk_lane,
+                        "contract_doc": input.contract_doc,
+                        "verify_command": input.verify_command,
+                        "notes": input.notes,
+                    },
+                })],
+            ))
+        })
     }
 
     fn update_story(&self, input: StoryUpdateInput) -> Result<()> {
@@ -531,37 +660,59 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::EmptyStoryUpdate);
         }
 
-        let connection = self.open_existing()?;
-        connection.execute(
-            "UPDATE story SET
-                status=COALESCE(?1, status),
-                evidence=COALESCE(?2, evidence),
-                unit_proof=COALESCE(?3, unit_proof),
-                integration_proof=COALESCE(?4, integration_proof),
-                e2e_proof=COALESCE(?5, e2e_proof),
-                platform_proof=COALESCE(?6, platform_proof),
-                verify_command=COALESCE(?7, verify_command)
-             WHERE id=?8;",
-            params![
-                input.status,
-                input.evidence,
-                input.unit.map(|value| value.0),
-                input.integration.map(|value| value.0),
-                input.e2e.map(|value| value.0),
-                input.platform.map(|value| value.0),
-                input.verify_command,
-                input.id,
-            ],
-        )?;
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let unit = input.unit.map(|value| value.0);
+            let integration = input.integration.map(|value| value.0);
+            let e2e = input.e2e.map(|value| value.0);
+            let platform = input.platform.map(|value| value.0);
+            transaction.execute(
+                "UPDATE story SET
+                    status=COALESCE(?1, status),
+                    evidence=COALESCE(?2, evidence),
+                    unit_proof=COALESCE(?3, unit_proof),
+                    integration_proof=COALESCE(?4, integration_proof),
+                    e2e_proof=COALESCE(?5, e2e_proof),
+                    platform_proof=COALESCE(?6, platform_proof),
+                    verify_command=COALESCE(?7, verify_command)
+                 WHERE id=?8;",
+                params![
+                    input.status,
+                    input.evidence,
+                    unit,
+                    integration,
+                    e2e,
+                    platform,
+                    input.verify_command,
+                    input.id,
+                ],
+            )?;
 
-        if connection.changes() == 0 {
-            return Err(HarnessInfraError::StoryNotFound(input.id));
-        }
-        Ok(())
+            if transaction.changes() == 0 {
+                return Err(HarnessInfraError::StoryNotFound(input.id));
+            }
+            Ok((
+                (),
+                vec![json!({
+                    "op": "story.update",
+                    "version": 1,
+                    "id": input.id,
+                    "payload": {
+                        "status": input.status,
+                        "evidence": input.evidence,
+                        "unit_proof": unit,
+                        "integration_proof": integration,
+                        "e2e_proof": e2e,
+                        "platform_proof": platform,
+                        "verify_command": input.verify_command,
+                    },
+                })],
+            ))
+        })
     }
 
     fn verify_story(&self, id: &str) -> Result<StoryVerifyResult> {
-        let connection = self.open_existing()?;
+        let mut connection = self.open_existing()?;
         let verify_command = connection
             .query_row(
                 "SELECT verify_command FROM story WHERE id=?1;",
@@ -585,12 +736,25 @@ impl HarnessRepository for SqliteHarnessRepository {
             "fail"
         }
         .to_owned();
-        connection.execute(
-            "UPDATE story
-             SET last_verified_at=datetime('now'), last_verified_result=?1
-             WHERE id=?2;",
-            params![result, id],
-        )?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute(
+                "UPDATE story
+                 SET last_verified_at=datetime('now'), last_verified_result=?1
+                 WHERE id=?2;",
+                params![result, id],
+            )?;
+            Ok((
+                (),
+                vec![json!({
+                    "op": "story.verify",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "result": result,
+                    },
+                })],
+            ))
+        })?;
 
         Ok(StoryVerifyResult {
             command: verify_command,
@@ -601,7 +765,7 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn verify_all_stories(&self) -> Result<StoryVerifyAllResult> {
-        let connection = self.open_existing()?;
+        let mut connection = self.open_existing()?;
         let mut statement =
             connection.prepare("SELECT id, title, verify_command FROM story ORDER BY id;")?;
         let story_rows = statement.query_map([], |row| {
@@ -612,6 +776,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             ))
         })?;
         let stories = collect_rows(story_rows)?;
+        drop(statement);
         let mut items = Vec::new();
 
         for (id, title, verify_command) in stories {
@@ -639,12 +804,25 @@ impl HarnessRepository for SqliteHarnessRepository {
                 "fail"
             }
             .to_owned();
-            connection.execute(
-                "UPDATE story
-                 SET last_verified_at=datetime('now'), last_verified_result=?1
-                 WHERE id=?2;",
-                params![result, id],
-            )?;
+            self.with_logged_write(&mut connection, |transaction| {
+                transaction.execute(
+                    "UPDATE story
+                     SET last_verified_at=datetime('now'), last_verified_result=?1
+                     WHERE id=?2;",
+                    params![result, id],
+                )?;
+                Ok((
+                    (),
+                    vec![json!({
+                        "op": "story.verify",
+                        "version": 1,
+                        "id": id,
+                        "payload": {
+                            "result": result,
+                        },
+                    })],
+                ))
+            })?;
             items.push(StoryVerifyAllItem {
                 id,
                 title,
@@ -659,25 +837,42 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn add_decision(&self, input: DecisionAddInput) -> Result<()> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO decision (id, title, status, doc_path, verify_command, predicted_impact, notes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-            params![
-                input.id,
-                input.title,
-                input.status,
-                input.doc_path,
-                input.verify_command,
-                input.predicted_impact,
-                input.notes,
-            ],
-        )?;
-        Ok(())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute(
+                "INSERT INTO decision (id, title, status, doc_path, verify_command, predicted_impact, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![
+                    input.id,
+                    input.title,
+                    input.status,
+                    input.doc_path,
+                    input.verify_command,
+                    input.predicted_impact,
+                    input.notes,
+                ],
+            )?;
+            Ok((
+                (),
+                vec![json!({
+                    "op": "decision.add",
+                    "version": 1,
+                    "id": input.id,
+                    "payload": {
+                        "title": input.title,
+                        "status": input.status,
+                        "doc_path": input.doc_path,
+                        "verify_command": input.verify_command,
+                        "predicted_impact": input.predicted_impact,
+                        "notes": input.notes,
+                    },
+                })],
+            ))
+        })
     }
 
     fn verify_decision(&self, id: &str) -> Result<DecisionVerifyResult> {
-        let connection = self.open_existing()?;
+        let mut connection = self.open_existing()?;
         let verify_command = connection
             .query_row(
                 "SELECT verify_command FROM decision WHERE id=?1;",
@@ -696,12 +891,25 @@ impl HarnessRepository for SqliteHarnessRepository {
             .current_dir(&self.repo_root)
             .status()?;
         let result = if status.success() { "pass" } else { "fail" }.to_owned();
-        connection.execute(
-            "UPDATE decision
-             SET last_verified_at=datetime('now'), last_verified_result=?1
-             WHERE id=?2;",
-            params![result, id],
-        )?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute(
+                "UPDATE decision
+                 SET last_verified_at=datetime('now'), last_verified_result=?1
+                 WHERE id=?2;",
+                params![result, id],
+            )?;
+            Ok((
+                (),
+                vec![json!({
+                    "op": "decision.verify",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "result": result,
+                    },
+                })],
+            ))
+        })?;
 
         Ok(DecisionVerifyResult {
             command: verify_command,
@@ -710,38 +918,71 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn add_backlog(&self, input: BacklogAddInput) -> Result<i64> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO backlog (
-                title, discovered_while, current_pain, suggested_improvement,
-                risk, predicted_impact, notes
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-            params![
-                input.title,
-                input.discovered_while,
-                input.current_pain,
-                input.suggestion,
-                input.risk.map(|value| value.as_db_value().to_owned()),
-                input.predicted_impact,
-                input.notes,
-            ],
-        )?;
-        Ok(connection.last_insert_rowid())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let risk = input.risk.map(|value| value.as_db_value().to_owned());
+            transaction.execute(
+                "INSERT INTO backlog (
+                    title, discovered_while, current_pain, suggested_improvement,
+                    risk, predicted_impact, notes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![
+                    input.title,
+                    input.discovered_while,
+                    input.current_pain,
+                    input.suggestion,
+                    risk,
+                    input.predicted_impact,
+                    input.notes,
+                ],
+            )?;
+            let id = transaction.last_insert_rowid();
+            Ok((
+                id,
+                vec![json!({
+                    "op": "backlog.add",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "title": input.title,
+                        "discovered_while": input.discovered_while,
+                        "current_pain": input.current_pain,
+                        "suggested_improvement": input.suggestion,
+                        "risk": risk,
+                        "predicted_impact": input.predicted_impact,
+                        "notes": input.notes,
+                    },
+                })],
+            ))
+        })
     }
 
     fn close_backlog(&self, input: BacklogCloseInput) -> Result<()> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "UPDATE backlog
-             SET status=?1, actual_outcome=?2, implemented_at=datetime('now')
-             WHERE id=?3;",
-            params![input.status, input.actual_outcome, input.id],
-        )?;
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute(
+                "UPDATE backlog
+                 SET status=?1, actual_outcome=?2, implemented_at=datetime('now')
+                 WHERE id=?3;",
+                params![input.status, input.actual_outcome, input.id],
+            )?;
 
-        if connection.changes() == 0 {
-            return Err(HarnessInfraError::BacklogNotFound(input.id));
-        }
-        Ok(())
+            if transaction.changes() == 0 {
+                return Err(HarnessInfraError::BacklogNotFound(input.id));
+            }
+            Ok((
+                (),
+                vec![json!({
+                    "op": "backlog.close",
+                    "version": 1,
+                    "id": input.id,
+                    "payload": {
+                        "status": input.status,
+                        "actual_outcome": input.actual_outcome,
+                    },
+                })],
+            ))
+        })
     }
 
     fn register_tool(&self, input: ToolRegisterInput) -> Result<()> {
@@ -754,7 +995,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::ToolCommandNotFound(input.command));
         }
 
-        let connection = self.open_existing()?;
+        let mut connection = self.open_existing()?;
         let existing = connection
             .query_row(
                 "SELECT command FROM tool WHERE name=?1;",
@@ -766,36 +1007,65 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::ToolAlreadyExists(input.name, command));
         }
 
-        connection.execute(
-            "INSERT INTO tool
-                (name, provider, command, description, args, responsibility, since,
-                 kind, capability, scan_target, status)
-             VALUES (?1, 'custom', ?2, ?3, ?4, ?5, 'registered', ?6, ?7, ?8, 'unknown');",
-            params![
-                input.name,
-                input.command,
-                input.description,
-                tool_args_json(&input.args),
-                input.responsibility,
-                input.kind,
-                input.capability,
-                input.scan_target,
-            ],
-        )?;
-        Ok(())
+        self.with_logged_write(&mut connection, |transaction| {
+            let args_json = tool_args_json(&input.args);
+            transaction.execute(
+                "INSERT INTO tool
+                    (name, provider, command, description, args, responsibility, since,
+                     kind, capability, scan_target, status)
+                 VALUES (?1, 'custom', ?2, ?3, ?4, ?5, 'registered', ?6, ?7, ?8, 'unknown');",
+                params![
+                    input.name,
+                    input.command,
+                    input.description,
+                    args_json,
+                    input.responsibility,
+                    input.kind,
+                    input.capability,
+                    input.scan_target,
+                ],
+            )?;
+            Ok((
+                (),
+                vec![json!({
+                    "op": "tool.register",
+                    "version": 1,
+                    "id": input.name,
+                    "payload": {
+                        "command": input.command,
+                        "description": input.description,
+                        "args": args_json,
+                        "responsibility": input.responsibility,
+                        "kind": input.kind,
+                        "capability": input.capability,
+                        "scan_target": input.scan_target,
+                    },
+                })],
+            ))
+        })
     }
 
     fn remove_tool(&self, name: &str) -> Result<()> {
-        let connection = self.open_existing()?;
-        connection.execute("DELETE FROM tool WHERE name=?1;", params![name])?;
-        if connection.changes() == 0 {
-            return Err(HarnessInfraError::ToolNotFound(name.to_owned()));
-        }
-        Ok(())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute("DELETE FROM tool WHERE name=?1;", params![name])?;
+            if transaction.changes() == 0 {
+                return Err(HarnessInfraError::ToolNotFound(name.to_owned()));
+            }
+            Ok((
+                (),
+                vec![json!({
+                    "op": "tool.remove",
+                    "version": 1,
+                    "id": name,
+                    "payload": {},
+                })],
+            ))
+        })
     }
 
     fn check_tools(&self, name: Option<String>) -> Result<Vec<ToolCheckResult>> {
-        let connection = self.open_existing()?;
+        let mut connection = self.open_existing()?;
         let mut statement = connection.prepare(
             "SELECT name, kind, command, scan_target, capability FROM tool
              WHERE (?1 IS NULL OR name = ?1)
@@ -811,15 +1081,30 @@ impl HarnessRepository for SqliteHarnessRepository {
             ))
         })?;
         let tools = collect_rows(rows)?;
+        drop(statement);
 
         let mut results = Vec::with_capacity(tools.len());
         for (name, kind, command, scan_target, capability) in tools {
             let (status, detail) =
                 scan_tool_status(&self.repo_root, &kind, &command, scan_target.as_deref());
-            connection.execute(
-                "UPDATE tool SET status=?1, checked_at=datetime('now') WHERE name=?2;",
-                params![status, name],
-            )?;
+            self.with_logged_write(&mut connection, |transaction| {
+                transaction.execute(
+                    "UPDATE tool SET status=?1, checked_at=datetime('now') WHERE name=?2;",
+                    params![status, name],
+                )?;
+                Ok((
+                    (),
+                    vec![json!({
+                        "op": "tool.check",
+                        "version": 1,
+                        "id": name,
+                        "payload": {
+                            "status": status,
+                            "detail": detail,
+                        },
+                    })],
+                ))
+            })?;
             results.push(ToolCheckResult {
                 name,
                 kind,
@@ -832,48 +1117,97 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn add_intervention(&self, input: InterventionAddInput) -> Result<i64> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO intervention (trace_id, story_id, type, description, source, impact)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-            params![
-                input.trace_id,
-                input.story_id,
-                input.intervention_type,
-                input.description,
-                input.source,
-                input.impact,
-            ],
-        )?;
-        Ok(connection.last_insert_rowid())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            transaction.execute(
+                "INSERT INTO intervention (trace_id, story_id, type, description, source, impact)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+                params![
+                    input.trace_id,
+                    input.story_id,
+                    input.intervention_type,
+                    input.description,
+                    input.source,
+                    input.impact,
+                ],
+            )?;
+            let id = transaction.last_insert_rowid();
+            Ok((
+                id,
+                vec![json!({
+                    "op": "intervention.add",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "trace_id": input.trace_id,
+                        "story_id": input.story_id,
+                        "type": input.intervention_type,
+                        "description": input.description,
+                        "source": input.source,
+                        "impact": input.impact,
+                    },
+                })],
+            ))
+        })
     }
 
     fn record_trace(&self, input: TraceInput) -> Result<i64> {
-        let connection = self.open_existing()?;
-        connection.execute(
-            "INSERT INTO trace (
-                task_summary, intake_id, story_id, agent,
-                actions_taken, files_read, files_changed, decisions_made, errors,
-                outcome, duration_seconds, token_estimate, harness_friction, notes
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
-            params![
-                input.task_summary,
-                input.intake_id,
-                input.story_id,
-                input.agent,
-                input.actions.as_json_text(),
-                input.files_read.as_json_text(),
-                input.files_changed.as_json_text(),
-                input.decisions.as_json_text(),
-                input.errors.as_json_text(),
-                input.outcome,
-                input.duration_seconds,
-                input.token_estimate,
-                input.friction,
-                input.notes,
-            ],
-        )?;
-        Ok(connection.last_insert_rowid())
+        let mut connection = self.open_existing()?;
+        self.with_logged_write(&mut connection, |transaction| {
+            let actions = input.actions.as_json_text();
+            let files_read = input.files_read.as_json_text();
+            let files_changed = input.files_changed.as_json_text();
+            let decisions = input.decisions.as_json_text();
+            let errors = input.errors.as_json_text();
+            transaction.execute(
+                "INSERT INTO trace (
+                    task_summary, intake_id, story_id, agent,
+                    actions_taken, files_read, files_changed, decisions_made, errors,
+                    outcome, duration_seconds, token_estimate, harness_friction, notes
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
+                params![
+                    input.task_summary,
+                    input.intake_id,
+                    input.story_id,
+                    input.agent,
+                    actions,
+                    files_read,
+                    files_changed,
+                    decisions,
+                    errors,
+                    input.outcome,
+                    input.duration_seconds,
+                    input.token_estimate,
+                    input.friction,
+                    input.notes,
+                ],
+            )?;
+            let id = transaction.last_insert_rowid();
+            Ok((
+                id,
+                vec![json!({
+                    "op": "trace.add",
+                    "version": 1,
+                    "id": id,
+                    "payload": {
+                        "task_summary": input.task_summary,
+                        "intake_id": input.intake_id,
+                        "story_id": input.story_id,
+                        "agent": input.agent,
+                        "actions_taken": actions,
+                        "files_read": files_read,
+                        "files_changed": files_changed,
+                        "decisions_made": decisions,
+                        "errors": errors,
+                        "outcome": input.outcome,
+                        "duration_seconds": input.duration_seconds,
+                        "token_estimate": input.token_estimate,
+                        "harness_friction": input.friction,
+                        "notes": input.notes,
+                    },
+                })],
+            ))
+        })
     }
 
     fn score_trace(&self, id: Option<i64>) -> Result<TraceScoreResult> {
@@ -1243,6 +1577,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                  WHERE verify_command IS NOT NULL
                    AND TRIM(verify_command) <> ''
                    AND last_verified_result IS NULL
+                   AND status <> 'retired'
                  ORDER BY id;",
             )?,
             unverified_decisions: audit_findings(
@@ -1308,6 +1643,9 @@ impl HarnessRepository for SqliteHarnessRepository {
         let mut proposals = Vec::new();
 
         for (text, count) in repeated_friction(&connection)? {
+            if validation_provider_friction_resolved(&connection, &text)? {
+                continue;
+            }
             proposals.push(ImprovementProposal {
                 title: format!("Reduce repeated friction: {}", short_title(&text)),
                 component: "Failure attribution".to_owned(),
@@ -1391,6 +1729,113 @@ impl HarnessRepository for SqliteHarnessRepository {
         }
 
         Ok(proposals)
+    }
+
+    fn apply_changeset(&self, path: &Path) -> Result<ChangesetApplyResult> {
+        let content = fs::read_to_string(path)?;
+        let mut operations = Vec::new();
+        for (index, line) in content.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value = serde_json::from_str::<Value>(line).map_err(|error| {
+                HarnessInfraError::InvalidChangeset(format!(
+                    "{} line {} is not valid JSON: {error}",
+                    path.display(),
+                    index + 1
+                ))
+            })?;
+            operations.push(value);
+        }
+
+        let header = operations
+            .first()
+            .filter(|value| value.get("op").and_then(Value::as_str) == Some("changeset.header"))
+            .ok_or_else(|| {
+                HarnessInfraError::InvalidChangeset(
+                    "first operation must be changeset.header".to_owned(),
+                )
+            })?;
+        let id = required_string(header, "run_id")?;
+
+        self.migrate()?;
+        let mut connection = self.open_existing()?;
+        let already_applied = connection
+            .query_row(
+                "SELECT 1 FROM changeset_applied WHERE id=?1;",
+                params![id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if already_applied {
+            return Ok(ChangesetApplyResult {
+                id,
+                applied: false,
+                operations: 0,
+            });
+        }
+
+        let transaction = connection.transaction()?;
+        let mut context = ChangesetApplyContext::default();
+        let mut applied_operations = 0usize;
+        for operation in operations.iter().skip(1) {
+            apply_changeset_operation(&transaction, operation, &mut context)?;
+            applied_operations += 1;
+        }
+        transaction.execute(
+            "INSERT INTO changeset_applied (id, path) VALUES (?1, ?2);",
+            params![id, path.display().to_string()],
+        )?;
+        transaction.commit()?;
+
+        Ok(ChangesetApplyResult {
+            id,
+            applied: true,
+            operations: applied_operations,
+        })
+    }
+
+    fn rebuild_db(&self, changeset_dir: &Path) -> Result<DbRebuildResult> {
+        if self.db_path.exists() {
+            return Err(HarnessInfraError::RebuildDatabaseExists(
+                self.db_path.display().to_string(),
+            ));
+        }
+
+        self.init()?;
+
+        let mut changesets = Vec::new();
+        if changeset_dir.exists() {
+            for entry in fs::read_dir(changeset_dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                let is_changeset = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.ends_with(".changeset.jsonl"));
+                if is_changeset {
+                    changesets.push(path);
+                }
+            }
+        }
+        changesets.sort();
+
+        let mut applied_count = 0usize;
+        let mut operation_count = 0usize;
+        for changeset in changesets {
+            let result = self.apply_changeset(&changeset)?;
+            if result.applied {
+                applied_count += 1;
+                operation_count += result.operations;
+            }
+        }
+
+        Ok(DbRebuildResult {
+            db_path: self.db_path.clone(),
+            changesets: applied_count,
+            operations: operation_count,
+        })
     }
 
     fn query_sql(&self, sql: &str) -> Result<QueryTable> {
@@ -1872,6 +2317,35 @@ fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
     Ok(repeated_values(values))
 }
 
+fn validation_provider_friction_resolved(connection: &Connection, text: &str) -> Result<bool> {
+    let normalized = normalize_token(text);
+    if !normalized.contains("tool_registry_lacks_entries_for_local_validation_capabilities") {
+        return Ok(false);
+    }
+
+    for capability in [
+        "build-verification",
+        "browser-e2e",
+        "coverage",
+        "design-validation",
+        "platform-smoke",
+    ] {
+        if !has_present_provider(connection, capability)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn has_present_provider(connection: &Connection, capability: &str) -> Result<bool> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM tool WHERE capability=?1 AND status='present';",
+        params![capability],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 fn repeated_interventions(connection: &Connection) -> Result<Vec<(String, usize)>> {
     let mut statement = connection.prepare(
         "SELECT type || ': ' || description FROM intervention
@@ -1945,6 +2419,249 @@ fn sql_value_to_string(value: ValueRef<'_>) -> String {
     }
 }
 
+fn rollback_changeset_append(append: &ChangesetAppend) -> Result<()> {
+    let mut file = OpenOptions::new().write(true).open(&append.path)?;
+    file.set_len(append.original_len)?;
+    file.seek(SeekFrom::Start(append.original_len))?;
+    file.sync_all()?;
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct ChangesetApplyContext {
+    intake_ids: std::collections::HashMap<i64, i64>,
+    backlog_ids: std::collections::HashMap<i64, i64>,
+    trace_ids: std::collections::HashMap<i64, i64>,
+}
+
+fn mapped_id(source_id: Option<i64>, ids: &std::collections::HashMap<i64, i64>) -> Option<i64> {
+    source_id.map(|id| ids.get(&id).copied().unwrap_or(id))
+}
+
+fn apply_changeset_operation(
+    transaction: &Transaction<'_>,
+    operation: &Value,
+    context: &mut ChangesetApplyContext,
+) -> Result<()> {
+    let op = required_string(operation, "op")?;
+    let payload = operation.get("payload").unwrap_or(&Value::Null);
+    match op.as_str() {
+        "intake.add" => {
+            let source_id = required_i64(operation, "id")?;
+            transaction.execute(
+            "INSERT INTO intake (
+                input_type, summary, risk_lane, risk_flags, affected_docs, story_id, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![
+                required_string(payload, "input_type")?,
+                required_string(payload, "summary")?,
+                required_string(payload, "risk_lane")?,
+                optional_string(payload, "risk_flags"),
+                optional_string(payload, "affected_docs"),
+                optional_string(payload, "story_id"),
+                optional_string(payload, "notes"),
+            ],
+            )?;
+            context
+                .intake_ids
+                .insert(source_id, transaction.last_insert_rowid());
+            1
+        }
+        "story.add" => transaction.execute(
+            "INSERT INTO story (id, title, risk_lane, contract_doc, verify_command, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            params![
+                required_string(operation, "id")?,
+                required_string(payload, "title")?,
+                required_string(payload, "risk_lane")?,
+                optional_string(payload, "contract_doc"),
+                optional_string(payload, "verify_command"),
+                optional_string(payload, "notes"),
+            ],
+        )?,
+        "story.update" => transaction.execute(
+            "UPDATE story SET
+                status=COALESCE(?1, status),
+                evidence=COALESCE(?2, evidence),
+                unit_proof=COALESCE(?3, unit_proof),
+                integration_proof=COALESCE(?4, integration_proof),
+                e2e_proof=COALESCE(?5, e2e_proof),
+                platform_proof=COALESCE(?6, platform_proof),
+                verify_command=COALESCE(?7, verify_command)
+             WHERE id=?8;",
+            params![
+                optional_string(payload, "status"),
+                optional_string(payload, "evidence"),
+                optional_i64(payload, "unit_proof"),
+                optional_i64(payload, "integration_proof"),
+                optional_i64(payload, "e2e_proof"),
+                optional_i64(payload, "platform_proof"),
+                optional_string(payload, "verify_command"),
+                required_string(operation, "id")?,
+            ],
+        )?,
+        "story.verify" => transaction.execute(
+            "UPDATE story
+             SET last_verified_at=datetime('now'), last_verified_result=?1
+             WHERE id=?2;",
+            params![
+                required_string(payload, "result")?,
+                required_string(operation, "id")?,
+            ],
+        )?,
+        "decision.add" => transaction.execute(
+            "INSERT INTO decision (id, title, status, doc_path, verify_command, predicted_impact, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![
+                required_string(operation, "id")?,
+                required_string(payload, "title")?,
+                required_string(payload, "status")?,
+                optional_string(payload, "doc_path"),
+                optional_string(payload, "verify_command"),
+                optional_string(payload, "predicted_impact"),
+                optional_string(payload, "notes"),
+            ],
+        )?,
+        "decision.verify" => transaction.execute(
+            "UPDATE decision
+             SET last_verified_at=datetime('now'), last_verified_result=?1
+             WHERE id=?2;",
+            params![
+                required_string(payload, "result")?,
+                required_string(operation, "id")?,
+            ],
+        )?,
+        "backlog.add" => {
+            let source_id = required_i64(operation, "id")?;
+            transaction.execute(
+            "INSERT INTO backlog (
+                title, discovered_while, current_pain, suggested_improvement,
+                risk, predicted_impact, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+            params![
+                required_string(payload, "title")?,
+                optional_string(payload, "discovered_while"),
+                optional_string(payload, "current_pain"),
+                optional_string(payload, "suggested_improvement"),
+                optional_string(payload, "risk"),
+                optional_string(payload, "predicted_impact"),
+                optional_string(payload, "notes"),
+            ],
+            )?;
+            context
+                .backlog_ids
+                .insert(source_id, transaction.last_insert_rowid());
+            1
+        }
+        "backlog.close" => transaction.execute(
+            "UPDATE backlog
+             SET status=?1, actual_outcome=?2, implemented_at=datetime('now')
+             WHERE id=?3;",
+            params![
+                required_string(payload, "status")?,
+                optional_string(payload, "actual_outcome"),
+                mapped_id(Some(required_i64(operation, "id")?), &context.backlog_ids),
+            ],
+        )?,
+        "tool.register" => transaction.execute(
+            "INSERT INTO tool
+                (name, provider, command, description, args, responsibility, since,
+                 kind, capability, scan_target, status)
+             VALUES (?1, 'custom', ?2, ?3, ?4, ?5, 'registered', ?6, ?7, ?8, 'unknown');",
+            params![
+                required_string(operation, "id")?,
+                required_string(payload, "command")?,
+                required_string(payload, "description")?,
+                optional_string(payload, "args"),
+                required_string(payload, "responsibility")?,
+                required_string(payload, "kind")?,
+                optional_string(payload, "capability"),
+                optional_string(payload, "scan_target"),
+            ],
+        )?,
+        "tool.check" => transaction.execute(
+            "UPDATE tool SET status=?1, checked_at=datetime('now') WHERE name=?2;",
+            params![
+                required_string(payload, "status")?,
+                required_string(operation, "id")?,
+            ],
+        )?,
+        "tool.remove" => transaction.execute(
+            "DELETE FROM tool WHERE name=?1;",
+            params![required_string(operation, "id")?],
+        )?,
+        "intervention.add" => transaction.execute(
+            "INSERT INTO intervention (trace_id, story_id, type, description, source, impact)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            params![
+                mapped_id(optional_i64(payload, "trace_id"), &context.trace_ids),
+                optional_string(payload, "story_id"),
+                required_string(payload, "type")?,
+                required_string(payload, "description")?,
+                required_string(payload, "source")?,
+                optional_string(payload, "impact"),
+            ],
+        )?,
+        "trace.add" => {
+            let source_id = required_i64(operation, "id")?;
+            transaction.execute(
+            "INSERT INTO trace (
+                task_summary, intake_id, story_id, agent,
+                actions_taken, files_read, files_changed, decisions_made, errors,
+                outcome, duration_seconds, token_estimate, harness_friction, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);",
+            params![
+                required_string(payload, "task_summary")?,
+                mapped_id(optional_i64(payload, "intake_id"), &context.intake_ids),
+                optional_string(payload, "story_id"),
+                optional_string(payload, "agent"),
+                optional_string(payload, "actions_taken"),
+                optional_string(payload, "files_read"),
+                optional_string(payload, "files_changed"),
+                optional_string(payload, "decisions_made"),
+                optional_string(payload, "errors"),
+                optional_string(payload, "outcome"),
+                optional_i64(payload, "duration_seconds"),
+                optional_i64(payload, "token_estimate"),
+                optional_string(payload, "harness_friction"),
+                optional_string(payload, "notes"),
+            ],
+            )?;
+            context
+                .trace_ids
+                .insert(source_id, transaction.last_insert_rowid());
+            1
+        }
+        _ => return Err(HarnessInfraError::UnsupportedChangesetOp(op)),
+    };
+    Ok(())
+}
+
+fn required_string(value: &Value, field: &str) -> Result<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| HarnessInfraError::InvalidChangeset(format!("missing string field {field}")))
+}
+
+fn optional_string(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn required_i64(value: &Value, field: &str) -> Result<i64> {
+    value.get(field).and_then(Value::as_i64).ok_or_else(|| {
+        HarnessInfraError::InvalidChangeset(format!("missing integer field {field}"))
+    })
+}
+
+fn optional_i64(value: &Value, field: &str) -> Option<i64> {
+    value.get(field).and_then(Value::as_i64)
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -1956,25 +2673,34 @@ mod tests {
     };
     use crate::domain::{BacklogFilter, BoolFlag, CsvList, InputType, RiskLane, TraceQualityTier};
 
-    fn source_repo_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    fn test_repository() -> (TempDir, SqliteHarnessRepository) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
             .unwrap()
-            .to_path_buf()
-    }
-
-    fn test_schema_dir() -> PathBuf {
-        source_repo_root().join("_harness/scripts/schema")
-    }
-
-    fn test_repository() -> (TempDir, SqliteHarnessRepository) {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let repo_root = source_repo_root();
+            .to_path_buf();
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            test_schema_dir(),
+            repo_root.join("_harness/scripts/schema"),
+        );
+        (temp_dir, repository)
+    }
+
+    fn isolated_test_repository() -> (TempDir, SqliteHarnessRepository) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = temp_dir.path().join("repo");
+        fs::create_dir_all(&repo_root).unwrap();
+        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        let repository = SqliteHarnessRepository::new(
+            repo_root.clone(),
+            repo_root.join("harness.db"),
+            schema_root.join("_harness/scripts/schema"),
         );
         (temp_dir, repository)
     }
@@ -1997,11 +2723,284 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 5);
+        assert_eq!(schema_version, 8);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
         assert!(story_columns.contains(&"last_verified_result".to_owned()));
+        let dependency_table_exists = connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='story_dependency';",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(dependency_table_exists);
+        let hierarchy_table_exists = connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='story_hierarchy';",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        assert!(hierarchy_table_exists);
+    }
+
+    #[test]
+    fn logged_write_appends_header_and_semantic_operation() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        let mut connection = repository.open_existing().unwrap();
+
+        repository
+            .with_logged_write_for_run(&mut connection, Some("run_test"), |transaction| {
+                transaction
+                    .execute(
+                        "INSERT INTO intake (input_type, summary, risk_lane)
+                         VALUES ('harness_improvement', 'Logged write test', 'normal');",
+                        [],
+                    )
+                    .unwrap();
+                let id = transaction.last_insert_rowid();
+                Ok((
+                    id,
+                    vec![json!({
+                        "op": "intake.add",
+                        "version": 1,
+                        "id": id,
+                        "payload": {
+                            "summary": "Logged write test",
+                        },
+                    })],
+                ))
+            })
+            .unwrap();
+
+        let changeset = fs::read_to_string(repository.changeset_path("run_test")).unwrap();
+        let lines = changeset.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2);
+        let header: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(header["op"], "changeset.header");
+        assert_eq!(header["run_id"], "run_test");
+        assert_eq!(header["base_schema_version"], 8);
+        let operation: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(operation["op"], "intake.add");
+        assert_eq!(operation["payload"]["summary"], "Logged write test");
+
+        let count = connection
+            .query_row("SELECT COUNT(*) FROM intake;", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn failed_logged_write_rolls_back_without_changeset() {
+        let (_temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        let mut connection = repository.open_existing().unwrap();
+
+        let result: Result<i64> = repository.with_logged_write_for_run(
+            &mut connection,
+            Some("run_fail"),
+            |transaction| {
+                transaction
+                    .execute(
+                        "INSERT INTO intake (input_type, summary, risk_lane)
+                         VALUES ('harness_improvement', 'Failed write test', 'normal');",
+                        [],
+                    )
+                    .unwrap();
+                Err(HarnessInfraError::StoryNotFound("US-NOPE".to_owned()))
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(!repository.changeset_path("run_fail").exists());
+        let count = connection
+            .query_row("SELECT COUNT(*) FROM intake;", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn apply_changeset_replays_operations_once() {
+        let (temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        let changeset_path = temp_dir.path().join("fixture.changeset.jsonl");
+        fs::write(
+            &changeset_path,
+            r#"{"op":"changeset.header","version":1,"run_id":"run_apply","base_schema_version":6}
+{"op":"intake.add","version":1,"id":10,"payload":{"input_type":"harness_improvement","summary":"Apply changeset intake","risk_lane":"normal","risk_flags":null,"affected_docs":null,"story_id":null,"notes":null}}
+{"op":"story.add","version":1,"id":"US-APPLY","payload":{"title":"Apply changeset story","risk_lane":"normal","contract_doc":null,"verify_command":null,"notes":null}}
+{"op":"story.update","version":1,"id":"US-APPLY","payload":{"status":"implemented","evidence":"applied","unit_proof":1,"integration_proof":null,"e2e_proof":null,"platform_proof":null,"verify_command":null}}
+"#,
+        )
+        .unwrap();
+
+        let first = repository.apply_changeset(&changeset_path).unwrap();
+        assert!(first.applied);
+        assert_eq!(first.id, "run_apply");
+        assert_eq!(first.operations, 3);
+        let second = repository.apply_changeset(&changeset_path).unwrap();
+        assert!(!second.applied);
+        assert_eq!(second.operations, 0);
+
+        let connection = repository.open_existing().unwrap();
+        let status = connection
+            .query_row("SELECT status FROM story WHERE id='US-APPLY';", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap();
+        assert_eq!(status, "implemented");
+        let applied = connection
+            .query_row(
+                "SELECT COUNT(*) FROM changeset_applied WHERE id='run_apply';",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn apply_changeset_migrates_existing_database_before_idempotency_check() {
+        let (temp_dir, repository) = isolated_test_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        for file in [
+            "002-story-verify.sql",
+            "003-tool-registry.sql",
+            "004-intervention.sql",
+            "005-tool-extensions.sql",
+        ] {
+            let sql = fs::read_to_string(repository.schema_dir.join(file)).unwrap();
+            connection.execute_batch(&sql).unwrap();
+        }
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            5
+        );
+        drop(connection);
+
+        let changeset_path = temp_dir.path().join("fixture.changeset.jsonl");
+        fs::write(
+            &changeset_path,
+            r#"{"op":"changeset.header","version":1,"run_id":"run_migrated_apply","base_schema_version":6}
+{"op":"story.add","version":1,"id":"US-MIGRATED-APPLY","payload":{"title":"Migrated apply story","risk_lane":"normal","contract_doc":null,"verify_command":null,"notes":null}}
+"#,
+        )
+        .unwrap();
+
+        let result = repository.apply_changeset(&changeset_path).unwrap();
+
+        assert!(result.applied);
+        assert_eq!(result.operations, 1);
+        let connection = repository.open_existing().unwrap();
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            8
+        );
+        let applied = connection
+            .query_row(
+                "SELECT COUNT(*) FROM changeset_applied WHERE id='run_migrated_apply';",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(applied, 1);
+    }
+
+    #[test]
+    fn apply_changesets_remaps_local_numeric_ids() {
+        let (temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+
+        for (run_id, summary) in [
+            ("run_worktree_a", "First worktree trace"),
+            ("run_worktree_b", "Second worktree trace"),
+        ] {
+            fs::write(
+                temp_dir.path().join(format!("{run_id}.changeset.jsonl")),
+                format!(
+                    r#"{{"op":"changeset.header","version":1,"run_id":"{run_id}","base_schema_version":8}}
+{{"op":"intake.add","version":1,"id":1,"payload":{{"input_type":"change_request","summary":"{summary} intake","risk_lane":"normal","risk_flags":null,"affected_docs":null,"story_id":null,"notes":null}}}}
+{{"op":"trace.add","version":1,"id":1,"payload":{{"task_summary":"{summary}","intake_id":1,"story_id":null,"agent":"Codex","actions_taken":null,"files_read":null,"files_changed":null,"decisions_made":null,"errors":null,"outcome":"completed","duration_seconds":null,"token_estimate":null,"harness_friction":null,"notes":null}}}}
+"#
+                ),
+            )
+            .unwrap();
+
+            let result = repository
+                .apply_changeset(&temp_dir.path().join(format!("{run_id}.changeset.jsonl")))
+                .unwrap();
+            assert!(result.applied);
+            assert_eq!(result.operations, 2);
+        }
+
+        let connection = repository.open_existing().unwrap();
+        let counts = connection
+            .query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM intake),
+                    (SELECT COUNT(*) FROM trace),
+                    (SELECT COUNT(DISTINCT intake_id) FROM trace)
+                 ;",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(counts, (2, 2, 2));
+    }
+
+    #[test]
+    fn rebuild_db_creates_fresh_database_from_changesets() {
+        let (temp_dir, repository) = isolated_test_repository();
+        let changeset_dir = temp_dir.path().join("changesets");
+        fs::create_dir_all(&changeset_dir).unwrap();
+        fs::write(
+            changeset_dir.join("001.changeset.jsonl"),
+            r#"{"op":"changeset.header","version":1,"run_id":"run_rebuild","base_schema_version":6}
+{"op":"story.add","version":1,"id":"US-REBUILD","payload":{"title":"Rebuild story","risk_lane":"normal","contract_doc":null,"verify_command":null,"notes":null}}
+{"op":"story.update","version":1,"id":"US-REBUILD","payload":{"status":"implemented","evidence":"rebuilt","unit_proof":1,"integration_proof":1,"e2e_proof":null,"platform_proof":null,"verify_command":null}}
+"#,
+        )
+        .unwrap();
+
+        let result = repository.rebuild_db(&changeset_dir).unwrap();
+        assert_eq!(result.changesets, 1);
+        assert_eq!(result.operations, 2);
+
+        let connection = repository.open_existing().unwrap();
+        let evidence = connection
+            .query_row(
+                "SELECT evidence FROM story WHERE id='US-REBUILD';",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(evidence, "rebuilt");
+    }
+
+    #[test]
+    fn rebuild_db_refuses_existing_database() {
+        let (temp_dir, repository) = isolated_test_repository();
+        repository.init().unwrap();
+        let result = repository.rebuild_db(temp_dir.path());
+
+        assert!(matches!(
+            result,
+            Err(HarnessInfraError::RebuildDatabaseExists(_))
+        ));
     }
 
     #[test]
@@ -2014,11 +3013,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            5
+            8
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -2029,7 +3028,11 @@ mod tests {
     #[test]
     fn migration_005_backfills_kind_from_command_prefix() {
         let (_temp_dir, repository) = test_repository();
-        let schema_dir = test_schema_dir();
+        let schema_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .join("_harness/scripts/schema");
 
         // Build a pre-kind (v4) database: v1 base plus migrations 002-004 only.
         let connection = repository.open_or_create().unwrap();
@@ -2064,7 +3067,7 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5]);
+        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8]);
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection
@@ -2119,10 +3122,16 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_root = temp_dir.path().join("repo");
         fs::create_dir_all(&repo_root).unwrap();
+        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf()
+            .join("_harness/scripts/schema");
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            test_schema_dir(),
+            schema_root,
         );
         repository.init().unwrap();
 
@@ -2205,10 +3214,16 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_root = temp_dir.path().join("repo");
         fs::create_dir_all(&repo_root).unwrap();
+        let schema_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf()
+            .join("_harness/scripts/schema");
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            test_schema_dir(),
+            schema_root,
         );
         repository.init().unwrap();
 
@@ -2538,6 +3553,28 @@ mod tests {
             })
             .unwrap();
         repository
+            .add_story(StoryAddInput {
+                id: "US-RETIRED".to_owned(),
+                title: "Retired audit story".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: Some("exit 0".to_owned()),
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .update_story(StoryUpdateInput {
+                id: "US-RETIRED".to_owned(),
+                status: Some("retired".to_owned()),
+                evidence: None,
+                unit: None,
+                integration: None,
+                e2e: None,
+                platform: None,
+                verify_command: None,
+            })
+            .unwrap();
+        repository
             .add_backlog(BacklogAddInput {
                 title: "Implemented without outcome".to_owned(),
                 discovered_while: None,
@@ -2605,7 +3642,73 @@ mod tests {
         assert!(proposals
             .iter()
             .all(|proposal| proposal.committed_backlog_id.is_some()));
-        assert!(repository.query_backlog(BacklogFilter::Open).unwrap().len() >= 1);
+        assert!(!repository
+            .query_backlog(BacklogFilter::Open)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn propose_suppresses_resolved_validation_provider_friction() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+
+        for _ in 0..2 {
+            repository
+                .record_trace(TraceInput {
+                    task_summary: "Validation provider friction trace".to_owned(),
+                    intake_id: None,
+                    story_id: None,
+                    agent: Some("codex".to_owned()),
+                    outcome: Some("completed".to_owned()),
+                    duration_seconds: None,
+                    token_estimate: None,
+                    friction: Some(
+                        "Tool registry lacks entries for local validation capabilities".to_owned(),
+                    ),
+                    notes: None,
+                    actions: CsvList::from_optional(Some("query tools".to_owned())),
+                    files_read: CsvList::from_optional(Some(
+                        "_harness/TOOL_REGISTRY.md".to_owned(),
+                    )),
+                    files_changed: CsvList::from_optional(Some("harness.db".to_owned())),
+                    decisions: CsvList::from_optional(None),
+                    errors: CsvList::from_optional(None),
+                })
+                .unwrap();
+        }
+
+        let executable = std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for (name, capability) in [
+            ("build-provider", "build-verification"),
+            ("browser-provider", "browser-e2e"),
+            ("coverage-provider", "coverage"),
+            ("design-provider", "design-validation"),
+            ("platform-provider", "platform-smoke"),
+        ] {
+            repository
+                .register_tool(ToolRegisterInput {
+                    name: name.to_owned(),
+                    command: executable.clone(),
+                    description: format!("{capability} test provider for proposal suppression"),
+                    responsibility: "Verification".to_owned(),
+                    args: Vec::new(),
+                    force: false,
+                    kind: "cli".to_owned(),
+                    capability: Some(capability.to_owned()),
+                    scan_target: None,
+                })
+                .unwrap();
+        }
+        repository.check_tools(None).unwrap();
+
+        let proposals = repository.propose(false).unwrap();
+        assert!(proposals.iter().all(|proposal| !proposal
+            .title
+            .contains("Tool registry lacks entries for local validation capabilities")));
     }
 
     #[test]
@@ -2775,8 +3878,9 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let repo_root = temp_dir.path().join("repo");
         fs::create_dir_all(repo_root.join("docs/decisions")).unwrap();
+        fs::create_dir_all(repo_root.join("_harness")).unwrap();
         fs::write(
-            repo_root.join("docs/TEST_MATRIX.md"),
+            repo_root.join("_harness/TEST_MATRIX.md"),
             r#"# Test Matrix
 
 | Story | Contract | Unit | Integration | E2E | Platform | Status | Evidence |
@@ -2796,7 +3900,7 @@ Accepted
         )
         .unwrap();
         fs::write(
-            repo_root.join("docs/HARNESS_BACKLOG.md"),
+            repo_root.join("_harness/HARNESS_BACKLOG.md"),
             r#"# Harness Backlog
 
 ## Items
@@ -2852,10 +3956,15 @@ implemented
         )
         .unwrap();
 
+        let source_repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
         let repository = SqliteHarnessRepository::new(
             repo_root.clone(),
             temp_dir.path().join("harness.db"),
-            test_schema_dir(),
+            source_repo_root.join("_harness/scripts/schema"),
         );
         repository.init().unwrap();
 

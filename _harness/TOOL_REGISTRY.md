@@ -183,6 +183,8 @@ without parsing the human table.
 | `query interventions` | Intervention recording | Show intervention records.                                                       | optional `--trace`, `--story`, `--type`                                                                                      |
 | `query stats`         | Task state             | Show durable record counts.                                                      | none                                                                                                                         |
 | `query sql`           | Tool access            | Run arbitrary SQL against `harness.db`.                                          | SQL text                                                                                                                     |
+| `db changeset apply`  | Task state             | Apply one semantic changeset idempotently.                                       | changeset path                                                                                                               |
+| `db rebuild`          | Task state             | Rebuild a fresh `harness.db` from semantic changesets.                            | `--from` changeset directory                                                                                                 |
 
 ## Validation Rules
 

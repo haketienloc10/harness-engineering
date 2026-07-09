@@ -68,6 +68,8 @@ _harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisi
 _harness/bin/harness-cli trace --summary <text> --agent <agent> --outcome completed
 _harness/bin/harness-cli audit
 _harness/bin/harness-cli propose
+_harness/bin/harness-cli db changeset apply <path>
+_harness/bin/harness-cli db rebuild --from <changeset-dir>
 ```
 
 Operational data lives in ignored local `harness.db`; schema migrations live in

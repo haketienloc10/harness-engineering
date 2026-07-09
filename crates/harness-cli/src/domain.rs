@@ -216,7 +216,7 @@ pub fn validate_tool_kind(value: &str) -> Result<String, ToolValidationError> {
 /// a closed list: the registry is the base for arbitrary future extensions, so
 /// new capabilities must not require a code change. Normalizing to kebab-case
 /// keeps step lookups (`query tools --capability X`) reliable despite the
-/// freedom. A recommended starter vocabulary lives in docs/TOOL_REGISTRY.md.
+/// freedom. A recommended starter vocabulary lives in _harness/TOOL_REGISTRY.md.
 pub fn normalize_capability(value: &str) -> Result<String, ToolValidationError> {
     let normalized = value.trim().to_lowercase().replace([' ', '_'], "-");
     let well_formed = !normalized.is_empty()
@@ -782,11 +782,7 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
     }
     if changed
         .iter()
-        .any(|path| {
-            path.starts_with("crates/harness-cli/")
-                || path.starts_with("_harness/bin/")
-                || path.starts_with("install.sh")
-        })
+        .any(|path| path.starts_with("crates/harness-cli/") || path.starts_with("_harness/bin/"))
     {
         must.push((
             "Prebuilt CLI decision",
@@ -880,6 +876,7 @@ fn add_base_context_rules<'a>(
                     "High-risk story template",
                     "_harness/templates/high-risk-story/",
                 ));
+                must.push(("Harness maturity", "_harness/HARNESS_MATURITY.md"));
             }
         }
         _ => {

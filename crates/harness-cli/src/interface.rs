@@ -6,9 +6,10 @@ use clap::{Args, Parser, Subcommand};
 use thiserror::Error;
 
 use crate::application::{
-    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, HarnessContext,
-    HarnessService, InitResult, IntakeInput, InterventionAddInput, InterventionFilter,
-    MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
+    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, ChangesetApplyResult,
+    DbRebuildResult, DecisionAddInput, HarnessContext, HarnessService, InitResult, IntakeInput,
+    InterventionAddInput, InterventionFilter, MigrateResult, QueryTable, StoryAddInput,
+    StoryUpdateInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -21,7 +22,6 @@ use crate::infrastructure::ToolCheckResult;
 
 #[derive(Parser, Debug)]
 #[command(name = "harness-cli")]
-#[command(bin_name = "_harness/bin/harness-cli")]
 #[command(about = "durable layer for the project harness", long_about = None)]
 #[command(version)]
 pub struct Cli {
@@ -59,6 +59,8 @@ enum Command {
     Audit,
     /// Generate improvement proposals from observed patterns.
     Propose(ProposeArgs),
+    /// Manage harness database changesets.
+    Db(DbArgs),
     /// Query harness data.
     Query(QueryArgs),
 }
@@ -347,6 +349,34 @@ struct ScoreTraceArgs {
 struct ProposeArgs {
     #[arg(long)]
     commit: bool,
+}
+
+#[derive(Args, Debug)]
+struct DbArgs {
+    #[command(subcommand)]
+    action: DbAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum DbAction {
+    Changeset(ChangesetArgs),
+    /// Rebuild a fresh harness database from committed changesets.
+    Rebuild {
+        #[arg(long = "from")]
+        from: PathBuf,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ChangesetArgs {
+    #[command(subcommand)]
+    action: ChangesetAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum ChangesetAction {
+    /// Apply one semantic changeset file idempotently.
+    Apply { path: PathBuf },
 }
 
 #[derive(Args, Debug)]
@@ -643,6 +673,14 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
         }
         Command::Audit => print_audit(&service.audit()?),
         Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
+        Command::Db(args) => match args.action {
+            DbAction::Changeset(args) => match args.action {
+                ChangesetAction::Apply { path } => {
+                    print_changeset_apply_result(service.apply_changeset(&path)?)
+                }
+            },
+            DbAction::Rebuild { from } => print_db_rebuild_result(service.rebuild_db(&from)?),
+        },
         Command::Query(args) => match args.view {
             QueryView::Matrix(args) => print_matrix(&service.query_matrix()?, args.numeric),
             QueryView::Backlog(args) => {
@@ -860,6 +898,25 @@ fn print_proposals(proposals: &[ImprovementProposal]) {
     );
 }
 
+fn print_changeset_apply_result(result: ChangesetApplyResult) {
+    if result.applied {
+        println!(
+            "Changeset {} applied ({} operation(s)).",
+            result.id, result.operations
+        );
+    } else {
+        println!("Changeset {} already applied; skipped.", result.id);
+    }
+}
+
+fn print_db_rebuild_result(result: DbRebuildResult) {
+    println!("Rebuilt database at {}", result.db_path.display());
+    println!(
+        "Applied {} changeset(s), {} operation(s).",
+        result.changesets, result.operations
+    );
+}
+
 fn print_story_verify_warning(
     service: &HarnessService,
     story_id: &str,
@@ -957,11 +1014,13 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
         Some(path) => PathBuf::from(path),
         None => env::current_dir().map_err(InterfaceError::CurrentDir)?,
     };
-    let db_path = env::var_os("HARNESS_DB")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root.join("harness.db"));
+    let db_path = resolve_db_path(
+        &repo_root,
+        env::var_os("HARNESS_DB_PATH").map(PathBuf::from),
+        env::var_os("HARNESS_DB").map(PathBuf::from),
+    );
 
-    let schema_dir = resolve_schema_dir(&repo_root);
+    let schema_dir = repo_root.join("_harness/scripts/schema");
 
     Ok(HarnessContext {
         repo_root,
@@ -970,13 +1029,14 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
     })
 }
 
-fn resolve_schema_dir(repo_root: &std::path::Path) -> PathBuf {
-    let harness_relative = repo_root.join("_harness/scripts/schema");
-    if harness_relative.exists() {
-        return harness_relative;
-    }
-
-    repo_root.join("scripts/schema")
+fn resolve_db_path(
+    repo_root: &std::path::Path,
+    harness_db_path: Option<PathBuf>,
+    legacy_harness_db: Option<PathBuf>,
+) -> PathBuf {
+    harness_db_path
+        .or(legacy_harness_db)
+        .unwrap_or_else(|| repo_root.join("harness.db"))
 }
 
 fn print_matrix(records: &[StoryMatrixRecord], numeric: bool) {
@@ -1209,11 +1269,6 @@ fn print_tools_json(records: &[ToolEntry]) {
 }
 
 fn print_tool_check_summary(records: &[ToolCheckResult]) {
-    if records.is_empty() {
-        println!("No external tools registered. Optional tool capabilities are inactive.");
-        return;
-    }
-
     let rows = records
         .iter()
         .map(|record| {
@@ -1362,10 +1417,40 @@ fn print_row(values: &[String], widths: &[usize]) {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::path::Path;
 
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn harness_db_path_overrides_legacy_harness_db() {
+        let db_path = resolve_db_path(
+            Path::new("/repo"),
+            Some(PathBuf::from("/isolated/harness.db")),
+            Some(PathBuf::from("/legacy/harness.db")),
+        );
+
+        assert_eq!(db_path, PathBuf::from("/isolated/harness.db"));
+    }
+
+    #[test]
+    fn legacy_harness_db_remains_fallback() {
+        let db_path = resolve_db_path(
+            Path::new("/repo"),
+            None,
+            Some(PathBuf::from("/legacy/harness.db")),
+        );
+
+        assert_eq!(db_path, PathBuf::from("/legacy/harness.db"));
+    }
+
+    #[test]
+    fn database_path_defaults_to_repo_root_harness_db() {
+        let db_path = resolve_db_path(Path::new("/repo"), None, None);
+
+        assert_eq!(db_path, PathBuf::from("/repo/harness.db"));
     }
 
     #[test]
@@ -1394,9 +1479,7 @@ mod tests {
     #[test]
     fn command_help_documents_lane_values_and_version() {
         let mut command = Cli::command();
-        let root_help = command.render_long_help().to_string();
-        assert!(root_help.contains("Usage: _harness/bin/harness-cli <COMMAND>"));
-        assert!(root_help.contains("--version"));
+        assert!(command.render_long_help().to_string().contains("--version"));
 
         let intake_help = command
             .find_subcommand_mut("intake")

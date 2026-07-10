@@ -144,6 +144,20 @@ harness friction.
   destructive actions, or explicit approval gates.
 - Leave durable records for the next agent.
 
+## Answer Quality
+
+Avoid abstract answers.
+
+When explaining decisions, plans, risks, bugs, architecture, or trade-offs, use concrete examples and step-by-step cause-and-effect reasoning.
+
+Prefer this structure when useful:
+
+1. What happens
+2. Why it happens
+3. Concrete example
+4. Resulting impact
+5. Recommended action
+
 ## Work Loop
 
 1. Classify input type with `_harness/FEATURE_INTAKE.md`.

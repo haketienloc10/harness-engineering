@@ -1112,6 +1112,14 @@ impl HarnessRepository for SqliteHarnessRepository {
              FROM trace
              LEFT JOIN intake ON intake.id = trace.intake_id
              WHERE trace.harness_friction IS NOT NULL
+               AND TRIM(
+                   trace.harness_friction,
+                   ' ' || CHAR(9) || CHAR(10) || CHAR(11) || CHAR(12) || CHAR(13)
+               ) <> ''
+               AND LOWER(TRIM(
+                   trace.harness_friction,
+                   ' ' || CHAR(9) || CHAR(10) || CHAR(11) || CHAR(12) || CHAR(13)
+               )) <> 'none'
              ORDER BY trace.id DESC;",
         )?;
 
@@ -2671,7 +2679,7 @@ mod tests {
                 outcome: Some("completed".to_owned()),
                 duration_seconds: None,
                 token_estimate: None,
-                friction: Some("none".to_owned()),
+                friction: Some("Query friction".to_owned()),
                 notes: None,
                 actions: CsvList::from_optional(Some("one,two".to_owned())),
                 files_read: CsvList::from_optional(None),
@@ -2687,12 +2695,12 @@ mod tests {
         );
         assert_eq!(
             repository.query_friction().unwrap()[0].harness_friction,
-            "none"
+            "Query friction"
         );
     }
 
     #[test]
-    fn friction_query_includes_intake_context_and_filters_null_friction() {
+    fn friction_query_includes_intake_context_and_filters_non_friction_values() {
         let (_temp_dir, repository) = test_repository();
         repository.init().unwrap();
         let intake_id = repository
@@ -2706,24 +2714,32 @@ mod tests {
                 notes: None,
             })
             .unwrap();
-        repository
-            .record_trace(TraceInput {
-                task_summary: "Trace without friction".to_owned(),
-                intake_id: Some(intake_id),
-                story_id: None,
-                agent: Some("codex".to_owned()),
-                outcome: Some("completed".to_owned()),
-                duration_seconds: None,
-                token_estimate: None,
-                friction: None,
-                notes: None,
-                actions: CsvList::from_optional(None),
-                files_read: CsvList::from_optional(None),
-                files_changed: CsvList::from_optional(None),
-                decisions: CsvList::from_optional(None),
-                errors: CsvList::from_optional(None),
-            })
-            .unwrap();
+        for (task_summary, friction) in [
+            ("Trace without friction", None),
+            ("Trace with empty friction", Some("")),
+            ("Trace with whitespace friction", Some(" \t ")),
+            ("Trace with none friction", Some("none")),
+            ("Trace with normalized none friction", Some(" NONE ")),
+        ] {
+            repository
+                .record_trace(TraceInput {
+                    task_summary: task_summary.to_owned(),
+                    intake_id: Some(intake_id),
+                    story_id: None,
+                    agent: Some("codex".to_owned()),
+                    outcome: Some("completed".to_owned()),
+                    duration_seconds: None,
+                    token_estimate: None,
+                    friction: friction.map(str::to_owned),
+                    notes: None,
+                    actions: CsvList::from_optional(None),
+                    files_read: CsvList::from_optional(None),
+                    files_changed: CsvList::from_optional(None),
+                    decisions: CsvList::from_optional(None),
+                    errors: CsvList::from_optional(None),
+                })
+                .unwrap();
+        }
         repository
             .record_trace(TraceInput {
                 task_summary: "Trace with linked friction".to_owned(),

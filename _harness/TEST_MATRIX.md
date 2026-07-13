@@ -19,6 +19,7 @@ This file maps Harness behavior to proof.
 | US-001 | Simple curl installer for `harness-engineering` | yes | yes | no | yes | implemented | `cargo test`; `bash -n install.sh`; temp install plus `_harness/bin/harness-cli init` and `query matrix` |
 | US-002 | Harness runtime and docs paths | yes | yes | no | yes | implemented | `cargo test -p harness-cli`; `cargo build --release -p harness-cli`; `bash -n install.sh`; `git diff --check`; direct CLI help; local install smoke |
 | US-003 | Workflow parity with experimental harness | yes | yes | no | yes | implemented | `cargo test -p harness-cli`; `bash -n install.sh`; `git diff --check`; CLI help/tool/matrix/audit checks; `story verify US-003` |
+| US-005 | Filter `query friction` non-friction values | yes | yes | no | no | implemented | `cargo test -p harness-cli`; `cargo clippy -p harness-cli -- -D warnings`; rebuilt CLI; live `query friction` smoke |
 
 ## Evidence Rules
 

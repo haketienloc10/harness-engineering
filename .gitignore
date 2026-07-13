@@ -3,10 +3,16 @@ harness.db
 harness.db-wal
 harness.db-shm
 .harness-backup/
+.symphony/
 
 # Rust build output for harness tooling.
 target/
 dist/
+
+# JavaScript dependencies and generated test/compiler state.
+node_modules/
+test-results/
+*.tsbuildinfo
 
 # Legacy downloaded Harness CLI artifacts for installed project instances.
 .agent-harness/bin/harness-cli.bin

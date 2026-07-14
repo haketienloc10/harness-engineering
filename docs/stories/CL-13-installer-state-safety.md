@@ -20,6 +20,9 @@ platforms with remediation.
   Linux x86_64 binary.
 - Completion output explicitly states that payload changed but `harness.db`
   was not touched and that ensure is pending.
+- Root `AGENTS.md` is the canonical tracked shared policy source. The installer
+  embeds it between `HARNESS:SHARED` markers instead of maintaining a second
+  policy heredoc.
 
 ## Validation Evidence
 
@@ -28,16 +31,18 @@ platforms with remediation.
 - `bash -n install.sh` and `bash -n install-harness-cli.sh` — passed.
 - `bash tests/installer_state_safety.sh` — passed: fresh install, reinstall,
   existing product doc and DB checksum preservation, stable `.harness-id`, one
-  managed ignore block, and unsupported-platform remediation.
-- `cargo test -p harness-cli` — 46 passed; fmt, clippy and `git diff --check`
+  managed ignore block, AGENTS shared byte parity, packaged command-manifest
+  parity, and unsupported-platform remediation.
+- `cargo test -p harness-cli` — 53 passed; fmt, clippy and `git diff --check`
   passed.
 
 ## Handoff
 
 - `tests/installer_state_safety.sh` uses a local archive and mocked `curl`; it
   is deterministic and performs no network request.
-- Move the large AGENTS block to the tracked generated template during CL-50;
-  CL-13 preserves existing behavior until that cutover.
+- `tests/installer_state_safety.sh` compares the installed shared block
+  byte-for-byte with root `AGENTS.md` and verifies the packaged CLI command
+  manifest. CL-50 may compact the canonical source but does not own parity.
 
 ## Rollback
 

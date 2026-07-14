@@ -2,7 +2,8 @@
 
 Date: 2026-07-14
 
-Status: Proposed — ready for human review, not approved for implementation
+Status: Approved for phased implementation through CL-22; later phases remain
+dependency-gated and require their own ready evidence
 
 Plan ID: `CLP-001`
 
@@ -13,6 +14,10 @@ Plan ID: `CLP-001`
 | CL-00 | completed | Recovery snapshot was verified without changing the original DB; see `docs/stories/CL-00-freeze-recover-baseline.md`. Case B is accepted in `docs/decisions/0010-main-schema-lineage-without-symphony.md`. |
 | CL-01 | completed | Required decisions are accepted in `docs/decisions/0010..0016`. CL-10 may begin; migration numbering remains frozen until its schema manifest is in place. |
 | CL-10 | completed | Main-lineage manifest `001..006`, read-only doctor, provenance and negative fixtures passed; source doctor correctly rejects the retained DB `001..008` as ahead. See `docs/stories/CL-10-doctor-and-schema-manifest.md`. |
+| CL-13 | completed | Root `AGENTS.md` is now the canonical shared policy source; installer byte-parity and packaged-command checks are in `tests/installer_state_safety.sh`. |
+| CL-20 | completed | Shadow mode, canonical flag aliases and typed lane/phase context policy are validated from `_harness/workflow.toml`. |
+| CL-21 | completed | Pure checksummed context compiler, shared scoring path and 53 Rust tests passed; persistence/acknowledgement ownership moved to CL-40/41 by amendment. |
+| CL-22 | ready | Story, policy comparison fixture, AGENTS shared source and compiled/tracked command manifest are prepared. |
 
 Baseline:
 
@@ -1130,6 +1135,10 @@ Acceptance:
 - Equivalent inputs produce deterministic lane/gates.
 - Invalid path traversal and inconsistent thresholds rejected.
 
+Amended ownership: materiality values remain typed lane policy here; task-bound
+acknowledgement state and refresh behavior are owned by CL-40/CL-41 under the
+2026-07-14 CL-22-unblock amendment.
+
 ### CL-21 — Context compiler
 
 Implementation:
@@ -1148,6 +1157,11 @@ Acceptance:
 - Golden tests cover tiny/normal/high-risk across intake/planning/work/finish.
 - Schema/CLI/provider/public-contract triggers select exact expected context.
 - Unrelated docs do not appear in must-read.
+
+Amended scope: CL-21 completes the pure deterministic manifest and checksum.
+Item 6 persistence is owned by CL-40; item 8 acknowledgement/refresh is owned
+by CL-41. Item 7 evaluates the compiled manifest for legacy `score-context`
+without requiring task records. See the 2026-07-14 CL-22-unblock amendment.
 
 ### CL-22 — Policy parity and drift gate
 
@@ -1612,9 +1626,9 @@ Agents update this table only after evidence exists.
 | CL-11 Ensure/migrate | completed | CL-10 | `docs/stories/CL-11-ensure-safe-migration.md`; 45 CLI tests, installer syntax and actual ahead-DB exit `3` | Start CL-12 |
 | CL-12 Read-only SQL | completed | CL-10 | `docs/stories/CL-12-read-only-sql-boundary.md`; 46 CLI tests | Start CL-13 |
 | CL-13 Installer safety | completed | CL-10 | `docs/stories/CL-13-installer-state-safety.md`; installer black-box smoke passed | Start CL-20 |
-| CL-20 workflow.toml | completed | Phase 1 | `docs/stories/CL-20-typed-workflow-policy.md`; typed config, CLI and 48 tests | Start CL-21 |
-| CL-21 Context compiler | in_progress | CL-20 | `docs/stories/CL-21-context-compiler.md`; typed compiler and 49 tests | Persist/acknowledge with CL-40 task lifecycle |
-| CL-22 Policy parity | blocked | CL-21 | — | — |
+| CL-20 workflow.toml | completed | Phase 1 | `docs/stories/CL-20-typed-workflow-policy.md`; typed config, CLI and 53 tests | Start CL-21 |
+| CL-21 Context compiler | completed | CL-20 | `docs/stories/CL-21-context-compiler.md`; pure typed compiler and 53 tests | Persist with CL-40; acknowledge/refresh with CL-41 |
+| CL-22 Policy parity | ready | CL-21 | `docs/stories/CL-22-policy-parity-and-drift-gate.md`; canonical AGENTS source, policy cases and command manifest prepared | Implement shadow parity/drift gate |
 | CL-30 Artifact schemas | blocked | CL-22 | — | — |
 | CL-31 Memory rebuild | blocked | CL-30 | — | — |
 | CL-32 Capsule renderer | blocked | CL-30 | — | — |
@@ -1674,8 +1688,45 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   modes and doctor has no write path; remove source-only doctor/manifest code
   to roll back without modifying a local DB.
 
+### 2026-07-14 — Unblock CL-22 by separating pure compilation from lifecycle state
+
+- Author/agent: Codex, approved by the current user instruction.
+- Affected work items: CL-13, CL-20, CL-21, CL-22, CL-40, CL-41 and CL-50.
+- Old assumption: CL-21 could require task manifest persistence,
+  acknowledgement and refresh before CL-22, while task lifecycle schema and
+  commands remained downstream of CL-22. AGENTS shared-source parity was also
+  deferred to CL-50 even though CL-22 requires it.
+- New evidence: those ownership assignments create the cycles
+  `CL-21 -> CL-22 -> CL-30/32 -> CL-40/41 -> CL-21` and
+  `CL-22 -> CL-43 -> CL-50 -> CL-22`. The packaged binary also lagged the
+  source command definition, and current Markdown flag spellings did not share
+  a canonical vocabulary with config.
+- Execution worktree note: the approved preparation and CL-22 start point are
+  on `feature-rework`; the original `main` baseline remains recovery/provenance
+  context and is not rewritten by this amendment.
+- Decision/approval reference: accepted ADR 0014 continues to make
+  `_harness/workflow.toml` the future machine authority; current user approval
+  accepts this delivery-only scope correction and authorizes starting CL-22 in
+  the next session. No lifecycle completion or source-hierarchy invariant
+  changes.
+- New ownership: CL-21 is a pure, deterministic context compiler. CL-40 owns
+  storing its manifest/checksum; CL-41 owns acknowledgement and refresh delta
+  semantics. Root `AGENTS.md` is the canonical tracked shared policy source;
+  CL-13 owns byte-parity installation, while CL-50 may only compact it after
+  command-first cutover. Migration 006 task/proof tables remain inert until
+  their owning lifecycle stories expose validated application paths.
+- Validation and rollback impact: lane/phase golden tests, AGENTS byte parity,
+  compiled/tracked command manifest parity and packaged-binary installer tests
+  are required. The previously missing tracked `.harness-id` is introduced as
+  part of the approved preparation; it must not be regenerated on reinstall.
+  Rollback removes the new shadow/compiler surfaces without mutating task or
+  database state; repository identity is preserved once published.
+
 ## 29. Immediate next action
 
-Start `CL-11 ensure/migrate`: use CL-10's shared preflight, preserve the
-recovery DB, create verified backups and reject ahead/foreign lineage before
-any write.
+Start `CL-22 policy parity and drift gate` from
+`docs/stories/CL-22-policy-parity-and-drift-gate.md`. Keep config in shadow
+mode, parse the prepared policy fixture, and resolve or explicitly disposition
+the `one-flag-code-impact` delta before authority cutover. The retained
+`harness.db` must remain rejected as `DB_AHEAD_OF_SOURCE`; CL-22 uses pure
+workflow commands and temporary test databases only.

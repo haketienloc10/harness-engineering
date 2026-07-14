@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,12 +20,12 @@ use crate::application::{
     StoryVerifyResult, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
-    compiled_tool_registry, normalize_token, score_context, score_trace, validate_tool_description,
-    AuditFinding, AuditResult, BacklogFilter, BacklogRecord, ContextScoreResult,
-    ContextScoreSource, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
-    IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllItem,
-    StoryVerifyAllResult, StoryVerifyStatus, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
-    TraceScoreSource,
+    compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
+    score_trace, validate_tool_description, AuditFinding, AuditResult, BacklogFilter,
+    BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord, FrictionRecord,
+    HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord, RiskLane,
+    StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus, ToolArgSpec,
+    ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -107,12 +108,12 @@ pub struct DoctorReport {
 pub struct WorkflowPolicy {
     pub policy_version: String,
     pub policy_id: String,
+    pub mode: String,
     pub repository: WorkflowRepository,
     pub lanes: WorkflowLanes,
     pub classification: WorkflowClassification,
     pub approvals: WorkflowApprovals,
     pub friction: WorkflowFriction,
-    #[serde(default)]
     pub context: WorkflowContext,
 }
 
@@ -145,6 +146,8 @@ pub struct WorkflowClassification {
     pub normal_min_flags: usize,
     pub high_risk_min_flags: usize,
     pub hard_gates: Vec<String>,
+    #[serde(default)]
+    pub aliases: BTreeMap<String, String>,
 }
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -156,28 +159,75 @@ pub struct WorkflowApprovals {
 pub struct WorkflowFriction {
     pub allowed_dispositions: Vec<String>,
 }
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowContext {
-    #[serde(default)]
+    pub stop_condition: String,
+    pub token_budget: WorkflowContextTokenBudget,
     pub rules: Vec<WorkflowContextRule>,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowContextTokenBudget {
+    pub tiny: usize,
+    pub normal: usize,
+    pub high_risk: usize,
 }
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowContextRule {
     pub id: String,
+    #[serde(default)]
+    pub phases: Vec<String>,
+    #[serde(default)]
+    pub lanes: Vec<String>,
+    #[serde(default)]
     pub when_paths: Vec<String>,
+    #[serde(default)]
+    pub when_flags: Vec<String>,
+    #[serde(default)]
+    pub always: bool,
     #[serde(default)]
     pub must_read: Vec<String>,
     #[serde(default)]
     pub should_read: Vec<String>,
+    #[serde(default)]
+    pub skip: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowContextEntry {
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowContextManifest {
+    pub policy_id: String,
+    pub policy_version: String,
+    pub policy_mode: String,
+    pub lane: String,
+    pub phase: String,
+    pub must_read: Vec<WorkflowContextEntry>,
+    pub should_read: Vec<WorkflowContextEntry>,
+    pub skip: Vec<WorkflowContextEntry>,
+    pub stop_condition: String,
+    pub token_budget_hint: usize,
+    pub checksum: String,
 }
 
 impl WorkflowPolicy {
     pub fn classify(&self, flags: &[String]) -> (String, Vec<String>) {
         let normalized = flags
             .iter()
-            .map(|flag| flag.trim().to_ascii_lowercase())
+            .map(|flag| normalize_token(flag))
+            .map(|flag| {
+                self.classification
+                    .aliases
+                    .get(&flag)
+                    .cloned()
+                    .unwrap_or(flag)
+            })
             .filter(|flag| !flag.is_empty())
             .collect::<Vec<_>>();
         let hard = normalized
@@ -186,7 +236,7 @@ impl WorkflowPolicy {
                 self.classification
                     .hard_gates
                     .iter()
-                    .any(|gate| gate == *flag)
+                    .any(|gate| normalize_token(gate) == **flag)
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -211,35 +261,203 @@ impl WorkflowPolicy {
         (lane.to_owned(), gates)
     }
 
-    pub fn context_for(&self, paths: &[String]) -> Vec<(String, String)> {
-        let mut entries = Vec::new();
+    pub fn context_manifest(
+        &self,
+        lane: &str,
+        phase: &str,
+        paths: &[String],
+        flags: &[String],
+        linked_artifacts: &[String],
+    ) -> WorkflowContextManifest {
+        let lane = normalize_token(lane);
+        let phase = normalize_token(phase);
+        let normalized_flags = flags
+            .iter()
+            .map(|flag| normalize_token(flag))
+            .map(|flag| {
+                self.classification
+                    .aliases
+                    .get(&flag)
+                    .cloned()
+                    .unwrap_or(flag)
+            })
+            .collect::<Vec<_>>();
+        let all_paths = paths
+            .iter()
+            .chain(linked_artifacts)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut must_read = Vec::new();
+        let mut should_read = Vec::new();
+        let mut skip = Vec::new();
         for rule in &self.context.rules {
-            if paths.iter().any(|path| {
-                rule.when_paths
+            let lane_matches = rule.lanes.is_empty()
+                || rule
+                    .lanes
                     .iter()
-                    .any(|pattern| glob_matches(pattern, path))
-            }) {
+                    .any(|value| normalize_token(value) == lane);
+            let phase_matches = rule.phases.is_empty()
+                || rule
+                    .phases
+                    .iter()
+                    .any(|value| normalize_token(value) == phase);
+            let paths_match = rule.when_paths.is_empty()
+                || all_paths.iter().any(|path| {
+                    rule.when_paths
+                        .iter()
+                        .any(|pattern| glob_matches(pattern, path))
+                });
+            let flags_match = rule.when_flags.is_empty()
+                || normalized_flags.iter().any(|flag| {
+                    rule.when_flags
+                        .iter()
+                        .any(|expected| normalize_token(expected) == *flag)
+                });
+            let has_trigger =
+                rule.always || !rule.when_paths.is_empty() || !rule.when_flags.is_empty();
+            if lane_matches && phase_matches && has_trigger && paths_match && flags_match {
                 for path in &rule.must_read {
-                    if !entries.iter().any(|(existing, _)| existing == path) {
-                        entries.push((path.clone(), format!("must_read:{}", rule.id)));
-                    }
+                    promote_context_entry(
+                        path,
+                        &rule.id,
+                        &mut must_read,
+                        &mut should_read,
+                        &mut skip,
+                        ContextPriority::Must,
+                    );
                 }
                 for path in &rule.should_read {
-                    if !entries.iter().any(|(existing, _)| existing == path) {
-                        entries.push((path.clone(), format!("should_read:{}", rule.id)));
-                    }
+                    promote_context_entry(
+                        path,
+                        &rule.id,
+                        &mut must_read,
+                        &mut should_read,
+                        &mut skip,
+                        ContextPriority::Should,
+                    );
+                }
+                for path in &rule.skip {
+                    promote_context_entry(
+                        path,
+                        &rule.id,
+                        &mut must_read,
+                        &mut should_read,
+                        &mut skip,
+                        ContextPriority::Skip,
+                    );
                 }
             }
         }
-        entries
+        let token_budget_hint = match lane.as_str() {
+            "high_risk" => self.context.token_budget.high_risk,
+            "normal" => self.context.token_budget.normal,
+            _ => self.context.token_budget.tiny,
+        };
+        let mut manifest = WorkflowContextManifest {
+            policy_id: self.policy_id.clone(),
+            policy_version: self.policy_version.clone(),
+            policy_mode: self.mode.clone(),
+            lane,
+            phase,
+            must_read,
+            should_read,
+            skip,
+            stop_condition: self.context.stop_condition.clone(),
+            token_budget_hint,
+            checksum: String::new(),
+        };
+        manifest.checksum = context_manifest_checksum(&manifest);
+        manifest
     }
 }
 
 fn glob_matches(pattern: &str, path: &str) -> bool {
-    pattern
-        .strip_suffix("/**")
-        .map(|prefix| path.starts_with(prefix))
-        .unwrap_or(pattern == path)
+    fn matches(pattern: &[u8], value: &[u8]) -> bool {
+        match pattern {
+            [] => value.is_empty(),
+            [b'*', b'*', rest @ ..] => {
+                matches(rest, value) || (!value.is_empty() && matches(pattern, &value[1..]))
+            }
+            [b'*', rest @ ..] => {
+                matches(rest, value)
+                    || (!value.is_empty() && value[0] != b'/' && matches(pattern, &value[1..]))
+            }
+            [expected, rest @ ..] => {
+                !value.is_empty() && *expected == value[0] && matches(rest, &value[1..])
+            }
+        }
+    }
+    matches(pattern.as_bytes(), path.as_bytes())
+}
+
+#[derive(Clone, Copy)]
+enum ContextPriority {
+    Must,
+    Should,
+    Skip,
+}
+
+fn promote_context_entry(
+    path: &str,
+    reason: &str,
+    must_read: &mut Vec<WorkflowContextEntry>,
+    should_read: &mut Vec<WorkflowContextEntry>,
+    skip: &mut Vec<WorkflowContextEntry>,
+    priority: ContextPriority,
+) {
+    if must_read.iter().any(|entry| entry.path == path) {
+        return;
+    }
+    if matches!(priority, ContextPriority::Must) {
+        should_read.retain(|entry| entry.path != path);
+        skip.retain(|entry| entry.path != path);
+        must_read.push(WorkflowContextEntry {
+            path: path.to_owned(),
+            reason: reason.to_owned(),
+        });
+        return;
+    }
+    if should_read.iter().any(|entry| entry.path == path) {
+        return;
+    }
+    if matches!(priority, ContextPriority::Should) {
+        skip.retain(|entry| entry.path != path);
+        should_read.push(WorkflowContextEntry {
+            path: path.to_owned(),
+            reason: reason.to_owned(),
+        });
+        return;
+    }
+    if !skip.iter().any(|entry| entry.path == path) {
+        skip.push(WorkflowContextEntry {
+            path: path.to_owned(),
+            reason: reason.to_owned(),
+        });
+    }
+}
+
+fn context_manifest_checksum(manifest: &WorkflowContextManifest) -> String {
+    let entries = |values: &[WorkflowContextEntry]| {
+        values
+            .iter()
+            .map(|entry| format!("{}:{}", entry.path, entry.reason))
+            .collect::<Vec<_>>()
+            .join("|")
+    };
+    let canonical = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        manifest.policy_id,
+        manifest.policy_version,
+        manifest.policy_mode,
+        manifest.lane,
+        manifest.phase,
+        entries(&manifest.must_read),
+        entries(&manifest.should_read),
+        entries(&manifest.skip),
+        manifest.stop_condition,
+        manifest.token_budget_hint,
+    );
+    format!("{:x}", Sha256::digest(canonical.as_bytes()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1613,6 +1831,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                 "SELECT
                     trace.id,
                     intake.risk_lane,
+                    intake.risk_flags,
                     trace.story_id,
                     trace.files_read,
                     trace.files_changed,
@@ -1625,17 +1844,49 @@ impl HarnessRepository for SqliteHarnessRepository {
                     Ok(ContextScoreSource {
                         id: row.get(0)?,
                         risk_lane: row.get(1)?,
-                        story_id: row.get(2)?,
-                        files_read: row.get(3)?,
-                        files_changed: row.get(4)?,
-                        outcome: row.get(5)?,
+                        risk_flags: row.get(2)?,
+                        story_id: row.get(3)?,
+                        files_read: row.get(4)?,
+                        files_changed: row.get(5)?,
+                        outcome: row.get(6)?,
                     })
                 },
             )
             .optional()?
             .ok_or(HarnessInfraError::TraceNotFound(id))?;
 
-        Ok(score_context(source))
+        let lane = source.risk_lane.as_deref().unwrap_or("tiny");
+        let phase = infer_context_phase(&source);
+        let paths = jsonish_list(source.files_changed.as_deref());
+        let flags = jsonish_list(source.risk_flags.as_deref());
+        let linked_artifacts = source
+            .story_id
+            .as_ref()
+            .map(|_| vec!["docs/stories/".to_owned()])
+            .unwrap_or_default();
+        let policy = self.load_workflow_policy()?;
+        let manifest = policy.context_manifest(lane, &phase, &paths, &flags, &linked_artifacts);
+        let expected_must = manifest
+            .must_read
+            .iter()
+            .map(|entry| (entry.reason.clone(), entry.path.clone()))
+            .collect::<Vec<_>>();
+        let expected_should = manifest
+            .should_read
+            .iter()
+            .map(|entry| (entry.reason.clone(), entry.path.clone()))
+            .collect::<Vec<_>>();
+        let expected_skip = manifest
+            .skip
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        Ok(score_context(
+            source,
+            &expected_must,
+            &expected_should,
+            &expected_skip,
+        ))
     }
 
     fn story_verify_status(&self, id: &str) -> Result<StoryVerifyStatus> {
@@ -2213,6 +2464,9 @@ fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, Str
     if policy.policy_id.trim().is_empty() {
         return Err("policy_id must not be empty".to_owned());
     }
+    if !matches!(policy.mode.as_str(), "shadow" | "authority") {
+        return Err(format!("invalid policy mode '{}'", policy.mode));
+    }
     for path in [
         &policy.repository.product_docs,
         &policy.repository.stories,
@@ -2233,6 +2487,22 @@ fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, Str
     {
         return Err("classification thresholds must be positive and high_risk_min_flags >= normal_min_flags".to_owned());
     }
+    let hard_gates = policy
+        .classification
+        .hard_gates
+        .iter()
+        .map(|gate| normalize_token(gate))
+        .collect::<HashSet<_>>();
+    if hard_gates.len() != policy.classification.hard_gates.len()
+        || hard_gates.iter().any(String::is_empty)
+    {
+        return Err("hard gates must be non-empty and unique after normalization".to_owned());
+    }
+    for (alias, target) in &policy.classification.aliases {
+        if normalize_token(alias).is_empty() || normalize_token(target).is_empty() {
+            return Err("classification aliases must map non-empty canonical tokens".to_owned());
+        }
+    }
     for lane in [
         &policy.lanes.tiny,
         &policy.lanes.normal,
@@ -2252,6 +2522,54 @@ fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, Str
         }
         if lane.proof.is_empty() {
             return Err("lane proof must not be empty".to_owned());
+        }
+    }
+    if policy.context.stop_condition.trim().is_empty()
+        || policy.context.token_budget.tiny == 0
+        || policy.context.token_budget.normal < policy.context.token_budget.tiny
+        || policy.context.token_budget.high_risk < policy.context.token_budget.normal
+    {
+        return Err(
+            "context stop condition and increasing positive token budgets are required".to_owned(),
+        );
+    }
+    let mut rule_ids = HashSet::new();
+    for rule in &policy.context.rules {
+        if rule.id.trim().is_empty() || !rule_ids.insert(rule.id.clone()) {
+            return Err("context rule ids must be non-empty and unique".to_owned());
+        }
+        if !rule.always && rule.when_paths.is_empty() && rule.when_flags.is_empty() {
+            return Err(format!("context rule '{}' has no trigger", rule.id));
+        }
+        if rule.must_read.is_empty() && rule.should_read.is_empty() && rule.skip.is_empty() {
+            return Err(format!("context rule '{}' has no output", rule.id));
+        }
+        if rule.phases.iter().any(|phase| {
+            !matches!(
+                normalize_token(phase).as_str(),
+                "intake" | "planning" | "work" | "finish"
+            )
+        }) {
+            return Err(format!("context rule '{}' has an invalid phase", rule.id));
+        }
+        if rule.lanes.iter().any(|lane| {
+            !matches!(
+                normalize_token(lane).as_str(),
+                "tiny" | "normal" | "high_risk"
+            )
+        }) {
+            return Err(format!("context rule '{}' has an invalid lane", rule.id));
+        }
+        for pattern in &rule.when_paths {
+            if pattern.is_empty()
+                || Path::new(pattern).is_absolute()
+                || pattern.split('/').any(|part| part == "..")
+            {
+                return Err(format!(
+                    "context rule '{}' has an unsafe path glob",
+                    rule.id
+                ));
+            }
         }
     }
     Ok(policy)
@@ -3084,24 +3402,124 @@ mod tests {
         let (lane, gates) = policy.classify(&["auth".to_owned()]);
         assert_eq!(lane, "high_risk");
         assert!(gates.contains(&"hard-gate:auth".to_owned()));
+        assert_eq!(
+            policy.classify(&["external systems".to_owned()]).0,
+            "high_risk"
+        );
+        assert_eq!(
+            policy.classify(&["audit/security".to_owned()]).0,
+            "high_risk"
+        );
+    }
+
+    #[test]
+    fn workflow_context_golden_lane_phase_matrix() {
+        let (_temp_dir, repository) = doctor_repository();
+        let policy = repository.workflow_policy().unwrap();
+
+        let tiny_intake = policy.context_manifest("tiny", "intake", &[], &[], &[]);
+        assert_eq!(tiny_intake.token_budget_hint, 2000);
+        assert!(tiny_intake
+            .must_read
+            .iter()
+            .any(|entry| entry.path == "AGENTS.md"));
+        assert!(tiny_intake
+            .skip
+            .iter()
+            .any(|entry| entry.path == "_harness/ARCHITECTURE.md"));
+
+        let normal_planning = policy.context_manifest("normal", "planning", &[], &[], &[]);
+        assert_eq!(normal_planning.token_budget_hint, 5000);
+        assert!(normal_planning
+            .must_read
+            .iter()
+            .any(|entry| entry.path == "_harness/templates/story.md"));
+
+        let high_finish = policy.context_manifest(
+            "high-risk",
+            "finish",
+            &[],
+            &["audit/security".to_owned()],
+            &[],
+        );
+        assert_eq!(high_finish.token_budget_hint, 10000);
+        assert!(high_finish
+            .must_read
+            .iter()
+            .any(|entry| entry.path == "_harness/TRACE_SPEC.md"));
+        assert!(high_finish
+            .must_read
+            .iter()
+            .any(|entry| entry.path == "docs/decisions/"));
+    }
+
+    #[test]
+    fn workflow_context_excludes_unrelated_docs_from_must_read() {
+        let (_temp_dir, repository) = doctor_repository();
+        let policy = repository.workflow_policy().unwrap();
+        let manifest = policy.context_manifest("tiny", "work", &["README.md".to_owned()], &[], &[]);
+        assert!(!manifest
+            .must_read
+            .iter()
+            .any(|entry| entry.path.starts_with("docs/decisions/")));
+    }
+
+    #[test]
+    fn policy_parity_fixture_is_versioned_and_has_unique_case_ids() {
+        let content =
+            fs::read_to_string(source_repo_root().join("_harness/tests/policy-parity-cases.toml"))
+                .unwrap();
+        let fixture: toml::Value = toml::from_str(&content).unwrap();
+        assert_eq!(fixture["schema_version"].as_integer(), Some(1));
+
+        let mut ids = HashSet::new();
+        for section in [
+            "classification_cases",
+            "context_cases",
+            "intentional_deltas",
+        ] {
+            for case in fixture[section].as_array().unwrap() {
+                let id = case["id"].as_str().unwrap();
+                assert!(!id.is_empty());
+                assert!(ids.insert(id.to_owned()), "duplicate parity case id: {id}");
+            }
+        }
     }
 
     #[test]
     fn workflow_context_deduplicates_matching_rules_with_reasons() {
         let (_temp_dir, repository) = doctor_repository();
         let policy = repository.workflow_policy().unwrap();
-        let entries = policy.context_for(&[
-            "crates/harness-cli/src/interface.rs".to_owned(),
-            "_harness/scripts/schema/006-command-first-foundation.sql".to_owned(),
-            "crates/harness-cli/src/application.rs".to_owned(),
-        ]);
-        assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|(path, reason)| path
+        let manifest = policy.context_manifest(
+            "normal",
+            "work",
+            &[
+                "crates/harness-cli/src/interface.rs".to_owned(),
+                "_harness/scripts/schema/006-command-first-foundation.sql".to_owned(),
+                "crates/harness-cli/src/application.rs".to_owned(),
+            ],
+            &[],
+            &[],
+        );
+        assert!(manifest.must_read.iter().any(|entry| entry
+            .path
             .ends_with("0005-prebuilt-rust-harness-cli.md")
-            && reason == "must_read:cli-distribution"));
-        assert!(entries.iter().any(|(path, reason)| path
-            .ends_with("0004-sqlite-durable-layer.md")
-            && reason == "must_read:schema-change"));
+            && entry.reason == "cli-distribution"));
+        assert!(manifest
+            .must_read
+            .iter()
+            .any(|entry| entry.path.ends_with("0004-sqlite-durable-layer.md")
+                && entry.reason == "schema-change"));
+        assert_eq!(
+            manifest
+                .must_read
+                .iter()
+                .filter(|entry| entry.path.ends_with("0005-prebuilt-rust-harness-cli.md"))
+                .count(),
+            1
+        );
+        assert_eq!(manifest.token_budget_hint, 5000);
+        assert_eq!(manifest.checksum.len(), 64);
     }
 
     #[test]
@@ -3969,7 +4387,10 @@ mod tests {
         assert!(proposals
             .iter()
             .all(|proposal| proposal.committed_backlog_id.is_some()));
-        assert!(repository.query_backlog(BacklogFilter::Open).unwrap().len() >= 1);
+        assert!(!repository
+            .query_backlog(BacklogFilter::Open)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

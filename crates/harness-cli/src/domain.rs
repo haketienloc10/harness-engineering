@@ -757,7 +757,12 @@ pub fn score_trace(source: TraceScoreSource) -> TraceScoreResult {
     }
 }
 
-pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
+pub fn score_context(
+    source: ContextScoreSource,
+    expected_must: &[(String, String)],
+    expected_should: &[(String, String)],
+    expected_skip: &[String],
+) -> ContextScoreResult {
     let lane = source
         .risk_lane
         .clone()
@@ -766,50 +771,25 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
     let read = jsonish_list(source.files_read.as_deref());
     let changed = jsonish_list(source.files_changed.as_deref());
 
-    let mut must = Vec::new();
-    let mut should = Vec::new();
-    let mut skipped = Vec::new();
-
-    add_base_context_rules(&lane, &phase, &mut must, &mut should, &mut skipped);
-    if changed
+    let must = expected_must
         .iter()
-        .any(|path| path.starts_with("_harness/scripts/schema/"))
-    {
-        must.push((
-            "SQLite durable layer decision",
-            "docs/decisions/0004-sqlite-durable-layer.md",
-        ));
-    }
-    if changed.iter().any(|path| {
-        path.starts_with("crates/harness-cli/")
-            || path.starts_with("_harness/bin/")
-            || path.starts_with("install.sh")
-    }) {
-        must.push((
-            "Prebuilt CLI decision",
-            "docs/decisions/0005-prebuilt-rust-harness-cli.md",
-        ));
-    }
-
-    let must = must
-        .into_iter()
         .map(|(label, target)| ContextRequirementResult {
-            label: label.to_owned(),
-            target: target.to_owned(),
+            label: label.clone(),
+            target: target.clone(),
             met: path_read(&read, target, &changed),
         })
         .collect::<Vec<_>>();
-    let should = should
-        .into_iter()
+    let should = expected_should
+        .iter()
         .map(|(label, target)| ContextRequirementResult {
-            label: label.to_owned(),
-            target: target.to_owned(),
+            label: label.clone(),
+            target: target.clone(),
             met: path_read(&read, target, &changed),
         })
         .collect::<Vec<_>>();
     let over_read = read
         .into_iter()
-        .filter(|path| skipped.iter().any(|skip| path_matches(path, skip)))
+        .filter(|path| expected_skip.iter().any(|skip| path_matches(path, skip)))
         .collect::<Vec<_>>();
 
     ContextScoreResult {
@@ -822,74 +802,16 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
     }
 }
 
-fn infer_context_phase(source: &ContextScoreSource) -> String {
+pub fn infer_context_phase(source: &ContextScoreSource) -> String {
     let changed = source.files_changed.as_deref().unwrap_or("").trim();
     if source.outcome.as_deref() == Some("completed") {
-        "trace".to_owned()
+        "finish".to_owned()
     } else if source.story_id.is_some() && !changed.is_empty() && changed != "[]" {
-        "implementation".to_owned()
+        "work".to_owned()
     } else if source.risk_lane.is_some() {
         "planning".to_owned()
     } else {
         "intake".to_owned()
-    }
-}
-
-fn add_base_context_rules<'a>(
-    lane: &str,
-    phase: &str,
-    must: &mut Vec<(&'a str, &'a str)>,
-    should: &mut Vec<(&'a str, &'a str)>,
-    skipped: &mut Vec<&'a str>,
-) {
-    match phase {
-        "trace" => {
-            must.push(("Trace specification", "_harness/TRACE_SPEC.md"));
-            must.push(("Changed-file list", "git status --short"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            } else {
-                should.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            }
-        }
-        "implementation" => {
-            must.push(("Files being changed", "<changed-files>"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Relevant story packet", "docs/stories/"));
-                should.push(("Architecture rules", "_harness/ARCHITECTURE.md"));
-            }
-            if lane == "high_risk" {
-                must.push(("Architecture rules", "_harness/ARCHITECTURE.md"));
-                must.push((
-                    "High-risk story template",
-                    "_harness/templates/high-risk-story/",
-                ));
-            }
-        }
-        "planning" => {
-            must.push(("Files to edit", "<changed-files>"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Story template", "_harness/templates/story.md"));
-                must.push(("Test matrix", "_harness/TEST_MATRIX.md"));
-            }
-            if lane == "high_risk" {
-                must.push((
-                    "High-risk story template",
-                    "_harness/templates/high-risk-story/",
-                ));
-            }
-        }
-        _ => {
-            must.push(("Agent entrypoint", "AGENTS.md"));
-            must.push(("Feature intake", "_harness/FEATURE_INTAKE.md"));
-            must.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            if lane == "tiny" {
-                skipped.push("_harness/ARCHITECTURE.md");
-            } else {
-                must.push(("README", "README.md"));
-                must.push(("Harness operating model", "_harness/HARNESS.md"));
-            }
-        }
     }
 }
 
@@ -1018,6 +940,7 @@ pub struct InterventionRecord {
 pub struct ContextScoreSource {
     pub id: i64,
     pub risk_lane: Option<String>,
+    pub risk_flags: Option<String>,
     pub story_id: Option<String>,
     pub files_read: Option<String>,
     pub files_changed: Option<String>,
@@ -1305,18 +1228,30 @@ mod tests {
 
     #[test]
     fn context_score_applies_lane_and_retrieval_triggers() {
-        let result = score_context(ContextScoreSource {
-            id: 42,
-            risk_lane: Some("normal".to_owned()),
-            story_id: Some("US-019".to_owned()),
-            files_read: Some(
-                "[\"docs/stories/epics/E03-phase-5-evolution-infrastructure/US-019-tool-registry.md\",\"docs/decisions/0005-prebuilt-rust-harness-cli.md\"]".to_owned(),
-            ),
-            files_changed: Some("[\"crates/harness-cli/src/interface.rs\"]".to_owned()),
-            outcome: None,
-        });
+        let result = score_context(
+            ContextScoreSource {
+                id: 42,
+                risk_lane: Some("normal".to_owned()),
+                risk_flags: Some("[\"public-contract\"]".to_owned()),
+                story_id: Some("US-019".to_owned()),
+                files_read: Some(
+                    "[\"docs/stories/epics/E03-phase-5-evolution-infrastructure/US-019-tool-registry.md\",\"docs/decisions/0005-prebuilt-rust-harness-cli.md\"]".to_owned(),
+                ),
+                files_changed: Some("[\"crates/harness-cli/src/interface.rs\"]".to_owned()),
+                outcome: None,
+            },
+            &[
+                ("work-story".to_owned(), "docs/stories/".to_owned()),
+                (
+                    "cli-distribution".to_owned(),
+                    "docs/decisions/0005-prebuilt-rust-harness-cli.md".to_owned(),
+                ),
+            ],
+            &[],
+            &[],
+        );
 
-        assert_eq!(result.phase, "implementation");
+        assert_eq!(result.phase, "work");
         assert!(result
             .must
             .iter()

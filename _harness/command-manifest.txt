@@ -1,0 +1,45 @@
+# Generated contract for the current compatibility command surface.
+doctor
+workflow
+workflow validate
+workflow explain
+workflow context
+workflow commands
+init
+migrate
+import
+import brownfield
+intake
+story
+story add
+story update
+story verify
+story verify-all
+decision
+decision add
+decision verify
+backlog
+backlog add
+backlog close
+tool
+tool register
+tool check
+tool remove
+intervention
+intervention add
+trace
+score-trace
+score-context
+audit
+propose
+query
+query matrix
+query backlog
+query decisions
+query intakes
+query traces
+query friction
+query tools
+query interventions
+query stats
+query sql

@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use thiserror::Error;
 
 use crate::application::{
@@ -96,10 +96,49 @@ enum WorkflowAction {
     },
     Context {
         #[arg(long)]
-        paths: String,
+        paths: Option<String>,
+        #[arg(long, default_value = "tiny", value_name = "tiny|normal|high-risk")]
+        lane: String,
+        #[arg(
+            long,
+            default_value = "work",
+            value_name = "intake|planning|work|finish"
+        )]
+        phase: String,
+        #[arg(long)]
+        flags: Option<String>,
+        #[arg(long)]
+        linked_artifacts: Option<String>,
         #[arg(long)]
         json: bool,
     },
+    /// Render the command tree compiled from the Clap definition.
+    Commands {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+pub fn compiled_command_manifest() -> Vec<String> {
+    fn collect(prefix: &str, command: &clap::Command, output: &mut Vec<String>) {
+        for child in command
+            .get_subcommands()
+            .filter(|child| child.get_name() != "help")
+        {
+            let path = if prefix.is_empty() {
+                child.get_name().to_owned()
+            } else {
+                format!("{prefix} {}", child.get_name())
+            };
+            output.push(path.clone());
+            collect(&path, child, output);
+        }
+    }
+
+    let command = Cli::command();
+    let mut output = Vec::new();
+    collect("", &command, &mut output);
+    output
 }
 
 #[derive(Args, Debug)]
@@ -537,11 +576,11 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             match args.action {
                 WorkflowAction::Validate { json } => {
                     if json {
-                        println!("{{\"ok\":true,\"code\":\"WORKFLOW_VALID\",\"policy_id\":\"{}\",\"policy_version\":\"{}\"}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version));
+                        println!("{{\"ok\":true,\"code\":\"WORKFLOW_VALID\",\"policy_id\":\"{}\",\"policy_version\":\"{}\",\"mode\":\"{}\"}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version), json_escape(&policy.mode));
                     } else {
                         println!(
-                            "workflow: valid ({} {})",
-                            policy.policy_id, policy.policy_version
+                            "workflow: valid ({} {}, mode={})",
+                            policy.policy_id, policy.policy_version, policy.mode
                         );
                     }
                 }
@@ -555,7 +594,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         .collect::<Vec<_>>();
                     let (lane, gates) = policy.classify(&flags);
                     if json {
-                        println!("{{\"policy_id\":\"{}\",\"policy_version\":\"{}\",\"lane\":\"{}\",\"gates\":{}}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version), lane, json_strings(&gates));
+                        println!("{{\"policy_id\":\"{}\",\"policy_version\":\"{}\",\"mode\":\"{}\",\"lane\":\"{}\",\"gates\":{}}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version), json_escape(&policy.mode), lane, json_strings(&gates));
                     } else {
                         println!(
                             "workflow {} {}\nlane: {}\ngates: {}",
@@ -566,32 +605,75 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         );
                     }
                 }
-                WorkflowAction::Context { paths, json } => {
+                WorkflowAction::Context {
+                    paths,
+                    lane,
+                    phase,
+                    flags,
+                    linked_artifacts,
+                    json,
+                } => {
                     let paths = paths
+                        .unwrap_or_default()
                         .split(',')
                         .map(str::trim)
                         .filter(|path| !path.is_empty())
                         .map(str::to_owned)
                         .collect::<Vec<_>>();
-                    let entries = policy.context_for(&paths);
+                    let flags = flags
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|flag| !flag.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    let linked_artifacts = linked_artifacts
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    let manifest =
+                        policy.context_manifest(&lane, &phase, &paths, &flags, &linked_artifacts);
                     if json {
-                        let values = entries
-                            .iter()
-                            .map(|(path, reason)| {
-                                format!(
-                                    "{{\"path\":\"{}\",\"reason\":\"{}\"}}",
-                                    json_escape(path),
-                                    json_escape(reason)
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(",");
-                        println!("{{\"must_read\":[{}],\"stop_condition\":\"Stop retrieval after all must_read paths are loaded.\"}}", values);
+                        println!(
+                            "{{\"policy_id\":\"{}\",\"policy_version\":\"{}\",\"mode\":\"{}\",\"lane\":\"{}\",\"phase\":\"{}\",\"must_read\":{},\"should_read\":{},\"skip\":{},\"stop_condition\":\"{}\",\"token_budget_hint\":{},\"checksum\":\"{}\"}}",
+                            json_escape(&manifest.policy_id),
+                            json_escape(&manifest.policy_version),
+                            json_escape(&manifest.policy_mode),
+                            json_escape(&manifest.lane),
+                            json_escape(&manifest.phase),
+                            context_entries_json(&manifest.must_read),
+                            context_entries_json(&manifest.should_read),
+                            context_entries_json(&manifest.skip),
+                            json_escape(&manifest.stop_condition),
+                            manifest.token_budget_hint,
+                            manifest.checksum,
+                        );
                     } else {
-                        for (path, reason) in entries {
-                            println!("must_read {path} ({reason})");
+                        for entry in manifest.must_read {
+                            println!("must_read {} ({})", entry.path, entry.reason);
                         }
-                        println!("Stop retrieval after all must_read paths are loaded.");
+                        for entry in manifest.should_read {
+                            println!("should_read {} ({})", entry.path, entry.reason);
+                        }
+                        for entry in manifest.skip {
+                            println!("skip {} ({})", entry.path, entry.reason);
+                        }
+                        println!("{}", manifest.stop_condition);
+                        println!("token budget hint: {}", manifest.token_budget_hint);
+                        println!("manifest checksum: {}", manifest.checksum);
+                    }
+                }
+                WorkflowAction::Commands { json } => {
+                    let commands = compiled_command_manifest();
+                    if json {
+                        println!("{{\"commands\":{}}}", json_strings(&commands));
+                    } else {
+                        for command in commands {
+                            println!("{command}");
+                        }
                     }
                 }
             }
@@ -874,6 +956,21 @@ fn json_strings(values: &[String]) -> String {
         values
             .iter()
             .map(|value| format!("\"{}\"", json_escape(value)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn context_entries_json(values: &[crate::infrastructure::WorkflowContextEntry]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|entry| format!(
+                "{{\"path\":\"{}\",\"reason\":\"{}\"}}",
+                json_escape(&entry.path),
+                json_escape(&entry.reason)
+            ))
             .collect::<Vec<_>>()
             .join(",")
     )
@@ -1642,6 +1739,22 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(matrix_help.contains("--numeric"));
+    }
+
+    #[test]
+    fn compiled_command_manifest_matches_tracked_snapshot() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        let expected = std::fs::read_to_string(repo_root.join("_harness/command-manifest.txt"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(compiled_command_manifest(), expected);
     }
 
     #[test]

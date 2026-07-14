@@ -1,5 +1,6 @@
 policy_version = "1.0"
 policy_id = "agent-first-default"
+mode = "shadow"
 
 [repository]
 product_docs = "docs/product"
@@ -37,6 +38,13 @@ hard_gates = [
   "weaken-validation",
 ]
 
+[classification.aliases]
+external_systems = "external_provider"
+external_provider_behavior = "external_provider"
+data_loss = "data_migration"
+data_loss_or_migration = "data_migration"
+removing_or_weakening_validation_requirements = "weaken_validation"
+
 [approvals]
 required_for = [
   "architecture-direction",
@@ -49,6 +57,95 @@ required_for = [
 [friction]
 allowed_dispositions = ["fixed-now", "backlog", "accepted-risk", "not-friction"]
 
+[context]
+stop_condition = "Stop retrieval after all must_read paths are loaded and relevant should_read entries are dispositioned."
+
+[context.token_budget]
+tiny = 2000
+normal = 5000
+high_risk = 10000
+
+[[context.rules]]
+id = "intake-base"
+phases = ["intake"]
+always = true
+must_read = ["AGENTS.md", "_harness/FEATURE_INTAKE.md", "_harness/bin/harness-cli query matrix"]
+
+[[context.rules]]
+id = "intake-tiny-skip"
+phases = ["intake"]
+lanes = ["tiny"]
+always = true
+skip = ["_harness/ARCHITECTURE.md"]
+
+[[context.rules]]
+id = "intake-expanded"
+phases = ["intake"]
+lanes = ["normal", "high_risk"]
+always = true
+must_read = ["README.md", "_harness/HARNESS.md"]
+
+[[context.rules]]
+id = "planning-base"
+phases = ["planning"]
+always = true
+must_read = ["<changed-files>"]
+
+[[context.rules]]
+id = "planning-story"
+phases = ["planning"]
+lanes = ["normal", "high_risk"]
+always = true
+must_read = ["_harness/templates/story.md", "_harness/TEST_MATRIX.md"]
+
+[[context.rules]]
+id = "planning-high-risk"
+phases = ["planning"]
+lanes = ["high_risk"]
+always = true
+must_read = ["_harness/templates/high-risk-story/"]
+
+[[context.rules]]
+id = "work-base"
+phases = ["work"]
+always = true
+must_read = ["<changed-files>"]
+
+[[context.rules]]
+id = "work-story"
+phases = ["work"]
+lanes = ["normal", "high_risk"]
+always = true
+must_read = ["docs/stories/"]
+should_read = ["_harness/ARCHITECTURE.md"]
+
+[[context.rules]]
+id = "work-high-risk"
+phases = ["work"]
+lanes = ["high_risk"]
+always = true
+must_read = ["_harness/ARCHITECTURE.md", "_harness/templates/high-risk-story/"]
+
+[[context.rules]]
+id = "finish-base"
+phases = ["finish"]
+always = true
+must_read = ["_harness/TRACE_SPEC.md", "git status --short"]
+
+[[context.rules]]
+id = "finish-tiny"
+phases = ["finish"]
+lanes = ["tiny"]
+always = true
+should_read = ["_harness/bin/harness-cli query matrix"]
+
+[[context.rules]]
+id = "finish-expanded"
+phases = ["finish"]
+lanes = ["normal", "high_risk"]
+always = true
+must_read = ["_harness/bin/harness-cli query matrix"]
+
 [[context.rules]]
 id = "schema-change"
 when_paths = ["_harness/scripts/schema/**"]
@@ -57,4 +154,16 @@ must_read = ["docs/decisions/0004-sqlite-durable-layer.md"]
 [[context.rules]]
 id = "cli-distribution"
 when_paths = ["crates/harness-cli/**", "_harness/bin/**", "install.sh"]
-must_read = ["docs/decisions/0005-prebuilt-rust-harness-cli.md"]
+must_read = ["docs/decisions/0005-prebuilt-rust-harness-cli.md", "_harness/scripts/schema/"]
+should_read = ["_harness/bin/harness-cli --help"]
+
+[[context.rules]]
+id = "provider-security"
+lanes = ["high_risk"]
+when_flags = ["auth", "authorization", "audit-security", "external-provider", "data-migration", "weaken-validation"]
+must_read = ["_harness/templates/high-risk-story/", "docs/decisions/"]
+
+[[context.rules]]
+id = "public-contract"
+when_flags = ["public-contract", "public-contracts"]
+must_read = ["docs/product/", "docs/stories/"]

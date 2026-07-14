@@ -6,7 +6,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 ARCHIVE="$WORK/source.tar.gz"
-tar --exclude=.git --exclude=target --exclude=harness.db --exclude=harness.db-wal --exclude=harness.db-shm -czf "$ARCHIVE" -C "$ROOT" .
+tar --transform='s#^\.#harness-fixture#' --exclude=.git --exclude=target --exclude=harness.db --exclude=harness.db-wal --exclude=harness.db-shm -czf "$ARCHIVE" -C "$ROOT" .
 
 MOCK_BIN="$WORK/mock-bin"
 mkdir -p "$MOCK_BIN"
@@ -38,6 +38,18 @@ test "$(sha256sum "$TARGET/harness.db" | awk '{print $1}')" = "$DB_HASH_BEFORE"
 grep -qx 'custom.cache' "$TARGET/.gitignore"
 test "$(grep -c '^# HARNESS:BEGIN local state$' "$TARGET/.gitignore")" -eq 1
 FIRST_ID="$(cat "$TARGET/.harness-id")"
+
+awk '
+  $0 == "<!-- HARNESS:SHARED:BEGIN -->" { capture=1; next }
+  $0 == "<!-- HARNESS:SHARED:END -->" { capture=0; next }
+  capture { print }
+' "$TARGET/AGENTS.md" >"$WORK/installed-shared-agents.md"
+cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
+
+"$TARGET/_harness/bin/harness-cli" workflow validate --json | grep -q '"mode":"shadow"'
+"$TARGET/_harness/bin/harness-cli" workflow commands >"$WORK/installed-commands.txt"
+grep -v '^#' "$TARGET/_harness/command-manifest.txt" | sed '/^[[:space:]]*$/d' >"$WORK/tracked-commands.txt"
+cmp "$WORK/tracked-commands.txt" "$WORK/installed-commands.txt"
 
 run_install >"$WORK/second.log"
 

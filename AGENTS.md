@@ -52,7 +52,8 @@ harness friction.
 
 Avoid abstract answers.
 
-When explaining decisions, plans, risks, bugs, architecture, or trade-offs, use concrete examples and step-by-step cause-and-effect reasoning.
+When explaining decisions, plans, risks, bugs, architecture, or trade-offs, use
+concrete examples and step-by-step cause-and-effect reasoning.
 
 Prefer this structure when useful:
 

@@ -60,9 +60,9 @@ Until a human selects Case A or Case B, the main-lineage input set is:
 2. `US-004` and the `SYMPHONY` experimental decision are foreign-lineage
    records and excluded from the main rebuild by decision 0010.
 3. Approve the remaining CL-01 ADR directions before CL-10 begins.
-4. Decide how the currently missing tracked `.harness-id` will be introduced
-   and committed; CL-00 does not create it because that changes repository
-   identity.
+4. Resolved by the approved 2026-07-14 CL-22-unblock preparation: tracked
+   repository identity `59342e22-7493-400b-99b6-985c38310d85` was introduced
+   without modifying the retained recovery database.
 
 ## Rollback
 

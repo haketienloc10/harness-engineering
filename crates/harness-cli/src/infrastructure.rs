@@ -3,8 +3,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, types::ValueRef, Connection, OptionalExtension};
+use rusqlite::{
+    params, types::ValueRef, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
+};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
@@ -54,6 +59,16 @@ pub enum HarnessInfraError {
     NoTraces,
     #[error("story update: nothing to update")]
     EmptyStoryUpdate,
+    #[error(
+        "query sql only permits a single read-only SELECT, WITH, or diagnostic PRAGMA statement"
+    )]
+    UnsafeSql,
+    #[error("ensure refused unsafe durable state: {0}")]
+    UnsafeDurableState(String),
+    #[error("database backup failed: {0}")]
+    BackupFailed(String),
+    #[error("workflow policy invalid: {0}")]
+    WorkflowInvalid(String),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
@@ -71,7 +86,194 @@ pub struct ToolCheckResult {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoctorReport {
+    pub ok: bool,
+    pub code: String,
+    pub message: String,
+    pub platform: String,
+    pub repository_id: Option<String>,
+    pub worktree: Option<String>,
+    pub branch: Option<String>,
+    pub commit: Option<String>,
+    pub source_versions: Vec<i64>,
+    pub db_versions: Vec<i64>,
+    pub findings: Vec<String>,
+    pub remediation: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowPolicy {
+    pub policy_version: String,
+    pub policy_id: String,
+    pub repository: WorkflowRepository,
+    pub lanes: WorkflowLanes,
+    pub classification: WorkflowClassification,
+    pub approvals: WorkflowApprovals,
+    pub friction: WorkflowFriction,
+    #[serde(default)]
+    pub context: WorkflowContext,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowRepository {
+    pub product_docs: String,
+    pub stories: String,
+    pub decisions: String,
+    pub tasks: String,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLanes {
+    pub tiny: WorkflowLane,
+    pub normal: WorkflowLane,
+    pub high_risk: WorkflowLane,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowLane {
+    pub trace_tier: String,
+    pub story: String,
+    pub proof: Vec<String>,
+    pub capsule: String,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowClassification {
+    pub normal_min_flags: usize,
+    pub high_risk_min_flags: usize,
+    pub hard_gates: Vec<String>,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowApprovals {
+    pub required_for: Vec<String>,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowFriction {
+    pub allowed_dispositions: Vec<String>,
+}
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowContext {
+    #[serde(default)]
+    pub rules: Vec<WorkflowContextRule>,
+}
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowContextRule {
+    pub id: String,
+    pub when_paths: Vec<String>,
+    #[serde(default)]
+    pub must_read: Vec<String>,
+    #[serde(default)]
+    pub should_read: Vec<String>,
+}
+
+impl WorkflowPolicy {
+    pub fn classify(&self, flags: &[String]) -> (String, Vec<String>) {
+        let normalized = flags
+            .iter()
+            .map(|flag| flag.trim().to_ascii_lowercase())
+            .filter(|flag| !flag.is_empty())
+            .collect::<Vec<_>>();
+        let hard = normalized
+            .iter()
+            .filter(|flag| {
+                self.classification
+                    .hard_gates
+                    .iter()
+                    .any(|gate| gate == *flag)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let lane =
+            if !hard.is_empty() || normalized.len() >= self.classification.high_risk_min_flags {
+                "high_risk"
+            } else if normalized.len() >= self.classification.normal_min_flags {
+                "normal"
+            } else {
+                "tiny"
+            };
+        let lane_policy = match lane {
+            "high_risk" => &self.lanes.high_risk,
+            "normal" => &self.lanes.normal,
+            _ => &self.lanes.tiny,
+        };
+        let mut gates = lane_policy.proof.clone();
+        if lane_policy.story == "required" {
+            gates.push("story".to_owned());
+        }
+        gates.extend(hard.into_iter().map(|flag| format!("hard-gate:{flag}")));
+        (lane.to_owned(), gates)
+    }
+
+    pub fn context_for(&self, paths: &[String]) -> Vec<(String, String)> {
+        let mut entries = Vec::new();
+        for rule in &self.context.rules {
+            if paths.iter().any(|path| {
+                rule.when_paths
+                    .iter()
+                    .any(|pattern| glob_matches(pattern, path))
+            }) {
+                for path in &rule.must_read {
+                    if !entries.iter().any(|(existing, _)| existing == path) {
+                        entries.push((path.clone(), format!("must_read:{}", rule.id)));
+                    }
+                }
+                for path in &rule.should_read {
+                    if !entries.iter().any(|(existing, _)| existing == path) {
+                        entries.push((path.clone(), format!("should_read:{}", rule.id)));
+                    }
+                }
+            }
+        }
+        entries
+    }
+}
+
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    pattern
+        .strip_suffix("/**")
+        .map(|prefix| path.starts_with(prefix))
+        .unwrap_or(pattern == path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SourceMigration {
+    version: i64,
+    path: PathBuf,
+    checksum: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MigrationManifest {
+    lineage: String,
+    migrations: Vec<ManifestMigration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManifestMigration {
+    version: i64,
+    path: String,
+    checksum: String,
+}
+
+type RepositoryProvenance = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+);
+
 pub trait HarnessRepository {
+    fn doctor(&self) -> Result<DoctorReport>;
+    fn workflow_policy(&self) -> Result<WorkflowPolicy>;
+    fn ensure(&self) -> Result<MigrateResult>;
     fn init(&self) -> Result<InitResult>;
     fn migrate(&self) -> Result<MigrateResult>;
     fn import_brownfield(&self) -> Result<BrownfieldImportResult>;
@@ -138,12 +340,14 @@ impl SqliteHarnessRepository {
         Ok(connection)
     }
 
+    #[cfg(test)]
     fn open_or_create(&self) -> Result<Connection> {
         let connection = Connection::open(&self.db_path)?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Ok(connection)
     }
 
+    #[cfg(test)]
     fn schema_version(connection: &Connection) -> Result<i64> {
         let version = connection
             .query_row(
@@ -169,23 +373,111 @@ impl SqliteHarnessRepository {
         Ok(())
     }
 
-    fn apply_pending_migrations(
+    fn apply_pending_migrations_transactionally(
         &self,
-        connection: &Connection,
+        connection: &mut Connection,
         current_version: i64,
+        migrations: &[SourceMigration],
     ) -> Result<Vec<i64>> {
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut applied = Vec::new();
-        for (version, path) in self.migration_files()? {
-            if version > current_version {
-                let sql = fs::read_to_string(path)?;
-                connection.execute_batch(&sql)?;
-                applied.push(version);
+        for migration in migrations {
+            if migration.version > current_version {
+                transaction.execute_batch(&fs::read_to_string(&migration.path)?)?;
+                applied.push(migration.version);
             }
         }
+        let final_version = applied.last().copied().unwrap_or(current_version);
+        if final_version >= 6 {
+            let source_commit = self.git_output(&["rev-parse", "HEAD"]).ok();
+            for migration in migrations
+                .iter()
+                .filter(|migration| migration.version <= final_version)
+            {
+                let name = migration
+                    .path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default();
+                transaction.execute(
+                    "INSERT INTO migration_history(version, name, checksum, cli_version, source_commit)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(version) DO NOTHING",
+                    params![migration.version, name, migration.checksum, env!("CARGO_PKG_VERSION"), source_commit],
+                )?;
+            }
+        }
+        transaction.commit()?;
         Ok(applied)
     }
 
-    fn migration_files(&self) -> Result<Vec<(i64, PathBuf)>> {
+    fn backup_existing_database(
+        &self,
+        current_version: i64,
+        lineage: &str,
+        checksum: &str,
+    ) -> Result<PathBuf> {
+        let parent = self.db_path.parent().ok_or_else(|| {
+            HarnessInfraError::BackupFailed("database path has no parent directory".to_owned())
+        })?;
+        let backup_dir = parent.join("harness.db.backups");
+        fs::create_dir_all(&backup_dir)
+            .map_err(|error| HarnessInfraError::BackupFailed(error.to_string()))?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| HarnessInfraError::BackupFailed(error.to_string()))?
+            .as_nanos();
+        let short_checksum = &checksum[..checksum.len().min(12)];
+        let file_name =
+            format!("harness.db.{timestamp}.v{current_version}.{lineage}.{short_checksum}.bak");
+        let backup_path = backup_dir.join(file_name);
+        fs::copy(&self.db_path, &backup_path)
+            .map_err(|error| HarnessInfraError::BackupFailed(error.to_string()))?;
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = PathBuf::from(format!("{}{}", self.db_path.display(), suffix));
+            if sidecar.exists() {
+                let backup_sidecar = PathBuf::from(format!("{}{}", backup_path.display(), suffix));
+                fs::copy(sidecar, backup_sidecar)
+                    .map_err(|error| HarnessInfraError::BackupFailed(error.to_string()))?;
+            }
+        }
+        self.prune_backups(&backup_dir, 5)?;
+        Ok(backup_path)
+    }
+
+    fn prune_backups(&self, backup_dir: &Path, retain: usize) -> Result<()> {
+        let mut backups = fs::read_dir(backup_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+            .collect::<Vec<_>>();
+        backups.sort_by_key(|entry| entry.file_name());
+        let remove_count = backups.len().saturating_sub(retain);
+        for entry in backups.into_iter().take(remove_count) {
+            let backup = entry.path();
+            fs::remove_file(&backup)?;
+            for suffix in ["-wal", "-shm"] {
+                let sidecar = PathBuf::from(format!("{}{}", backup.display(), suffix));
+                if sidecar.exists() {
+                    fs::remove_file(sidecar)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn source_migrations(&self) -> Result<(Vec<SourceMigration>, Vec<String>, String)> {
+        let manifest_path = self.schema_dir.join("manifest.toml");
+        let manifest = match parse_migration_manifest(&manifest_path) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                return Ok((
+                    Vec::new(),
+                    vec![format!("MANIFEST_INVALID:{error}")],
+                    String::new(),
+                ))
+            }
+        };
+        let mut findings = Vec::new();
         let mut files = Vec::new();
         for entry in fs::read_dir(&self.schema_dir)? {
             let entry = entry?;
@@ -193,30 +485,187 @@ impl SqliteHarnessRepository {
             if path.extension().and_then(|value| value.to_str()) != Some("sql") {
                 continue;
             }
-            let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            let Some((prefix, suffix)) = file_name.split_once('-') else {
+                findings.push(format!("MIGRATION_FILENAME_INVALID:{file_name}"));
                 continue;
             };
-            let Some(prefix) = file_name.split('-').next() else {
+            if prefix.len() != 3
+                || !prefix.chars().all(|character| character.is_ascii_digit())
+                || suffix.is_empty()
+            {
+                findings.push(format!("MIGRATION_FILENAME_INVALID:{file_name}"));
                 continue;
-            };
-            let Ok(version) = prefix.trim_start_matches('0').parse::<i64>() else {
-                continue;
-            };
-            files.push((version, path));
+            }
+            let version = prefix.parse::<i64>().expect("three ASCII digits parse");
+            let checksum = sha256_file(&path)?;
+            files.push(SourceMigration {
+                version,
+                path,
+                checksum,
+            });
         }
-        files.sort_by_key(|(version, _)| *version);
-        Ok(files)
+        files.sort_by_key(|migration| migration.version);
+        if files.is_empty()
+            || files.first().map(|migration| migration.version) != Some(1)
+            || files
+                .windows(2)
+                .any(|pair| pair[1].version != pair[0].version + 1)
+        {
+            findings.push("MIGRATION_INVENTORY_INVALID".to_owned());
+        }
+        if files
+            .windows(2)
+            .any(|pair| pair[0].version == pair[1].version)
+        {
+            findings.push("MIGRATION_DUPLICATE_VERSION".to_owned());
+        }
+        for source in &files {
+            let relative = source
+                .path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            match manifest
+                .migrations
+                .iter()
+                .find(|entry| entry.version == source.version)
+            {
+                Some(entry) if entry.path == relative && entry.checksum == source.checksum => {}
+                Some(_) => findings.push(format!("MANIFEST_CHECKSUM_MISMATCH:{relative}")),
+                None => findings.push(format!("MANIFEST_MIGRATION_MISSING:{relative}")),
+            }
+        }
+        for entry in &manifest.migrations {
+            if !files.iter().any(|source| source.version == entry.version) {
+                findings.push(format!("MANIFEST_SOURCE_MISSING:{}", entry.path));
+            }
+        }
+        Ok((files, findings, manifest.lineage))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn doctor_report(
+        &self,
+        ok: bool,
+        code: &str,
+        message: &str,
+        source_versions: Vec<i64>,
+        db_versions: Vec<i64>,
+        findings: Vec<String>,
+        remediation: Vec<String>,
+    ) -> DoctorReport {
+        let (repository_id, worktree, branch, commit, provenance_findings) =
+            self.repository_provenance();
+        let mut findings = findings;
+        findings.extend(provenance_findings);
+        DoctorReport {
+            ok,
+            code: code.to_owned(),
+            message: message.to_owned(),
+            platform: format!("{}/{}", env::consts::OS, env::consts::ARCH),
+            repository_id,
+            worktree,
+            branch,
+            commit,
+            source_versions,
+            db_versions,
+            findings,
+            remediation,
+        }
+    }
+
+    fn git_output(&self, args: &[&str]) -> std::result::Result<String, String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.repo_root)
+            .args(args)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+        }
+    }
+
+    fn repository_provenance(&self) -> RepositoryProvenance {
+        let repository_id = fs::read_to_string(self.repo_root.join(".harness-id"))
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let mut findings = Vec::new();
+        let worktree = match self.git_output(&["rev-parse", "--show-toplevel"]) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                findings.push("GIT_WORKTREE_UNAVAILABLE".to_owned());
+                None
+            }
+        };
+        if let Some(worktree) = &worktree {
+            let expected = self.repo_root.canonicalize().ok();
+            if expected.as_deref() != Some(Path::new(worktree)) {
+                findings.push("REPOSITORY_ROOT_MISMATCH".to_owned());
+            }
+        }
+        let branch = self.git_output(&["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+        if branch.is_none() {
+            findings.push("GIT_BRANCH_UNAVAILABLE".to_owned());
+        }
+        let commit = self.git_output(&["rev-parse", "HEAD"]).ok();
+        if commit.is_none() {
+            findings.push("GIT_COMMIT_UNAVAILABLE".to_owned());
+        }
+        (repository_id, worktree, branch, commit, findings)
+    }
+
+    fn payload_findings(&self) -> Vec<String> {
+        let mut findings = Vec::new();
+        if !self.repo_root.is_absolute() {
+            findings.push("REPOSITORY_ROOT_NOT_ABSOLUTE".to_owned());
+        }
+        if !self.repo_root.join(".git").exists() {
+            findings.push("REPOSITORY_ROOT_INVALID".to_owned());
+        }
+        for path in ["AGENTS.md", ".harness-id", "_harness/bin/harness-cli"] {
+            if !self.repo_root.join(path).is_file() {
+                findings.push(format!("REQUIRED_PATH_MISSING:{path}"));
+            }
+        }
+        match validate_workflow_policy(&self.repo_root.join("_harness/workflow.toml")) {
+            Ok(()) => {}
+            Err(error) => findings.push(format!("WORKFLOW_INVALID:{error}")),
+        }
+        match fs::read_to_string(self.repo_root.join(".gitignore")) {
+            Ok(ignore) => {
+                for required in ["harness.db", "harness.db-wal", "harness.db-shm"] {
+                    if !ignore.lines().any(|line| line.trim() == required) {
+                        findings.push(format!("MANAGED_IGNORE_MISSING:{required}"));
+                    }
+                }
+            }
+            Err(_) => findings.push("REQUIRED_PATH_MISSING:.gitignore".to_owned()),
+        }
+        findings
+    }
+
+    fn load_workflow_policy(&self) -> Result<WorkflowPolicy> {
+        parse_workflow_policy(&self.repo_root.join("_harness/workflow.toml"))
+            .map_err(HarnessInfraError::WorkflowInvalid)
     }
 
     fn import_matrix(&self, connection: &Connection) -> Result<usize> {
-        let (matrix_path, matrix_record_path) =
-            self.matrix_import_path()
-                .ok_or_else(|| HarnessInfraError::MissingBrownfieldPath(
-                    self.repo_root
-                        .join("_harness/TEST_MATRIX.md")
-                        .display()
-                        .to_string(),
-                ))?;
+        let (matrix_path, matrix_record_path) = self.matrix_import_path().ok_or_else(|| {
+            HarnessInfraError::MissingBrownfieldPath(
+                self.repo_root
+                    .join("_harness/TEST_MATRIX.md")
+                    .display()
+                    .to_string(),
+            )
+        })?;
 
         let content = fs::read_to_string(matrix_path)?;
         let mut story_count = 0;
@@ -432,41 +881,259 @@ impl SqliteHarnessRepository {
 }
 
 impl HarnessRepository for SqliteHarnessRepository {
-    fn init(&self) -> Result<InitResult> {
-        if self.db_path.exists() {
-            let connection = self.open_existing()?;
-            let current = Self::schema_version(&connection).unwrap_or(0);
-            if current == 0 {
-                self.apply_schema_v1(&connection)?;
-                self.apply_pending_migrations(&connection, 1)?;
-                return Ok(InitResult::MigratedExisting {
-                    db_path: self.db_path.clone(),
-                });
-            }
+    fn workflow_policy(&self) -> Result<WorkflowPolicy> {
+        self.load_workflow_policy()
+    }
 
-            return Ok(InitResult::Existing {
-                db_path: self.db_path.clone(),
-                version: current,
+    fn doctor(&self) -> Result<DoctorReport> {
+        let (migrations, mut findings, expected_lineage) = self.source_migrations()?;
+        let source_versions = migrations
+            .iter()
+            .map(|migration| migration.version)
+            .collect::<Vec<_>>();
+        if !findings.is_empty() {
+            return Ok(self.doctor_report(
+                false,
+                "SOURCE_MIGRATION_INVALID",
+                "Source migration inventory or manifest is invalid.",
+                source_versions,
+                Vec::new(),
+                findings,
+                vec!["Repair _harness/scripts/schema/manifest.toml and source migration files before operating on the database.".to_owned()],
+            ));
+        }
+        findings.extend(self.payload_findings());
+        if !self.db_path.exists() {
+            return Ok(self.doctor_report(
+                true,
+                "DB_MISSING",
+                "No local operational database exists; doctor did not create one.",
+                source_versions,
+                Vec::new(),
+                findings,
+                vec!["Run harness-cli init (compatibility command) or task start to create and ensure the local database.".to_owned()],
+            ));
+        }
+        let connection = match Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(connection) => connection,
+            Err(error) => return Ok(self.doctor_report(
+                false, "DB_UNREADABLE", "The database cannot be opened read-only.", source_versions,
+                Vec::new(), vec![format!("SQLITE_OPEN:{error}")],
+                vec!["Preserve the database and restore or rebuild from a verified backup; do not reset it in place.".to_owned()],
+            )),
+        };
+        let integrity: String = match connection.query_row("PRAGMA integrity_check", [], |row| row.get(0)) {
+            Ok(value) => value,
+            Err(error) => return Ok(self.doctor_report(
+                false, "DB_UNREADABLE", "SQLite could not inspect database integrity.", source_versions,
+                Vec::new(), vec![format!("SQLITE_INTEGRITY_ERROR:{error}")],
+                vec!["Preserve the database and restore or rebuild from a verified backup; do not reset it in place.".to_owned()],
+            )),
+        };
+        if integrity != "ok" {
+            findings.push(format!("SQLITE_INTEGRITY:{integrity}"));
+        }
+        let fk_error = connection.prepare("PRAGMA foreign_key_check")?.exists([])?;
+        if fk_error {
+            findings.push("FOREIGN_KEY_VIOLATION".to_owned());
+        }
+        let has_schema_version: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",
+            [], |row| row.get(0),
+        )?;
+        if !has_schema_version {
+            return Ok(self.doctor_report(
+                false, "DB_UNVERSIONED", "The database has no schema lineage table.", source_versions,
+                Vec::new(), findings, vec!["Preserve this database and use the reviewed recovery/rebuild procedure; do not run migrations blindly.".to_owned()],
+            ));
+        }
+        let db_versions = connection
+            .prepare("SELECT version FROM schema_version ORDER BY version")?
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if db_versions.is_empty()
+            || db_versions.first() != Some(&1)
+            || db_versions.windows(2).any(|pair| pair[1] != pair[0] + 1)
+        {
+            findings.push("DB_MIGRATION_HISTORY_INVALID".to_owned());
+        }
+        let has_meta: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='harness_meta')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_meta {
+            let lineage = connection
+                .query_row(
+                    "SELECT value FROM harness_meta WHERE key='schema_lineage'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if lineage.as_deref() != Some(expected_lineage.as_str()) {
+                findings.push("SCHEMA_LINEAGE_MISMATCH".to_owned());
+            }
+        } else if db_versions.last() == source_versions.last() {
+            findings.push("SCHEMA_LINEAGE_UNRECORDED".to_owned());
+        }
+        let has_history: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_history')",
+            [], |row| row.get(0),
+        )?;
+        if has_history {
+            let history = connection
+                .prepare("SELECT version, checksum FROM migration_history")?
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for migration in &migrations {
+                if db_versions.contains(&migration.version) {
+                    match history
+                        .iter()
+                        .find(|(version, _)| *version == migration.version)
+                    {
+                        Some((_, checksum)) if checksum == &migration.checksum => {}
+                        Some(_) => findings
+                            .push(format!("MIGRATION_CHECKSUM_MISMATCH:{}", migration.version)),
+                        None => findings
+                            .push(format!("MIGRATION_HISTORY_MISSING:{}", migration.version)),
+                    }
+                }
+            }
+        } else if db_versions.last() == source_versions.last() {
+            findings.push("MIGRATION_HISTORY_UNRECORDED".to_owned());
+        }
+        let code = if db_versions.last() > source_versions.last() {
+            "DB_AHEAD_OF_SOURCE"
+        } else if db_versions.last() < source_versions.last() {
+            "DB_BEHIND_SOURCE"
+        } else if findings.is_empty() {
+            "HEALTHY"
+        } else {
+            "DB_UNHEALTHY"
+        };
+        let remediation = match code {
+            "DB_AHEAD_OF_SOURCE" => vec!["Do not downgrade or overwrite the database. Preserve it and use the reviewed rebuild/recovery path for its lineage.".to_owned()],
+            "DB_BEHIND_SOURCE" => vec!["Run the safe ensure/migrate path after a verified backup is available.".to_owned()],
+            "HEALTHY" => Vec::new(),
+            _ => vec!["Resolve the reported health findings before running a state-changing lifecycle command.".to_owned()],
+        };
+        Ok(self.doctor_report(
+            code == "HEALTHY",
+            code,
+            "Database and source migration health report.",
+            source_versions,
+            db_versions,
+            findings,
+            remediation,
+        ))
+    }
+    fn ensure(&self) -> Result<MigrateResult> {
+        let report = self.doctor()?;
+        let (migrations, source_findings, lineage) = self.source_migrations()?;
+        if !source_findings.is_empty() {
+            return Err(HarnessInfraError::UnsafeDurableState(
+                "source migration inventory is invalid".to_owned(),
+            ));
+        }
+        let latest = migrations
+            .last()
+            .map(|migration| migration.version)
+            .unwrap_or(0);
+        if report.code == "HEALTHY" {
+            return Ok(MigrateResult {
+                current_version: latest,
+                applied: Vec::new(),
             });
         }
+        if report.code == "DB_MISSING" {
+            let parent = self.db_path.parent().ok_or_else(|| {
+                HarnessInfraError::UnsafeDurableState(
+                    "database path has no parent directory".to_owned(),
+                )
+            })?;
+            fs::create_dir_all(parent)?;
+            let temporary_path = parent.join(format!(
+                ".{}.create-{}",
+                self.db_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("harness.db"),
+                std::process::id()
+            ));
+            if temporary_path.exists() {
+                fs::remove_file(&temporary_path)?;
+            }
+            let result = (|| -> Result<Vec<i64>> {
+                let mut connection = Connection::open(&temporary_path)?;
+                connection.pragma_update(None, "foreign_keys", "ON")?;
+                self.apply_schema_v1(&connection)?;
+                self.apply_pending_migrations_transactionally(&mut connection, 1, &migrations)
+            })();
+            match result {
+                Ok(applied) => {
+                    fs::rename(&temporary_path, &self.db_path)?;
+                    Ok(MigrateResult {
+                        current_version: 0,
+                        applied: std::iter::once(1).chain(applied).collect(),
+                    })
+                }
+                Err(error) => {
+                    let _ = fs::remove_file(&temporary_path);
+                    Err(error)
+                }
+            }
+        } else if report.code == "DB_BEHIND_SOURCE" {
+            let current_version = report.db_versions.last().copied().unwrap_or(0);
+            let checksum = migrations
+                .last()
+                .map(|migration| migration.checksum.as_str())
+                .unwrap_or("unknown");
+            self.backup_existing_database(current_version, &lineage, checksum)?;
+            let mut connection = self.open_existing()?;
+            let applied = self.apply_pending_migrations_transactionally(
+                &mut connection,
+                current_version,
+                &migrations,
+            )?;
+            let after = self.doctor()?;
+            if after.code != "HEALTHY" {
+                return Err(HarnessInfraError::UnsafeDurableState(format!(
+                    "post-migration doctor returned {}",
+                    after.code
+                )));
+            }
+            Ok(MigrateResult {
+                current_version,
+                applied,
+            })
+        } else {
+            Err(HarnessInfraError::UnsafeDurableState(report.code))
+        }
+    }
 
-        let connection = self.open_or_create()?;
-        self.apply_schema_v1(&connection)?;
-        self.apply_pending_migrations(&connection, 1)?;
-        Ok(InitResult::Created {
-            db_path: self.db_path.clone(),
-        })
+    fn init(&self) -> Result<InitResult> {
+        let existed = self.db_path.exists();
+        let result = self.ensure()?;
+        if !existed {
+            Ok(InitResult::Created {
+                db_path: self.db_path.clone(),
+            })
+        } else if result.applied.is_empty() {
+            Ok(InitResult::Existing {
+                db_path: self.db_path.clone(),
+                version: result.current_version,
+            })
+        } else {
+            Ok(InitResult::MigratedExisting {
+                db_path: self.db_path.clone(),
+            })
+        }
     }
 
     fn migrate(&self) -> Result<MigrateResult> {
-        let connection = self.open_existing()?;
-        let current_version = Self::schema_version(&connection).unwrap_or(0);
-        let applied = self.apply_pending_migrations(&connection, current_version)?;
-
-        Ok(MigrateResult {
-            current_version,
-            applied,
-        })
+        self.ensure()
     }
 
     fn import_brownfield(&self) -> Result<BrownfieldImportResult> {
@@ -1402,15 +2069,27 @@ impl HarnessRepository for SqliteHarnessRepository {
     }
 
     fn query_sql(&self, sql: &str) -> Result<QueryTable> {
-        let connection = self.open_existing()?;
-        let mut statement = connection.prepare(sql)?;
-        let headers = statement
+        let normalized = sql.trim();
+        let statement = normalized.trim_end_matches(';').trim();
+        if statement.is_empty()
+            || normalized.trim_end_matches(';').contains(';')
+            || !is_read_only_sql(statement)
+        {
+            return Err(HarnessInfraError::UnsafeSql);
+        }
+        let connection =
+            Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let mut prepared = connection.prepare(statement)?;
+        if !prepared.readonly() {
+            return Err(HarnessInfraError::UnsafeSql);
+        }
+        let headers = prepared
             .column_names()
             .iter()
             .map(|value| value.to_string())
             .collect::<Vec<_>>();
-        let column_count = statement.column_count();
-        let rows = statement.query_map([], |row| {
+        let column_count = prepared.column_count();
+        let rows = prepared.query_map([], |row| {
             let mut values = Vec::new();
             for index in 0..column_count {
                 values.push(sql_value_to_string(row.get_ref(index)?));
@@ -1423,6 +2102,159 @@ impl HarnessRepository for SqliteHarnessRepository {
             rows: collect_rows(rows)?,
         })
     }
+}
+
+fn is_read_only_sql(statement: &str) -> bool {
+    let keyword = statement
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match keyword.as_str() {
+        "select" | "with" => true,
+        "pragma" => {
+            let value = statement[6..].trim().to_ascii_lowercase();
+            matches!(value.as_str(), "integrity_check" | "foreign_key_check")
+                || value.starts_with("table_info(")
+        }
+        _ => false,
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash.update(fs::read(path)?);
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn parse_migration_manifest(path: &Path) -> std::result::Result<MigrationManifest, String> {
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut lineage = None;
+    let mut migrations = Vec::new();
+    let mut current: Option<ManifestMigration> = None;
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty()
+            || line.starts_with('#')
+            || line == "checksum = \"sha256-utf8-lf-no-bom\""
+        {
+            continue;
+        }
+        if line == "[[migration]]" {
+            if let Some(entry) = current.take() {
+                migrations.push(entry);
+            }
+            current = Some(ManifestMigration {
+                version: 0,
+                path: String::new(),
+                checksum: String::new(),
+            });
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            return Err(format!("invalid line '{line}'"));
+        };
+        let value = raw_value.trim().trim_matches('"');
+        match (current.as_mut(), key.trim()) {
+            (None, "lineage") => lineage = Some(value.to_owned()),
+            (Some(entry), "version") => {
+                entry.version = value
+                    .parse()
+                    .map_err(|_| format!("invalid migration version '{value}'"))?
+            }
+            (Some(entry), "path") => entry.path = value.to_owned(),
+            (Some(entry), "sha256") => entry.checksum = value.to_owned(),
+            _ => return Err(format!("unsupported manifest key '{}'", key.trim())),
+        }
+    }
+    if let Some(entry) = current {
+        migrations.push(entry);
+    }
+    let lineage = lineage
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing lineage".to_owned())?;
+    if migrations.iter().any(|entry| {
+        entry.version < 1
+            || entry.path.is_empty()
+            || entry.checksum.len() != 64
+            || !entry
+                .checksum
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+    }) {
+        return Err("migration entry is incomplete or has an invalid checksum".to_owned());
+    }
+    if migrations
+        .windows(2)
+        .any(|pair| pair[0].version >= pair[1].version)
+    {
+        return Err("migration entries must be strictly ordered by version".to_owned());
+    }
+    Ok(MigrationManifest {
+        lineage,
+        migrations,
+    })
+}
+
+fn validate_workflow_policy(path: &Path) -> std::result::Result<(), String> {
+    parse_workflow_policy(path).map(|_| ())
+}
+
+fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, String> {
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let policy: WorkflowPolicy = toml::from_str(&content).map_err(|error| error.to_string())?;
+    let major = policy.policy_version.split('.').next().unwrap_or_default();
+    if major != "1" {
+        return Err(format!(
+            "unsupported policy major version '{}'",
+            policy.policy_version
+        ));
+    }
+    if policy.policy_id.trim().is_empty() {
+        return Err("policy_id must not be empty".to_owned());
+    }
+    for path in [
+        &policy.repository.product_docs,
+        &policy.repository.stories,
+        &policy.repository.decisions,
+        &policy.repository.tasks,
+    ] {
+        if path.is_empty()
+            || Path::new(path).is_absolute()
+            || path.split('/').any(|part| part == "..")
+        {
+            return Err(format!(
+                "repository path '{path}' must be repo-relative without traversal"
+            ));
+        }
+    }
+    if policy.classification.normal_min_flags == 0
+        || policy.classification.high_risk_min_flags < policy.classification.normal_min_flags
+    {
+        return Err("classification thresholds must be positive and high_risk_min_flags >= normal_min_flags".to_owned());
+    }
+    for lane in [
+        &policy.lanes.tiny,
+        &policy.lanes.normal,
+        &policy.lanes.high_risk,
+    ] {
+        if !matches!(
+            lane.trace_tier.as_str(),
+            "minimal" | "standard" | "detailed"
+        ) {
+            return Err(format!("invalid trace_tier '{}'", lane.trace_tier));
+        }
+        if !matches!(lane.story.as_str(), "required" | "when_behavior_bearing") {
+            return Err(format!("invalid story policy '{}'", lane.story));
+        }
+        if !matches!(lane.capsule.as_str(), "required" | "when_material") {
+            return Err(format!("invalid capsule policy '{}'", lane.capsule));
+        }
+        if lane.proof.is_empty() {
+            return Err("lane proof must not be empty".to_owned());
+        }
+    }
+    Ok(policy)
 }
 
 impl From<HarnessContext> for SqliteHarnessRepository {
@@ -1987,6 +2819,71 @@ mod tests {
         (temp_dir, repository)
     }
 
+    fn doctor_repository() -> (TempDir, SqliteHarnessRepository) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let repo_root = temp_dir.path().join("repo");
+        let schema_dir = repo_root.join("_harness/scripts/schema");
+        fs::create_dir_all(&schema_dir).unwrap();
+        for entry in fs::read_dir(test_schema_dir()).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_file() {
+                fs::copy(&path, schema_dir.join(path.file_name().unwrap())).unwrap();
+            }
+        }
+        fs::create_dir_all(&repo_root).unwrap();
+        assert!(Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .arg(&repo_root)
+            .status()
+            .unwrap()
+            .success());
+        fs::create_dir_all(repo_root.join("_harness/bin")).unwrap();
+        fs::write(repo_root.join("AGENTS.md"), "# test\n").unwrap();
+        fs::write(repo_root.join(".harness-id"), "test-repository-id\n").unwrap();
+        fs::write(repo_root.join("_harness/bin/harness-cli"), "test binary\n").unwrap();
+        fs::copy(
+            source_repo_root().join("_harness/workflow.toml"),
+            repo_root.join("_harness/workflow.toml"),
+        )
+        .unwrap();
+        fs::write(
+            repo_root.join(".gitignore"),
+            "harness.db\nharness.db-wal\nharness.db-shm\n",
+        )
+        .unwrap();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&repo_root)
+            .args(["add", "."])
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&repo_root)
+            .args([
+                "-c",
+                "user.name=Harness Test",
+                "-c",
+                "user.email=harness@example.test",
+                "commit",
+                "-q",
+                "-m",
+                "initial fixture",
+            ])
+            .status()
+            .unwrap()
+            .success());
+        let repository = SqliteHarnessRepository::new(
+            repo_root.clone(),
+            repo_root.join("harness.db"),
+            schema_dir,
+        );
+        (temp_dir, repository)
+    }
+
     fn story_columns(connection: &Connection) -> Vec<String> {
         let mut statement = connection.prepare("PRAGMA table_info(story);").unwrap();
         let rows = statement
@@ -2005,7 +2902,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 5);
+        assert_eq!(schema_version, 6);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -2013,8 +2910,287 @@ mod tests {
     }
 
     #[test]
+    fn doctor_reports_missing_database_without_creating_it() {
+        let (_temp_dir, repository) = doctor_repository();
+        let db_path = repository.db_path.clone();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_MISSING");
+        assert!(report.ok);
+        assert!(!db_path.exists());
+        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn doctor_detects_ahead_database_and_never_mutates_it() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute("INSERT INTO schema_version(version) VALUES (7)", [])
+            .unwrap();
+        drop(connection);
+        let db_path = repository.db_path.clone();
+        let before = sha256_file(&db_path).unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_AHEAD_OF_SOURCE");
+        assert!(!report.ok);
+        assert_eq!(sha256_file(&db_path).unwrap(), before);
+        let connection = repository.open_existing().unwrap();
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn doctor_accepts_a_checksum_and_lineage_verified_latest_database() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "HEALTHY");
+        assert!(report.ok);
+        assert!(report.findings.is_empty());
+        assert_eq!(report.repository_id.as_deref(), Some("test-repository-id"));
+        assert_eq!(
+            report.worktree.as_deref(),
+            Some(repository.repo_root.to_str().unwrap())
+        );
+        assert!(report.branch.is_some());
+        assert!(report
+            .commit
+            .as_deref()
+            .is_some_and(|value| value.len() == 40));
+    }
+
+    #[test]
+    fn doctor_detects_migration_checksum_mismatch() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute(
+                "UPDATE migration_history SET checksum='wrong' WHERE version=1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "MIGRATION_CHECKSUM_MISMATCH:1"));
+    }
+
+    #[test]
+    fn doctor_reports_unversioned_database() {
+        let (_temp_dir, repository) = doctor_repository();
+        let connection = repository.open_or_create().unwrap();
+        connection
+            .execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNVERSIONED");
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn doctor_reports_foreign_key_violations() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "OFF")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO trace(task_summary, intake_id, outcome) VALUES ('orphan', 999, 'completed')",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "FOREIGN_KEY_VIOLATION"));
+    }
+
+    #[test]
+    fn doctor_reports_invalid_workflow_policy_and_missing_payload() {
+        let (_temp_dir, repository) = doctor_repository();
+        fs::write(
+            repository.repo_root.join("_harness/workflow.toml"),
+            "policy_version = \"2.0\"\n",
+        )
+        .unwrap();
+        fs::remove_file(repository.repo_root.join(".harness-id")).unwrap();
+        repository.init().unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "REQUIRED_PATH_MISSING:.harness-id"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.starts_with("WORKFLOW_INVALID:")));
+    }
+
+    #[test]
+    fn workflow_policy_rejects_unknown_keys_and_path_traversal() {
+        let (_temp_dir, repository) = doctor_repository();
+        let workflow = repository.repo_root.join("_harness/workflow.toml");
+        let original = fs::read_to_string(&workflow).unwrap();
+        fs::write(&workflow, format!("{original}\nunknown_key = true\n")).unwrap();
+        assert!(repository.workflow_policy().is_err());
+        fs::write(
+            &workflow,
+            original.replace(
+                "product_docs = \"docs/product\"",
+                "product_docs = \"../escape\"",
+            ),
+        )
+        .unwrap();
+        assert!(repository.workflow_policy().is_err());
+    }
+
+    #[test]
+    fn workflow_policy_classifies_boundaries_from_config() {
+        let (_temp_dir, repository) = doctor_repository();
+        let policy = repository.workflow_policy().unwrap();
+        assert_eq!(policy.classify(&[]).0, "tiny");
+        assert_eq!(
+            policy.classify(&["ui".to_owned(), "api".to_owned()]).0,
+            "normal"
+        );
+        let (lane, gates) = policy.classify(&["auth".to_owned()]);
+        assert_eq!(lane, "high_risk");
+        assert!(gates.contains(&"hard-gate:auth".to_owned()));
+    }
+
+    #[test]
+    fn workflow_context_deduplicates_matching_rules_with_reasons() {
+        let (_temp_dir, repository) = doctor_repository();
+        let policy = repository.workflow_policy().unwrap();
+        let entries = policy.context_for(&[
+            "crates/harness-cli/src/interface.rs".to_owned(),
+            "_harness/scripts/schema/006-command-first-foundation.sql".to_owned(),
+            "crates/harness-cli/src/application.rs".to_owned(),
+        ]);
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|(path, reason)| path
+            .ends_with("0005-prebuilt-rust-harness-cli.md")
+            && reason == "must_read:cli-distribution"));
+        assert!(entries.iter().any(|(path, reason)| path
+            .ends_with("0004-sqlite-durable-layer.md")
+            && reason == "must_read:schema-change"));
+    }
+
+    #[test]
+    fn doctor_rejects_a_source_migration_gap() {
+        let (_temp_dir, repository) = doctor_repository();
+        fs::remove_file(repository.schema_dir.join("002-story-verify.sql")).unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "SOURCE_MIGRATION_INVALID");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "MIGRATION_INVENTORY_INVALID"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "MANIFEST_SOURCE_MISSING:002-story-verify.sql"));
+    }
+
+    #[test]
+    fn doctor_rejects_a_duplicate_source_migration_version() {
+        let (_temp_dir, repository) = doctor_repository();
+        fs::copy(
+            repository.schema_dir.join("001-init.sql"),
+            repository.schema_dir.join("001-duplicate.sql"),
+        )
+        .unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "SOURCE_MIGRATION_INVALID");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "MIGRATION_DUPLICATE_VERSION"));
+    }
+
+    #[test]
+    fn doctor_rejects_a_foreign_schema_lineage() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute(
+                "UPDATE harness_meta SET value='foreign' WHERE key='schema_lineage'",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "SCHEMA_LINEAGE_MISMATCH"));
+    }
+
+    #[test]
+    fn doctor_rejects_a_corrupt_database_without_repairing_it() {
+        let (_temp_dir, repository) = doctor_repository();
+        fs::write(&repository.db_path, b"not a sqlite database").unwrap();
+        let before = fs::read(&repository.db_path).unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNREADABLE");
+        assert_eq!(fs::read(&repository.db_path).unwrap(), before);
+    }
+
+    #[test]
+    fn doctor_reports_a_legacy_version_one_database_as_behind() {
+        let (_temp_dir, repository) = doctor_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_BEHIND_SOURCE");
+        assert!(!report.ok);
+        assert_eq!(report.db_versions, vec![1]);
+    }
+
+    #[test]
     fn migrate_applies_story_verify_columns_to_existing_database() {
-        let (_temp_dir, repository) = test_repository();
+        let (_temp_dir, repository) = doctor_repository();
         let connection = repository.open_or_create().unwrap();
         repository.apply_schema_v1(&connection).unwrap();
         drop(connection);
@@ -2022,22 +3198,202 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            5
+            6
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
         assert!(story_columns.contains(&"last_verified_result".to_owned()));
+        let backups = fs::read_dir(repository.repo_root.join("harness.db.backups"))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(backups
+            .iter()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".bak")));
+    }
+
+    #[test]
+    fn ensure_rolls_back_a_failing_migration_after_creating_a_backup() {
+        let (_temp_dir, repository) = doctor_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        drop(connection);
+        let migration = repository.schema_dir.join("002-story-verify.sql");
+        fs::write(
+            &migration,
+            "ALTER TABLE story ADD COLUMN should_not_persist TEXT;\nINVALID SQL;\n",
+        )
+        .unwrap();
+        let checksum = sha256_file(&migration).unwrap();
+        let manifest = repository.schema_dir.join("manifest.toml");
+        let content = fs::read_to_string(&manifest).unwrap().replace(
+            "6e788f0a712e1280b196843b7e4e49a71f649e0c989913dc1b9d28e098df54de",
+            &checksum,
+        );
+        fs::write(manifest, content).unwrap();
+
+        assert!(matches!(
+            repository.migrate(),
+            Err(HarnessInfraError::Sqlite(_))
+        ));
+
+        let connection = repository.open_existing().unwrap();
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            1
+        );
+        assert!(!story_columns(&connection).contains(&"should_not_persist".to_owned()));
+        let backups = fs::read_dir(repository.repo_root.join("harness.db.backups"))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(backups
+            .iter()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".bak")));
+    }
+
+    #[test]
+    fn backup_can_restore_the_pre_migration_database() {
+        let (_temp_dir, repository) = doctor_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        drop(connection);
+        repository.migrate().unwrap();
+        let backup = fs::read_dir(repository.repo_root.join("harness.db.backups"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .ends_with(".bak")
+            })
+            .unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            let path = PathBuf::from(format!("{}{}", repository.db_path.display(), suffix));
+            if path.exists() {
+                fs::remove_file(&path).unwrap();
+            }
+            let backup_path = PathBuf::from(format!("{}{}", backup.display(), suffix));
+            if backup_path.exists() {
+                fs::copy(backup_path, path).unwrap();
+            }
+        }
+
+        let connection = repository.open_existing().unwrap();
+        assert_eq!(
+            SqliteHarnessRepository::schema_version(&connection).unwrap(),
+            1
+        );
+        drop(connection);
+        assert_eq!(repository.doctor().unwrap().code, "DB_BEHIND_SOURCE");
+    }
+
+    #[test]
+    fn backup_retention_preserves_the_newest_five_backups() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let checksum = repository
+            .source_migrations()
+            .unwrap()
+            .0
+            .last()
+            .unwrap()
+            .checksum
+            .clone();
+        let mut newest = PathBuf::new();
+        for _ in 0..7 {
+            newest = repository
+                .backup_existing_database(6, "main", &checksum)
+                .unwrap();
+        }
+
+        let backups = fs::read_dir(repository.repo_root.join("harness.db.backups"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+            .collect::<Vec<_>>();
+        assert_eq!(backups.len(), 5);
+        assert!(newest.exists());
+    }
+
+    #[test]
+    fn ensure_refuses_an_ahead_database_without_writing_or_backing_it_up() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute("INSERT INTO schema_version(version) VALUES (7)", [])
+            .unwrap();
+        drop(connection);
+        let before = sha256_file(&repository.db_path).unwrap();
+
+        let error = repository.migrate().unwrap_err();
+
+        assert!(matches!(error, HarnessInfraError::UnsafeDurableState(_)));
+        assert_eq!(sha256_file(&repository.db_path).unwrap(), before);
+        assert!(!repository.repo_root.join("harness.db.backups").exists());
+    }
+
+    #[test]
+    fn ensure_is_idempotent_for_a_healthy_latest_database() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+
+        let result = repository.migrate().unwrap();
+
+        assert_eq!(result.current_version, 6);
+        assert!(result.applied.is_empty());
+        assert!(!repository.repo_root.join("harness.db.backups").exists());
+    }
+
+    #[test]
+    fn query_sql_enforces_a_read_only_single_statement_boundary() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let before = sha256_file(&repository.db_path).unwrap();
+
+        for statement in [
+            "INSERT INTO story(id, title, risk_lane) VALUES ('US-999', 'bad', 'tiny')",
+            "UPDATE story SET title='bad'",
+            "DELETE FROM story",
+            "CREATE TABLE escaped (id INTEGER)",
+            "DROP TABLE story",
+            "ATTACH DATABASE 'other.db' AS other",
+            "PRAGMA foreign_keys=OFF",
+            "VACUUM",
+            "SELECT 1; DELETE FROM story",
+        ] {
+            assert!(matches!(
+                repository.query_sql(statement),
+                Err(HarnessInfraError::UnsafeSql)
+            ));
+            assert_eq!(sha256_file(&repository.db_path).unwrap(), before);
+        }
+        assert_eq!(
+            repository.query_sql("SELECT 1 AS value").unwrap().rows,
+            vec![vec!["1".to_owned()]]
+        );
+        assert_eq!(
+            repository
+                .query_sql("WITH value AS (SELECT 2) SELECT * FROM value")
+                .unwrap()
+                .rows,
+            vec![vec!["2".to_owned()]]
+        );
+        assert!(repository.query_sql("PRAGMA table_info(story)").is_ok());
     }
 
     #[test]
     fn migration_005_backfills_kind_from_command_prefix() {
-        let (_temp_dir, repository) = test_repository();
-        let schema_dir = test_schema_dir();
+        let (_temp_dir, repository) = doctor_repository();
+        let schema_dir = repository.schema_dir.clone();
 
         // Build a pre-kind (v4) database: v1 base plus migrations 002-004 only.
         let connection = repository.open_or_create().unwrap();
@@ -2072,7 +3428,7 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5]);
+        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6]);
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection

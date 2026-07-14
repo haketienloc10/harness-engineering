@@ -31,6 +31,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Inspect repository and database health without changing state.
+    Doctor(DoctorArgs),
+    /// Validate or explain the typed Harness workflow policy.
+    Workflow(WorkflowArgs),
     /// Create the harness database if it does not already exist.
     Init,
     /// Apply schema migrations.
@@ -61,6 +65,41 @@ enum Command {
     Propose(ProposeArgs),
     /// Query harness data.
     Query(QueryArgs),
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    #[arg(long)]
+    json: bool,
+    /// Treat pending or missing durable state as a failure.
+    #[arg(long)]
+    strict: bool,
+}
+
+#[derive(Args, Debug)]
+struct WorkflowArgs {
+    #[command(subcommand)]
+    action: WorkflowAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkflowAction {
+    Validate {
+        #[arg(long)]
+        json: bool,
+    },
+    Explain {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        flags: Option<String>,
+    },
+    Context {
+        #[arg(long)]
+        paths: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -432,6 +471,8 @@ pub enum InterfaceError {
     Infrastructure(#[from] crate::infrastructure::HarnessInfraError),
     #[error("could not determine current directory: {0}")]
     CurrentDir(std::io::Error),
+    #[error("repository root error: {0}")]
+    RepositoryRoot(String),
     #[error("query sql requires a SQL statement")]
     EmptySql,
 }
@@ -440,6 +481,121 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
     let service = HarnessService::new(resolve_context()?);
 
     match cli.command {
+        Command::Doctor(args) => {
+            let report = service.doctor()?;
+            if args.json {
+                println!(
+                    "{{\"ok\":{},\"code\":\"{}\",\"message\":\"{}\",\"details\":{{\"platform\":\"{}\",\"repository_id\":{},\"worktree\":{},\"branch\":{},\"commit\":{},\"source_versions\":{},\"db_versions\":{},\"findings\":{}}},\"remediation\":{}}}",
+                    report.ok,
+                    json_escape(&report.code),
+                    json_escape(&report.message),
+                    json_escape(&report.platform),
+                    json_optional(report.repository_id.as_deref()),
+                    json_optional(report.worktree.as_deref()),
+                    json_optional(report.branch.as_deref()),
+                    json_optional(report.commit.as_deref()),
+                    json_numbers(&report.source_versions),
+                    json_numbers(&report.db_versions),
+                    json_strings(&report.findings),
+                    json_strings(&report.remediation),
+                );
+            } else {
+                println!("doctor: {}", report.code);
+                println!("{}", report.message);
+                println!("platform: {}", report.platform);
+                println!(
+                    "repository id: {}",
+                    report.repository_id.as_deref().unwrap_or("<missing>")
+                );
+                println!(
+                    "worktree: {}",
+                    report.worktree.as_deref().unwrap_or("<unavailable>")
+                );
+                println!(
+                    "branch: {}",
+                    report.branch.as_deref().unwrap_or("<unavailable>")
+                );
+                println!(
+                    "commit: {}",
+                    report.commit.as_deref().unwrap_or("<unavailable>")
+                );
+                println!("source migrations: {:?}", report.source_versions);
+                println!("database migrations: {:?}", report.db_versions);
+                for finding in &report.findings {
+                    println!("- {finding}");
+                }
+                for remediation in &report.remediation {
+                    println!("remediation: {remediation}");
+                }
+            }
+            if !report.ok || (args.strict && report.code != "HEALTHY") {
+                std::process::exit(3);
+            }
+        }
+        Command::Workflow(args) => {
+            let policy = service.workflow_policy()?;
+            match args.action {
+                WorkflowAction::Validate { json } => {
+                    if json {
+                        println!("{{\"ok\":true,\"code\":\"WORKFLOW_VALID\",\"policy_id\":\"{}\",\"policy_version\":\"{}\"}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version));
+                    } else {
+                        println!(
+                            "workflow: valid ({} {})",
+                            policy.policy_id, policy.policy_version
+                        );
+                    }
+                }
+                WorkflowAction::Explain { json, flags } => {
+                    let flags = flags
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    let (lane, gates) = policy.classify(&flags);
+                    if json {
+                        println!("{{\"policy_id\":\"{}\",\"policy_version\":\"{}\",\"lane\":\"{}\",\"gates\":{}}}", json_escape(&policy.policy_id), json_escape(&policy.policy_version), lane, json_strings(&gates));
+                    } else {
+                        println!(
+                            "workflow {} {}\nlane: {}\ngates: {}",
+                            policy.policy_id,
+                            policy.policy_version,
+                            lane,
+                            gates.join(", ")
+                        );
+                    }
+                }
+                WorkflowAction::Context { paths, json } => {
+                    let paths = paths
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>();
+                    let entries = policy.context_for(&paths);
+                    if json {
+                        let values = entries
+                            .iter()
+                            .map(|(path, reason)| {
+                                format!(
+                                    "{{\"path\":\"{}\",\"reason\":\"{}\"}}",
+                                    json_escape(path),
+                                    json_escape(reason)
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        println!("{{\"must_read\":[{}],\"stop_condition\":\"Stop retrieval after all must_read paths are loaded.\"}}", values);
+                    } else {
+                        for (path, reason) in entries {
+                            println!("must_read {path} ({reason})");
+                        }
+                        println!("Stop retrieval after all must_read paths are loaded.");
+                    }
+                }
+            }
+        }
         Command::Init => print_init_result(service.init()?),
         Command::Migrate => print_migrate_result(service.migrate()?),
         Command::Import(args) => match args.source {
@@ -692,6 +848,35 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
     }
 
     Ok(())
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn json_numbers(values: &[i64]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn json_strings(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format!("\"{}\"", json_escape(value)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
 }
 
 fn print_trace_score(result: &TraceScoreResult, latest: bool) {
@@ -954,8 +1139,8 @@ fn print_migrate_result(result: MigrateResult) {
 
 fn resolve_context() -> Result<HarnessContext, InterfaceError> {
     let repo_root = match env::var_os("HARNESS_REPO_ROOT") {
-        Some(path) => PathBuf::from(path),
-        None => env::current_dir().map_err(InterfaceError::CurrentDir)?,
+        Some(path) => validate_explicit_repo_root(PathBuf::from(path))?,
+        None => find_repository_root(env::current_dir().map_err(InterfaceError::CurrentDir)?)?,
     };
     let db_path = env::var_os("HARNESS_DB")
         .map(PathBuf::from)
@@ -968,6 +1153,37 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
         db_path,
         schema_dir,
     })
+}
+
+fn validate_explicit_repo_root(path: PathBuf) -> Result<PathBuf, InterfaceError> {
+    let root = path.canonicalize().map_err(|error| {
+        InterfaceError::RepositoryRoot(format!("HARNESS_REPO_ROOT is not accessible: {error}"))
+    })?;
+    if !root.join(".git").exists() {
+        return Err(InterfaceError::RepositoryRoot(
+            "HARNESS_REPO_ROOT must point at a repository root containing .git".to_owned(),
+        ));
+    }
+    Ok(root)
+}
+
+fn find_repository_root(start: PathBuf) -> Result<PathBuf, InterfaceError> {
+    let start = start.canonicalize().map_err(|error| {
+        InterfaceError::RepositoryRoot(format!("cannot canonicalize current directory: {error}"))
+    })?;
+    let roots = start
+        .ancestors()
+        .filter(|path| path.join(".git").exists())
+        .collect::<Vec<_>>();
+    match roots.as_slice() {
+        [] => Err(InterfaceError::RepositoryRoot(
+            "no repository root found from the current directory".to_owned(),
+        )),
+        [root] => Ok((*root).to_path_buf()),
+        _ => Err(InterfaceError::RepositoryRoot(
+            "ambiguous nested repository roots; set HARNESS_REPO_ROOT explicitly".to_owned(),
+        )),
+    }
 }
 
 fn resolve_schema_dir(repo_root: &std::path::Path) -> PathBuf {
@@ -1288,13 +1504,6 @@ fn print_interventions(records: &[InterventionRecord]) {
     );
 }
 
-fn json_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-}
-
 fn print_stats(stats: &HarnessStats) {
     println!("=== Harness Stats ===");
     print_table(
@@ -1433,5 +1642,25 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(matrix_help.contains("--numeric"));
+    }
+
+    #[test]
+    fn repository_root_discovery_accepts_one_root_and_rejects_nested_roots() {
+        let temp = tempfile::Builder::new()
+            .prefix("harness-cli-root-")
+            .tempdir_in("/dev/shm")
+            .unwrap();
+        let root = temp.path().join("repo");
+        let child = root.join("src/nested");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
+
+        assert_eq!(find_repository_root(child.clone()).unwrap(), root);
+
+        std::fs::create_dir_all(child.join(".git")).unwrap();
+        let error = find_repository_root(child).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("ambiguous nested repository roots"));
     }
 }

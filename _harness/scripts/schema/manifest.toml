@@ -1,0 +1,32 @@
+lineage = "main"
+checksum = "sha256-utf8-lf-no-bom"
+
+[[migration]]
+version = 1
+path = "001-init.sql"
+sha256 = "c7d3f13ae6849aacdcee7538b5f6a159f237ff5676d0df261855a874dabb96b3"
+
+[[migration]]
+version = 2
+path = "002-story-verify.sql"
+sha256 = "6e788f0a712e1280b196843b7e4e49a71f649e0c989913dc1b9d28e098df54de"
+
+[[migration]]
+version = 3
+path = "003-tool-registry.sql"
+sha256 = "acf9fa39f056e9f41a9499e84139b4d44dbb921ea228c08a2eeaff66267e4caa"
+
+[[migration]]
+version = 4
+path = "004-intervention.sql"
+sha256 = "e5b8c6879976c87e4663eb4b5849d29b5c4caa8a1fe54b1f122b11e429090197"
+
+[[migration]]
+version = 5
+path = "005-tool-extensions.sql"
+sha256 = "43394d8a3669a818b0fbbacc71650b4f37f4c2992ed8de0f9fb9b87e06d7982c"
+
+[[migration]]
+version = 6
+path = "006-command-first-foundation.sql"
+sha256 = "9067520c44bd7f4d5ab1c7d8d0268f8dd26645d45095218ed69b6ee07e1ed9e8"

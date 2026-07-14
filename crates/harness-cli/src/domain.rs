@@ -780,14 +780,11 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
             "docs/decisions/0004-sqlite-durable-layer.md",
         ));
     }
-    if changed
-        .iter()
-        .any(|path| {
-            path.starts_with("crates/harness-cli/")
-                || path.starts_with("_harness/bin/")
-                || path.starts_with("install.sh")
-        })
-    {
+    if changed.iter().any(|path| {
+        path.starts_with("crates/harness-cli/")
+            || path.starts_with("_harness/bin/")
+            || path.starts_with("install.sh")
+    }) {
         must.push((
             "Prebuilt CLI decision",
             "docs/decisions/0005-prebuilt-rust-harness-cli.md",

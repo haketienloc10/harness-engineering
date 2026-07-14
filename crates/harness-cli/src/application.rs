@@ -6,7 +6,9 @@ use crate::domain::{
     InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult, StoryVerifyStatus,
     ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
 };
-use crate::infrastructure::{HarnessRepository, SqliteHarnessRepository, ToolCheckResult};
+use crate::infrastructure::{
+    DoctorReport, HarnessRepository, SqliteHarnessRepository, ToolCheckResult, WorkflowPolicy,
+};
 
 #[derive(Debug)]
 pub struct HarnessContext {
@@ -146,6 +148,21 @@ impl HarnessService {
 
     pub fn migrate(&self) -> crate::infrastructure::Result<MigrateResult> {
         self.repository.migrate()
+    }
+
+    pub fn doctor(&self) -> crate::infrastructure::Result<DoctorReport> {
+        self.preflight()
+    }
+
+    /// Shared, read-only health boundary for commands that are allowed to
+    /// operate on durable state. CL-11 wires this into safe ensure/migration;
+    /// doctor exposes the same result without changing state.
+    pub fn preflight(&self) -> crate::infrastructure::Result<DoctorReport> {
+        self.repository.doctor()
+    }
+
+    pub fn workflow_policy(&self) -> crate::infrastructure::Result<WorkflowPolicy> {
+        self.repository.workflow_policy()
     }
 
     pub fn import_brownfield(&self) -> crate::infrastructure::Result<BrownfieldImportResult> {

@@ -1,0 +1,60 @@
+policy_version = "1.0"
+policy_id = "agent-first-default"
+
+[repository]
+product_docs = "docs/product"
+stories = "docs/stories"
+decisions = "docs/decisions"
+tasks = "docs/tasks"
+
+[lanes.tiny]
+trace_tier = "minimal"
+story = "when_behavior_bearing"
+proof = ["quick"]
+capsule = "when_material"
+
+[lanes.normal]
+trace_tier = "standard"
+story = "when_behavior_bearing"
+proof = ["declared-story-plan"]
+capsule = "required"
+
+[lanes.high_risk]
+trace_tier = "detailed"
+story = "required"
+proof = ["declared-validation-plan"]
+capsule = "required"
+
+[classification]
+normal_min_flags = 2
+high_risk_min_flags = 4
+hard_gates = [
+  "auth",
+  "authorization",
+  "data-migration",
+  "audit-security",
+  "external-provider",
+  "weaken-validation",
+]
+
+[approvals]
+required_for = [
+  "architecture-direction",
+  "source-hierarchy",
+  "risk-policy",
+  "weaken-validation",
+  "destructive-data-action",
+]
+
+[friction]
+allowed_dispositions = ["fixed-now", "backlog", "accepted-risk", "not-friction"]
+
+[[context.rules]]
+id = "schema-change"
+when_paths = ["_harness/scripts/schema/**"]
+must_read = ["docs/decisions/0004-sqlite-durable-layer.md"]
+
+[[context.rules]]
+id = "cli-distribution"
+when_paths = ["crates/harness-cli/**", "_harness/bin/**", "install.sh"]
+must_read = ["docs/decisions/0005-prebuilt-rust-harness-cli.md"]

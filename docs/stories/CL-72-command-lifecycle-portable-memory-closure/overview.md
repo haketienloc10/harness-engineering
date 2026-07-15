@@ -2,7 +2,7 @@
 
 ## Status
 
-in_progress
+completed
 
 ## Lane and Scope
 
@@ -68,3 +68,8 @@ and compatibility obligations are recorded progressively in `validation.md`.
 Revert CLI, parser/index, audit-registry, packaged payload, manifests, tests,
 and documentation as coherent units. Artifact or DB rollback is backup-first
 and uses supported commands. Preserve all historical and remediation evidence.
+
+The terminal lifecycle state is owned by `TASK-000028` and its retained
+`task status` record. This tracked story status describes the completed
+product contract; it does not substitute for the task's atomic `task finish`
+transition or post-finish read-only checks.

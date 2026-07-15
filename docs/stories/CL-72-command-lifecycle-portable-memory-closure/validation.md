@@ -183,24 +183,51 @@ rebuild projection/schema reporting, and named audit coverage.
 
 ## Human Approval Questions
 
-1. Approve packet identity as directory plus canonical `overview.md`, with a
-   sorted aggregate checksum over explicitly allowed packet components?
-2. Approve the conservative typed `behavior-bearing=auto` and exactly-one
-   rooted trace auto-selection rules recommended in `design.md`?
-3. Approve strict audit coverage as proven only by named current checks with
-   semantic counts/projection/freshness, otherwise `fail` or `unknown`?
-4. Approve a backward-compatible richer capsule and fresh-rebuild projection
-   limited to observed durable fields, with legacy unknowns explicit?
-5. Separately approve any later backup-first application to the retained DB;
-   no operational migration or apply is authorized by the first four answers.
+The user answered `phê duyệt tất cả` on 2026-07-15. The lifecycle, packet,
+capsule, audit-policy, and retained backup-first apply questions above are
+therefore approved. Scoped durable approval records remain attached to the
+tasks that own each high-risk action; `TASK-000028` records the terminal
+`risk-policy` approval separately.
+
+## CGR-40 Terminal Requalification
+
+- Terminal task: `TASK-000028`; high-risk, non-product, owner `codex`, session
+  `codex-clp001-r1-cgr40`; started from clean committed HEAD `6e464a5` after
+  CGR-10 through CGR-30 were committed together.
+- Required context is acknowledged `4/4`; the scoped `risk-policy` approval
+  cites the user's explicit approval of all gates.
+- The terminal proof ladder covers format, workspace Clippy/tests, shell
+  syntax, installer safety, release qualification in `state`, `distribution`,
+  and `all` modes, workflow parity, source and packaged CLP-001-R1 contract
+  suites, memory check/rebuild/capsule validation, strict doctor/audit, and
+  `git diff --check`.
+- Five named clean-HEAD proof layers retain their own proof IDs, command and
+  output hashes, measured counts, HEAD/branch/dirty/output freshness, and
+  remediation in operational evidence. They are not copied into this tracked
+  file after the final proof because doing so would change HEAD and make the
+  evidence stale.
+- The current portable projection uses canonical schema `13`. The terminal
+  refresh includes every discovered story, decision, and nested capsule with
+  zero parity mismatches; legacy capsule unknowns remain explicit.
+- The CLI-rendered v2 capsule for `TASK-000028` contains only observed story,
+  trace, and proof summaries. `task finish` owns the final atomic status and
+  lease release; task status, doctor, audit, memory, capsule, and Git checks are
+  read-only afterward.
+- Rollback remains coherent: revert the lifecycle/parser/audit/package/docs
+  commits together; for retained state, restore the named pre-change backup
+  with the matching prior binary through supported recovery. Preserve proofs,
+  traces, approvals, dispositions, friction, and capsules.
+- Compatibility remains N+2: retain v1 capsule reading, legacy commands and
+  parsers, and `schema_version`; no platform expansion or early removal is
+  authorized.
 
 ## Proof Matrix
 
 | Layer | Expected proof | Current result |
 | --- | --- | --- |
-| Bootstrap | `bash tests/clp001_r1_contracts.sh baseline` | 15 intended gaps reproduced |
-| Unit/static | workspace format, Clippy, and tests | not run |
-| Integration | source/package contract and semantic fixtures | not run |
-| Audit | named current semantic parity checks | not implemented |
-| Release | installer safety and full release qualification | not run |
-| Terminal | complete clean-HEAD ladder and post-finish checks | not run |
+| Bootstrap | `bash tests/clp001_r1_contracts.sh baseline` | 15 intended gaps reproduced by `TASK-000024` |
+| Unit/static | workspace format, Clippy, and tests | pass; 79 Rust tests |
+| Integration | source/package contract and semantic fixtures | pass; 28 probes on each CLI surface |
+| Audit | five named current semantic/freshness checks | pass with zero unknown required coverage |
+| Release | installer safety and full release qualification | pass on Linux `x86_64` |
+| Terminal | complete clean-HEAD ladder and post-finish checks | owned by `TASK-000028` durable evidence |

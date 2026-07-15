@@ -1988,9 +1988,44 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   post-finish read-only task status, doctor, audit and Git status checks prove
   closure without further repository mutation.
 
+### 2026-07-15 — Correct closure gaps discovered by the CLP-001-R1 audit
+
+- Author/agent: Codex tasks `TASK-000024..28`, following independent audit
+  `TASK-000022` and the user's explicit approval of every remediation gate.
+- Historical correction: the earlier CL-71 closure remains an accurate record
+  of its observed release qualification and durable reconciliation. A later
+  contract audit found that the documented minimal lifecycle path, recursive
+  packet/capsule projection, and semantic audit coverage were not yet literal
+  implementation contracts. This amendment records the later correction; it
+  does not rewrite prior tasks, traces, proofs, approvals, dispositions, or
+  recovery databases.
+- Lifecycle contract: CLI `0.1.12` accepts conservative typed
+  `behavior-bearing=auto`, returns complete start/status gates and
+  remediation, renders stable JSON errors, and allows `task finish` to select
+  exactly one qualifying rooted trace while preserving explicit selection for
+  recovery.
+- Portable memory: canonical migration `013-portable-memory-projection.sql`
+  adds observed portable task summaries. Safe recursive discovery treats each
+  packet as one identity with a sorted component checksum, validates nested v1
+  and v2 capsules, rejects unsafe/ambiguous inputs, reports actual schema `13`,
+  and performs backup-first validated atomic apply.
+- Audit truth: five named versioned checks replace broad release-observation
+  inference. Required non-pass or stale results are `fail`/`unknown`; strict
+  audit clears only from current complete proof with counts and provenance.
+- Truthful reconciliation: CL-01 now has a canonical current story artifact;
+  CL-72 and current evidence link all retained CLP-001 stories without
+  fabricating historical execution. Approved dispositions `#1` and `#2`
+  remain visible and effective.
+- Qualification and rollback: `TASK-000028` owns the final clean-HEAD ladder,
+  detailed trace, CLI-rendered v2 capsule, atomic finish, and post-finish
+  read-only checks on Linux `x86_64`. Roll back code, packaged CLI, migration,
+  tests, and docs coherently; restore retained state only backup-first with the
+  matching prior binary. Preserve all lifecycle evidence and the N+2
+  compatibility window.
+
 ## 29. Immediate next action
 
-Preserve the fully closed CLP-001 evidence and observe the N+2 compatibility
-window. Any new platform, early compatibility removal, disposition revocation,
-or lifecycle invariant change requires a separately approved story and proof
-plan.
+Preserve the fully closed CLP-001 and CLP-001-R1 evidence and observe the N+2
+compatibility window. Any new platform, early compatibility removal,
+disposition revocation, or lifecycle invariant change requires a separately
+approved story and proof plan.

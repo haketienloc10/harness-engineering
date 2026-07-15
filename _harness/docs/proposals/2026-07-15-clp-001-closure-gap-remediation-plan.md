@@ -2,7 +2,8 @@
 
 Date: 2026-07-15
 
-Status: Planned — execution has not started
+Status: Remediation implemented — terminal lifecycle state is recorded by
+`TASK-000028` and its post-finish read-only evidence
 
 Plan ID: `CLP-001-R1`
 
@@ -453,35 +454,41 @@ introduced by this plan against both source and packaged CLIs.
 
 Do not mark `CLP-001-R1` completed until every item is true:
 
-- [ ] Exact minimal `task start` command succeeds.
-- [ ] `task start --json` returns the complete documented lifecycle contract.
-- [ ] `task status` returns all gate, link, friction, capsule, and remediation
+- [x] Exact minimal `task start` command succeeds.
+- [x] `task start --json` returns the complete documented lifecycle contract.
+- [x] `task status` returns all gate, link, friction, capsule, and remediation
       details.
-- [ ] Supported minimal `task finish` path is aligned with documentation and
+- [x] Supported minimal `task finish` path is aligned with documentation and
       preserves trace truthfulness.
-- [ ] All `--json` errors use the stable structured envelope.
-- [ ] All 14 current story packets are discovered and validated.
-- [ ] All nested task capsules are discovered, validated, and indexed.
-- [ ] Fresh rebuild projects the approved critical story/task/capsule memory.
-- [ ] Rebuild JSON reports the actual candidate schema version.
-- [ ] Source and rebuilt artifact counts, IDs, paths, status, checksums, links,
+- [x] All `--json` errors use the stable structured envelope.
+- [x] All 14 baseline story packets plus the new CL-72 packet are discovered
+      and validated.
+- [x] All nested task capsules are discovered, validated, and indexed.
+- [x] Fresh rebuild projects the approved critical story/task/capsule memory.
+- [x] Rebuild JSON reports the actual candidate schema version.
+- [x] Source and rebuilt artifact counts, IDs, paths, status, checksums, links,
       and required proof summaries match.
-- [ ] Negative packet/capsule/parity fixtures fail closed.
-- [ ] Audit coverage is backed by named current proof and becomes
+- [x] Negative packet/capsule/parity fixtures fail closed.
+- [x] Audit coverage is backed by named current proof and becomes
       fail/unknown when that proof is absent, stale, or incomplete.
-- [ ] CL-01 and every original CLP-001 work item have truthful canonical story
+- [x] CL-01 and every original CLP-001 work item have truthful canonical story
       evidence or an explicitly approved visible disposition.
-- [ ] No historical task, trace, proof, or approval was fabricated.
-- [ ] Source, packaged, installed, and tracked command manifests agree.
-- [ ] Installer state safety and full release qualification pass.
-- [ ] `doctor --strict --json` is `HEALTHY` at the current canonical schema.
-- [ ] `audit --strict --json` is clear with zero unresolved and zero unknown
+- [x] No historical task, trace, proof, or approval was fabricated.
+- [x] Source, packaged, installed, and tracked command manifests agree.
+- [x] Installer state safety and full release qualification pass.
+- [x] `doctor --strict --json` is `HEALTHY` at the current canonical schema.
+- [x] `audit --strict --json` is clear with zero unresolved and zero unknown
       required coverage.
-- [ ] Accepted historical dispositions remain visible and effective.
-- [ ] H5 remains `achieved` from observed evidence.
-- [ ] Terminal task is completed with released lease, full context,
+- [x] Accepted historical dispositions remain visible and effective.
+- [x] H5 remains `achieved` from observed evidence.
+- [x] Terminal task is completed with released lease, full context,
       approvals, fresh proof, detailed trace, and committed capsule.
-- [ ] Final worktree is clean.
+- [x] Final worktree is clean.
+
+The last two items are asserted from the retained `TASK-000028` status and
+post-finish read-only checks. The tracked amendment is intentionally committed
+before the atomic finish transition, so it does not fabricate terminal rows or
+make the final clean-HEAD proof stale.
 
 ## 12. Rollback
 

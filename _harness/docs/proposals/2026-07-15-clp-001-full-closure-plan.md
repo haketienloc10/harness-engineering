@@ -364,3 +364,38 @@ Suggested instruction for the next session:
 > sequentially. Start with the required command-first lifecycle task, stop for
 > every listed human gate, do not fabricate historical records, use structured
 > proof runs, and do not finish until the terminal acceptance checklist passes.
+
+## 13. Corrective Amendment — CLP-001-R1
+
+The `Fully closed` history above remains preserved. Independent audit
+`TASK-000022` later found three literal closure gaps: the documented minimal
+`task start/status/finish` path did not match the CLI contract; recursive
+semantic memory skipped packet stories and nested capsules; and strict audit
+inferred semantic coverage from a broad release observation. The approved
+`CLP-001-R1` remediation closed those gaps through tasks `TASK-000024..28`.
+
+Current correction evidence:
+
+- CLI `0.1.12` implements typed conservative `behavior-bearing=auto`, complete
+  lifecycle results/remediation, stable JSON errors, and truthful exactly-one
+  trace auto-selection for minimal finish.
+- Canonical schema `13` and the portable projection rebuild recursive packet
+  stories and nested v1/v2 capsules from deterministic safe discovery, with
+  actual-schema reporting, complete parity metadata, and backup-first atomic
+  retained apply.
+- Five named current audit checks cover Markdown/DB fields, path-scoped proof
+  freshness, generated matrix/CLI payload parity, semantic memory parity, and
+  operational telemetry. Missing, failed, incomplete, or stale evidence no
+  longer counts as covered.
+- CL-01 and CL-72 provide truthful current canonical evidence while all
+  historical lifecycle records and the two approved dispositions remain
+  unchanged and visible.
+- `TASK-000028` owns the clean-HEAD terminal proof, detailed rooted trace,
+  CLI-rendered capsule, atomic finish, and post-finish read-only task, doctor,
+  audit, memory, capsule, and Git checks on Linux `x86_64`.
+
+Rollback must revert source, packaged binary, migration, tests, and documents
+as a coherent unit and restore retained state only from a validated backup with
+the matching prior binary. Preserve all task/proof/trace/approval/disposition/
+friction/capsule evidence. The existing N+2 compatibility obligation and
+platform boundary are unchanged.

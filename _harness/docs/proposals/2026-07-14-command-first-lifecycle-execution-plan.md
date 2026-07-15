@@ -2,8 +2,9 @@
 
 Date: 2026-07-14
 
-Status: Approved for phased implementation through CL-22; later phases remain
-dependency-gated and require their own ready evidence
+Status: In implementation. The 2026-07-15 evidence audit records 15 of 22 work
+items completed, 5 in progress, with CL-11 and CL-70 blocked. Release
+qualification has not started.
 
 Plan ID: `CLP-001`
 
@@ -13,13 +14,28 @@ Plan ID: `CLP-001`
 | --- | --- | --- |
 | CL-00 | completed | Recovery snapshot was verified without changing the original DB; see `docs/stories/CL-00-freeze-recover-baseline.md`. Case B is accepted in `docs/decisions/0010-main-schema-lineage-without-symphony.md`. |
 | CL-01 | completed | Required decisions are accepted in `docs/decisions/0010..0016`. CL-10 may begin; migration numbering remains frozen until its schema manifest is in place. |
-| CL-10 | completed | Main-lineage manifest `001..006`, read-only doctor, provenance and negative fixtures passed; source doctor correctly rejects the retained DB `001..008` as ahead. See `docs/stories/CL-10-doctor-and-schema-manifest.md`. |
-| CL-13 | completed | Root `AGENTS.md` is now the canonical shared policy source; installer byte-parity and packaged-command checks are in `tests/installer_state_safety.sh`. |
+| CL-10 | completed | Main-lineage manifest `001..006`, read-only doctor, provenance and negative fixtures passed; at CL-10 acceptance time source `006` correctly rejected the retained DB `008` as ahead. See `docs/stories/CL-10-doctor-and-schema-manifest.md`. |
+| CL-11 | blocked | Retained version-`008` DB also lacks the canonical `task` table. It is foreign/incomplete for main lineage and must not be backfilled into health without a reviewed recovery direction. |
+| CL-12 | completed | Read-only SQL boundary and mutation corpus remain covered. |
+| CL-13 | completed | Root `AGENTS.md` is the canonical shared policy source; installer state-safety coverage remains, while the current later command-parity regression is owned by reopened CL-60. |
 | CL-20 | completed | Shadow mode, canonical flag aliases and typed lane/phase context policy are validated from `_harness/workflow.toml`. |
 | CL-21 | completed | Pure checksummed context compiler, shared scoring path and 53 Rust tests passed; persistence/acknowledgement ownership moved to CL-40/41 by amendment. |
-| CL-22 | completed | `workflow parity` validates accepted classification/context cases, command-manifest parity and the explicit delta disposition; packaged binary and installer fixtures pass. |
+| CL-22 | completed | The parity gate validates accepted classification/context cases and explicit deltas; it now correctly detects the later packaged-command drift owned by reopened CL-60. |
+| CL-30 | completed | Versioned artifact schemas and index validation are implemented. |
+| CL-31 | completed | Deterministic temporary rebuild, projection and safe apply are proven. |
+| CL-32 | completed | Capsule renderer, checksum, redaction and collision/orphan checks are proven. |
+| CL-40 | completed | Task root schema and transition constraints are implemented. |
+| CL-41 | in_progress | Core task operations work; session/lease identity remains deferred. |
+| CL-42 | in_progress | Structured proof works; branch/output provenance and artifact-scoped freshness remain. |
+| CL-43 | in_progress | Closure implementation is proven, but its story and dependencies CL-41/42 are not complete. |
+| CL-50 | completed | Installed `AGENTS.md` is compact and command-first. |
+| CL-51 | completed | Progressive story template owns the supported authoring surface. |
+| CL-52 | completed | Runtime workflow no longer depends on source-only policy docs. |
+| CL-60 | in_progress | Reopened because the packaged CLI omits the friction commands and installer parity fails. |
+| CL-61 | in_progress | Outcome-derived maturity report and observation evidence remain; exit is also gated by CL-60. |
+| CL-70 | blocked | All prior work, release environments and observation evidence are not yet complete. |
 
-Baseline:
+Original approved baseline (historical, not current runtime state):
 
 - Repository: `harness-engineering`
 - Branch: `main`
@@ -1623,7 +1639,7 @@ Agents update this table only after evidence exists.
 | CL-00 Freeze/export | completed | none | `docs/stories/CL-00-freeze-recover-baseline.md` | Preserve recovery snapshot |
 | CL-01 ADRs | completed | CL-00 | `docs/decisions/0010..0016` | Continue CL-10 |
 | CL-10 Doctor | completed | CL-01 | `docs/stories/CL-10-doctor-and-schema-manifest.md`; 40 CLI tests plus installer syntax checks | Start CL-11 |
-| CL-11 Ensure/migrate | completed | CL-10 | `docs/stories/CL-11-ensure-safe-migration.md`; 45 CLI tests, installer syntax and actual ahead-DB exit `3` | Start CL-12 |
+| CL-11 Ensure/migrate | blocked | CL-10 | Restored DB `008` lacks canonical `task`; doctor rejects it as `SCHEMA_CONTRACT_MISSING:task` rather than allowing metadata backfill to mask the mismatch | Human review must select foreign-DB rebuild/recovery or an explicitly approved schema-reconciliation design |
 | CL-12 Read-only SQL | completed | CL-10 | `docs/stories/CL-12-read-only-sql-boundary.md`; 46 CLI tests | Start CL-13 |
 | CL-13 Installer safety | completed | CL-10 | `docs/stories/CL-13-installer-state-safety.md`; installer black-box smoke passed | Start CL-20 |
 | CL-20 workflow.toml | completed | Phase 1 | `docs/stories/CL-20-typed-workflow-policy.md`; typed config, CLI and 53 tests | Start CL-21 |
@@ -1632,15 +1648,15 @@ Agents update this table only after evidence exists.
 | CL-30 Artifact schemas | completed | CL-22 | Migration 007, legacy/v1 read-only artifact checks, duplicate/reference fixtures, 56 Rust tests and installer proof | Start CL-31 |
 | CL-31 Memory rebuild | completed | CL-30 | Typed temporary rebuild, artifact/story/decision projection, logical digest, conflict gate and explicit safe apply are proven | Start CL-32 |
 | CL-32 Capsule renderer | completed | CL-30 | Versioned renderer/parser, checksum, redaction, collision refusal and orphan detection are proven | Start CL-40 |
-| CL-40 Task schema | completed | Phase 3 | Transition graph and terminal SQLite constraints are tested; the retained DB remains rejected as ahead of source | CL-41 may use the validated root |
+| CL-40 Task schema | completed | Phase 3 | Transition graph and terminal SQLite constraints are tested; current retained DB health is tracked by reopened CL-11 | CL-41 may use the validated root after safe preflight is restored |
 | CL-41 Task start/status | in_progress | CL-40 | Atomic start, policy lane/context, acknowledgement, approval, explicit refresh, owner enforcement/handoff and primary/secondary story links are fixture-tested | Add session/lease identity |
 | CL-42 Proof run | in_progress | CL-40 | Structured `proof run/query` append/expose executable+argv, pass/fail, HEAD and dirty fingerprint; status compares freshness | Add branch/output provenance, artifact-scoped freshness and remove direct boolean normal path |
-| CL-43 Task finish | completed | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery, terminal doctor invariants and normal/high-risk gates are unit-proven | CL-50/CL-60 may begin |
+| CL-43 Task finish | in_progress | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery and completion gates are implemented; story status remains open while CL-41/42 contracts are incomplete | Close CL-41/42, then rerun the final Phase 4 matrix |
 | CL-50 Compact AGENTS | completed | CL-43 | Canonical/install shared `AGENTS.md` is command-first only and installer byte parity passed | CL-51/CL-60 may begin |
 | CL-51 Templates | completed | CL-43 | Progressive story template owns high-risk expansion, validation and rollback; compatibility templates are deprecated; policy/parity and installer checks pass | CL-52 may begin |
 | CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
-| CL-60 Structured friction | completed | CL-43 | Migration 009, `friction add/resolve/query`, deterministic fingerprint and terminal task gate are unit/black-box proven | CL-61 may begin |
-| CL-61 Maturity | in_progress | CL-60 | Audit now exposes unobserved material friction and explicit coverage scope; measured multi-improvement maturity threshold remains | Add outcome-derived maturity report |
+| CL-60 Structured friction | in_progress | CL-43 | Source implementation and 63 tests pass, but packaged CLI omits all `friction` commands, packaged parity/installer black-box fails, and format check fails | Format, rebuild packaged CLI, then rerun parity and installer proof |
+| CL-61 Maturity | in_progress | CL-60 | Audit exposes unobserved material friction and explicit coverage scope; measured multi-improvement maturity threshold remains and CL-60 parity is open | Restore CL-60, then add outcome-derived maturity report |
 | CL-70 Release proof | blocked | all prior | — | — |
 
 ## 27. Definition of done cho plan
@@ -1722,11 +1738,60 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   Rollback removes the new shadow/compiler surfaces without mutating task or
   database state; repository identity is preserved once published.
 
+### 2026-07-15 — Reconcile recorded progress with current HEAD evidence
+
+- Author/agent: Codex, requested by the current user instruction.
+- Affected work items: CL-11, CL-41, CL-42, CL-43, CL-60, CL-61 and CL-70.
+- Old assumption: historical unit/fixture evidence and progress-table claims
+  continued to represent the packaged CLI, retained DB and dependent story
+  states at current HEAD.
+- New evidence: `cargo test --workspace` passes 63 tests and workspace Clippy
+  passes, but `cargo fmt --all -- --check` fails. Source workflow parity passes;
+  packaged parity and `tests/installer_state_safety.sh` fail because the
+  packaged command surface omits all four `friction` entries. `doctor` reports
+  source `001..009` and retained DB `001..008`; both packaged and source
+  `migrate` fail with `sqlite error: no such table: migration_history`. CL-43's
+  story remains `in_progress`, CL-41/42 retain explicit gaps, and no
+  `docs/tasks/` capsules or CL-70 observation set exists.
+- Decision/approval reference: no architecture decision changed. This
+  amendment applies the existing fail-closed, dependency and evidence rules.
+- Status correction: CL-11 and CL-60 are reopened; CL-43 is corrected to
+  `in_progress`; CL-41, CL-42 and CL-61 remain `in_progress`; CL-70 remains
+  blocked. Downstream source work already present is not discarded, but its
+  phase/release exit remains dependency-gated.
+- Validation and rollback impact: do not edit the retained DB with manual SQL.
+  Fix CL-11 using backup-first application code and regression fixtures. Rebuild
+  the packaged CLI only from the formatted, tested source revision. This is a
+  documentation-only status amendment and can be rolled back by reverting its
+  Markdown changes; the underlying regressions would remain.
+
+### 2026-07-15 — Retained `008` schema contract mismatch
+
+- Affected work items: CL-11 and all dependent lifecycle/release work.
+- Evidence: after restoring the backup-first retained DB, its
+  `schema_version` is `001..008`, but it has no canonical `task` table required
+  by main migration `006-command-first-foundation.sql`. A prior experimental
+  `migration_history`/lineage backfill made that mismatch appear healthy; it
+  was restored immediately and doctor now fails closed with
+  `SCHEMA_CONTRACT_MISSING:task`.
+- Consequence: version numbers and a backfilled checksum ledger do not prove
+  main-lineage schema compatibility. CL-11 is blocked pending a human decision;
+  no normal lifecycle command may write this DB.
+- Required direction: either retain the DB as foreign recovery evidence and
+  rebuild/import a canonical main-lineage DB, consistent with ADR 0010 Case B,
+  or approve a separately designed, tested reconciliation migration. The latter
+  changes migration semantics and requires explicit architecture review.
+
 ## 29. Immediate next action
 
-Start `CL-22 policy parity and drift gate` from
-`docs/stories/CL-22-policy-parity-and-drift-gate.md`. Keep config in shadow
-mode, parse the prepared policy fixture, and resolve or explicitly disposition
-the `one-flag-code-impact` delta before authority cutover. The retained
-`harness.db` must remain rejected as `DB_AHEAD_OF_SOURCE`; CL-22 uses pure
-workflow commands and temporary test databases only.
+Obtain human review for the retained foreign/incomplete DB before continuing
+CL-11. The safe default, consistent with ADR 0010 Case B, is to retain it as
+recovery evidence and rebuild/import a canonical main-lineage DB. Do not
+backfill its metadata, migrate it in place, or start normal lifecycle commands
+until the recovery direction is accepted.
+
+After CL-11 closes, restore CL-60 delivery parity by formatting the source,
+rebuilding `_harness/bin/harness-cli` from the same revision and rerunning unit,
+Clippy, workflow-command parity and `tests/installer_state_safety.sh`. Then
+finish CL-41 and CL-42 before closing CL-43; complete CL-61 observation evidence
+before starting CL-70.

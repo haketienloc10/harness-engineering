@@ -33,12 +33,16 @@ docs/stories/epics/E02-risky-domain/US-012-risky-story-title/
 
 ## Status Flow
 
+New command-first stories use the canonical template vocabulary:
+
 ```text
-planned -> in_progress -> implemented
-                  |
-                  v
-               changed
-                  |
-                  v
-               retired
+planned -> in_progress -> completed
+              |  ^
+              v  |
+            blocked
 ```
+
+Existing legacy stories with `implemented`, `changed` or `retired` remain
+read-compatible during the compatibility window, but new or updated stories
+must use `planned`, `in_progress`, `completed` or `blocked` from
+`_harness/templates/story.md`.

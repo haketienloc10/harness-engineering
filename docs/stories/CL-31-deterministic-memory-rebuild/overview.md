@@ -10,8 +10,10 @@ CL-30 can validate canonical artifacts but does not reconstruct SQLite state.
 project into a newly initialized temporary DB. A later explicit apply path may
 switch only after backup and validation.
 
-The explicit apply path is now available and fail-closed for an ahead/foreign
-database; it is not used against this repository's quarantine input.
+The explicit apply path is fail-closed for an ahead/foreign database by
+default. A reviewed recovery may add `--recover-foreign`; the command still
+requires a healthy rebuilt candidate, checkpoints and backs up the quarantine
+input, then atomically replaces the active DB.
 
 ## Status
 

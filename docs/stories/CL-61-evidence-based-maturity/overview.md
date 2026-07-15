@@ -7,3 +7,6 @@ in_progress
 Audit now reports material friction without an observed terminal outcome and
 prints its checked coverage. A zero debt count is explicitly scoped to those
 checks, not interpreted as perfect maturity.
+
+The reporting work remains `in_progress`, and its exit evidence is additionally
+gated by restoration of CL-60 packaged-command parity.

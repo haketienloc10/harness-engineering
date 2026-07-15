@@ -15,12 +15,12 @@ use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput,
-    DecisionVerifyResult, HarnessContext, InitResult, IntakeInput, InterventionAddInput,
-    InterventionFilter, MigrateResult, ProofRecord, ProofRunInput, ProofRunRecord, QueryTable,
-    StoryAddInput, StoryUpdateInput, StoryVerifyResult, TaskApprovalInput,
-    TaskContextAcknowledgeInput, TaskFinishInput, TaskFinishRecord, TaskHandoffInput,
-    TaskRefreshInput, TaskRefreshRecord, TaskStartInput, TaskStatusRecord, TaskStoryLinkInput, FrictionAddInput, FrictionResolveInput,
-    TaskTransitionInput, ToolRegisterInput, TraceInput,
+    DecisionVerifyResult, FrictionAddInput, FrictionResolveInput, HarnessContext, InitResult,
+    IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, ProofRecord,
+    ProofRunInput, ProofRunRecord, QueryTable, StoryAddInput, StoryUpdateInput, StoryVerifyResult,
+    TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput, TaskFinishRecord,
+    TaskHandoffInput, TaskRefreshInput, TaskRefreshRecord, TaskStartInput, TaskStatusRecord,
+    TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
@@ -693,7 +693,10 @@ fn validate_task_capsule(
 
 fn closure_nonce(task_id: &str, capsule_checksum: Option<&str>) -> String {
     let disposition = capsule_checksum.unwrap_or("non-material-tiny-v1");
-    format!("{:x}", Sha256::digest(format!("{task_id}\0{disposition}").as_bytes()))
+    format!(
+        "{:x}",
+        Sha256::digest(format!("{task_id}\0{disposition}").as_bytes())
+    )
 }
 
 fn stage_task_capsule(
@@ -703,16 +706,22 @@ fn stage_task_capsule(
     nonce: &str,
 ) -> Result<StagedCapsule> {
     let final_path = repo_root.join(&capsule.path);
-    let file_name = final_path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
-        HarnessInfraError::TaskFinishGate("capsule path has no valid file name".to_owned())
-    })?;
-    let staged_path = final_path.with_file_name(format!(".{file_name}.closing-{task_id}-{nonce}.tmp"));
+    let file_name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            HarnessInfraError::TaskFinishGate("capsule path has no valid file name".to_owned())
+        })?;
+    let staged_path =
+        final_path.with_file_name(format!(".{file_name}.closing-{task_id}-{nonce}.tmp"));
     fs::copy(&final_path, &staged_path)?;
     let staged_file = fs::File::open(&staged_path)?;
     staged_file.sync_all()?;
     let staged_relative = staged_path
         .strip_prefix(repo_root)
-        .map_err(|_| HarnessInfraError::TaskFinishGate("staged capsule escaped repository".to_owned()))?
+        .map_err(|_| {
+            HarnessInfraError::TaskFinishGate("staged capsule escaped repository".to_owned())
+        })?
         .to_string_lossy()
         .into_owned();
     if let Err(error) = validate_task_capsule(repo_root, &staged_relative, task_id) {
@@ -1482,6 +1491,16 @@ impl HarnessRepository for SqliteHarnessRepository {
         {
             findings.push("DB_MIGRATION_HISTORY_INVALID".to_owned());
         }
+        if db_versions.last().copied().unwrap_or(0) >= 6 {
+            let has_task: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task')",
+                [],
+                |row| row.get(0),
+            )?;
+            if !has_task {
+                findings.push("SCHEMA_CONTRACT_MISSING:task".to_owned());
+            }
+        }
         let has_meta: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='harness_meta')",
             [],
@@ -1498,7 +1517,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             if lineage.as_deref() != Some(expected_lineage.as_str()) {
                 findings.push("SCHEMA_LINEAGE_MISMATCH".to_owned());
             }
-        } else if db_versions.last() == source_versions.last() {
+        } else if db_versions.last().copied().unwrap_or(0) >= 6 {
             findings.push("SCHEMA_LINEAGE_UNRECORDED".to_owned());
         }
         let has_history: bool = connection.query_row(
@@ -1526,17 +1545,17 @@ impl HarnessRepository for SqliteHarnessRepository {
                     }
                 }
             }
-        } else if db_versions.last() == source_versions.last() {
+        } else if db_versions.last().copied().unwrap_or(0) >= 6 {
             findings.push("MIGRATION_HISTORY_UNRECORDED".to_owned());
         }
-        let code = if db_versions.last() > source_versions.last() {
+        let code = if !findings.is_empty() {
+            "DB_UNHEALTHY"
+        } else if db_versions.last() > source_versions.last() {
             "DB_AHEAD_OF_SOURCE"
         } else if db_versions.last() < source_versions.last() {
             "DB_BEHIND_SOURCE"
-        } else if findings.is_empty() {
-            "HEALTHY"
         } else {
-            "DB_UNHEALTHY"
+            "HEALTHY"
         };
         let remediation = match code {
             "DB_AHEAD_OF_SOURCE" => vec!["Do not downgrade or overwrite the database. Preserve it and use the reviewed rebuild/recovery path for its lineage.".to_owned()],
@@ -2094,7 +2113,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 ));
             }
             let nonce = match input.capsule_path.as_deref() {
-                Some(path) => closure_nonce(&input.id, Some(&validate_task_capsule(&self.repo_root, path, &input.id)?.checksum)),
+                Some(path) => closure_nonce(
+                    &input.id,
+                    Some(&validate_task_capsule(&self.repo_root, path, &input.id)?.checksum),
+                ),
                 None => closure_nonce(&input.id, None),
             };
             if stored_closure_nonce.as_deref() != Some(&nonce) {
@@ -2210,9 +2232,17 @@ impl HarnessRepository for SqliteHarnessRepository {
                 "final trace does not meet the task lane tier".to_owned(),
             ));
         }
-        let nonce = closure_nonce(&input.id, capsule.as_ref().map(|value| value.checksum.as_str()));
+        let nonce = closure_nonce(
+            &input.id,
+            capsule.as_ref().map(|value| value.checksum.as_str()),
+        );
         let staged_capsule = match capsule.as_ref() {
-            Some(capsule) => Some(stage_task_capsule(&self.repo_root, capsule, &input.id, &nonce)?),
+            Some(capsule) => Some(stage_task_capsule(
+                &self.repo_root,
+                capsule,
+                &input.id,
+                &nonce,
+            )?),
             None => None,
         };
         let mut connection = self.open_existing()?;
@@ -2226,22 +2256,22 @@ impl HarnessRepository for SqliteHarnessRepository {
                 fs::rename(&staged.staged_path, self.repo_root.join(&staged.final_path))?;
             }
             if let Some(capsule) = capsule {
-            transaction.execute(
+                transaction.execute(
                 "UPDATE task
                  SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
                      capsule_path=?2, capsule_checksum=?3, capsule_omission_reason=NULL, closure_nonce=?4
                  WHERE id=?1;",
                 params![input.id, capsule.path, capsule.checksum, nonce],
             )?;
-        } else {
-            transaction.execute(
+            } else {
+                transaction.execute(
                 "UPDATE task
                  SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
                      capsule_omission_reason='non-material tiny task; friction none', closure_nonce=?2
                  WHERE id=?1;",
                 params![input.id, nonce],
             )?;
-        }
+            }
             transaction.commit()?;
             Ok(())
         })();
@@ -3163,12 +3193,28 @@ impl HarnessRepository for SqliteHarnessRepository {
 
     fn add_friction(&self, input: FrictionAddInput) -> Result<String> {
         let report = self.doctor()?;
-        if !report.ok || report.code != "HEALTHY" { return Err(HarnessInfraError::UnsafeDurableState(report.code)); }
-        if !["low", "medium", "high", "critical"].contains(&input.severity.as_str())
-            || !["fixed-now", "backlog", "accepted-risk", "not-friction"].contains(&input.disposition.as_str()) {
-            return Err(HarnessInfraError::WorkflowInvalid("invalid friction severity or disposition".to_owned()));
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
         }
-        let fingerprint = format!("{:x}", Sha256::digest(format!("{}\0{}", input.category.trim().to_lowercase(), input.summary.trim().to_lowercase()).as_bytes()));
+        if !["low", "medium", "high", "critical"].contains(&input.severity.as_str())
+            || !["fixed-now", "backlog", "accepted-risk", "not-friction"]
+                .contains(&input.disposition.as_str())
+        {
+            return Err(HarnessInfraError::WorkflowInvalid(
+                "invalid friction severity or disposition".to_owned(),
+            ));
+        }
+        let fingerprint = format!(
+            "{:x}",
+            Sha256::digest(
+                format!(
+                    "{}\0{}",
+                    input.category.trim().to_lowercase(),
+                    input.summary.trim().to_lowercase()
+                )
+                .as_bytes()
+            )
+        );
         let connection = self.open_existing()?;
         connection.execute(
             "INSERT INTO friction (task_id, fingerprint, category, severity, summary, disposition, status, baseline, predicted_metric, observation_window)
@@ -3181,9 +3227,13 @@ impl HarnessRepository for SqliteHarnessRepository {
 
     fn resolve_friction(&self, input: FrictionResolveInput) -> Result<()> {
         let report = self.doctor()?;
-        if !report.ok || report.code != "HEALTHY" { return Err(HarnessInfraError::UnsafeDurableState(report.code)); }
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
         if !["validated", "ineffective", "reverted"].contains(&input.status.as_str()) {
-            return Err(HarnessInfraError::WorkflowInvalid("friction resolution must be validated, ineffective, or reverted".to_owned()));
+            return Err(HarnessInfraError::WorkflowInvalid(
+                "friction resolution must be validated, ineffective, or reverted".to_owned(),
+            ));
         }
         let connection = self.open_existing()?;
         if connection.execute("UPDATE friction SET status=?2, actual_outcome=?3, resolved_at=datetime('now') WHERE fingerprint=?1;", params![input.fingerprint, input.status, input.actual_outcome])? == 0 {
@@ -3343,8 +3393,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                  ORDER BY id;",
             )?,
             coverage: vec![
-                "stories/traces".to_owned(), "verification commands".to_owned(),
-                "backlog outcomes".to_owned(), "friction outcomes".to_owned(),
+                "stories/traces".to_owned(),
+                "verification commands".to_owned(),
+                "backlog outcomes".to_owned(),
+                "friction outcomes".to_owned(),
                 "registered tools".to_owned(),
             ],
         };
@@ -4776,8 +4828,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             repository.finish_task(TaskFinishInput {
-                id: id.clone(), owner: Some("codex".to_owned()), trace_id,
-                friction: "none".to_owned(), capsule_path: None,
+                id: id.clone(),
+                owner: Some("codex".to_owned()),
+                trace_id,
+                friction: "none".to_owned(),
+                capsule_path: None,
             }),
             Err(HarnessInfraError::TaskFinishGate(_))
         ));
@@ -4965,7 +5020,10 @@ mod tests {
             .unwrap();
         assert_eq!(saved.0.as_deref(), Some(capsule_path));
         assert_eq!(saved.1.as_deref(), Some(checksum.as_str()));
-        assert_eq!(saved.2.as_deref(), Some(closure_nonce(&id, Some(&checksum)).as_str()));
+        assert_eq!(
+            saved.2.as_deref(),
+            Some(closure_nonce(&id, Some(&checksum)).as_str())
+        );
         let staged = capsule_full_path.with_file_name(format!(
             ".TASK-000001-normal-fixture.md.closing-{id}-{}.tmp",
             closure_nonce(&id, Some(&checksum))
@@ -5374,6 +5432,27 @@ mod tests {
     }
 
     #[test]
+    fn doctor_rejects_a_claimed_command_first_version_without_task_schema() {
+        let (_temp_dir, repository) = doctor_repository();
+        let connection = repository.open_or_create().unwrap();
+        repository.apply_schema_v1(&connection).unwrap();
+        for version in 2..=8 {
+            connection
+                .execute("INSERT INTO schema_version(version) VALUES (?1)", [version])
+                .unwrap();
+        }
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "SCHEMA_CONTRACT_MISSING:task"));
+    }
+
+    #[test]
     fn migrate_applies_story_verify_columns_to_existing_database() {
         let (_temp_dir, repository) = doctor_repository();
         let connection = repository.open_or_create().unwrap();
@@ -5535,6 +5614,47 @@ mod tests {
 
         assert_eq!(result.current_version, 9);
         assert!(result.applied.is_empty());
+        assert!(!repository.repo_root.join("harness.db.backups").exists());
+    }
+
+    #[test]
+    fn ensure_refuses_a_claimed_main_version_without_provenance() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute("DELETE FROM schema_version WHERE version = 9", [])
+            .unwrap();
+        connection
+            .execute("DROP INDEX friction_task_status_idx", [])
+            .unwrap();
+        connection.execute("DROP TABLE friction", []).unwrap();
+        connection.execute("DROP TABLE harness_meta", []).unwrap();
+        connection
+            .execute("DROP TABLE migration_history", [])
+            .unwrap();
+        drop(connection);
+
+        let before = repository.doctor().unwrap();
+        assert_eq!(before.code, "DB_UNHEALTHY");
+        assert_eq!(before.db_versions, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(before
+            .findings
+            .iter()
+            .any(|finding| finding == "SCHEMA_LINEAGE_UNRECORDED"));
+        assert!(before
+            .findings
+            .iter()
+            .any(|finding| finding == "MIGRATION_HISTORY_UNRECORDED"));
+        let database_before = sha256_file(&repository.db_path).unwrap();
+
+        let result = repository.migrate();
+
+        assert!(matches!(
+            result,
+            Err(HarnessInfraError::UnsafeDurableState(code)) if code == "DB_UNHEALTHY"
+        ));
+        assert_eq!(sha256_file(&repository.db_path).unwrap(), database_before);
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
 

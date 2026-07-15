@@ -25,9 +25,16 @@ temporary database is created. Legacy proof evidence is copied into
 new DB for inspection, but rejects absolute/traversal paths and any existing
 file. It is not a switch command and cannot overwrite `harness.db`.
 
-`memory rebuild --apply` is now the separate explicit switch path. It accepts
-only a `HEALTHY` or missing active DB, checkpoints and backs up an existing
-healthy DB, then atomically renames the validated rebuild. It rejects the
-retained foreign/ahead DB before any write; the quarantine hash was verified
-unchanged after that rejection. The fresh-target apply fixture passed doctor
+`memory rebuild --apply` is the separate explicit switch path. By default it
+accepts only a `HEALTHY` or missing active DB. A reviewed foreign recovery must
+also pass `--recover-foreign`; the command accepts only `DB_UNHEALTHY` or
+`DB_AHEAD_OF_SOURCE`, requires the rebuilt candidate to pass doctor, then
+checkpoints and backs up the quarantine DB before an atomic replacement.
+`DB_UNREADABLE` remains rejected. The fresh-target apply fixture passed doctor
 strict health.
+
+The reviewed 2026-07-15 recovery used `--apply --recover-foreign` against the
+quarantined version-`008` input. The command retained
+`harness.db.backups/rebuild-607656.db`, atomically installed a canonical
+version-`009` DB, and post-switch doctor, integrity and foreign-key checks
+passed. No foreign story or task link was projected.

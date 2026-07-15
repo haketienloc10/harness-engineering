@@ -1,6 +1,9 @@
 # CL-00 Freeze and Recover Current Durable Truth
 
-Status: review required
+Status: completed
+
+The required review is resolved by accepted decision 0010 and the approved
+2026-07-14 CL-22-unblock preparation recorded below.
 
 ## Contract
 

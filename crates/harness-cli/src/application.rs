@@ -30,13 +30,22 @@ pub struct IntakeInput {
 
 #[derive(Debug)]
 pub struct FrictionAddInput {
-    pub task_id: Option<String>, pub category: String, pub severity: String,
-    pub summary: String, pub disposition: String, pub baseline: Option<String>,
-    pub predicted_metric: Option<String>, pub observation_window: Option<String>,
+    pub task_id: Option<String>,
+    pub category: String,
+    pub severity: String,
+    pub summary: String,
+    pub disposition: String,
+    pub baseline: Option<String>,
+    pub predicted_metric: Option<String>,
+    pub observation_window: Option<String>,
 }
 
 #[derive(Debug)]
-pub struct FrictionResolveInput { pub fingerprint: String, pub status: String, pub actual_outcome: String }
+pub struct FrictionResolveInput {
+    pub fingerprint: String,
+    pub status: String,
+    pub actual_outcome: String,
+}
 
 #[derive(Debug)]
 pub struct TaskStartInput {
@@ -468,8 +477,15 @@ impl HarnessService {
         self.repository.query_friction()
     }
 
-    pub fn add_friction(&self, input: FrictionAddInput) -> crate::infrastructure::Result<String> { self.repository.add_friction(input) }
-    pub fn resolve_friction(&self, input: FrictionResolveInput) -> crate::infrastructure::Result<()> { self.repository.resolve_friction(input) }
+    pub fn add_friction(&self, input: FrictionAddInput) -> crate::infrastructure::Result<String> {
+        self.repository.add_friction(input)
+    }
+    pub fn resolve_friction(
+        &self,
+        input: FrictionResolveInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.resolve_friction(input)
+    }
 
     pub fn query_tools(
         &self,

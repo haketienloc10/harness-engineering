@@ -15,7 +15,7 @@ the `trace` table.
 | `created_at`       | TEXT    | Automatic                                       | SQLite `datetime('now')`. Do not set manually.                                                                                                                | `2026-05-27 09:24:37`                                                                     |
 | `task_summary`     | TEXT    | Yes                                             | One sentence, at least 10 characters, naming the outcome or attempted outcome.                                                                                | `Completed access-control story with validation proof`                                    |
 | `intake_id`        | INTEGER | Standard+ when an intake was recorded           | Integer id from the related `intake` row.                                                                                                                     | `36`                                                                                      |
-| `story_id`         | TEXT    | Standard+ when work maps to one story           | Story id from the `story` table. Use the main story when one trace covers several; list the rest in `notes`.                                                  | `US-004`                                                                                  |
+| `story_id`         | TEXT    | Standard+ when work maps to one story           | Story id from the `story` table. Use the main story when one trace covers several; list the rest in `notes`.                                                  | `US-003`                                                                                  |
 | `agent`            | TEXT    | Optional for minimal; Standard+ expected        | Short agent/tool name.                                                                                                                                        | `codex`                                                                                   |
 | `actions_taken`    | TEXT    | Standard+                                       | JSON array text. With the current CLI, pass a comma-separated list and the CLI stores JSON text.                                                              | `["read PHASE2.md","drafted TRACE_SPEC.md","updated HARNESS.md"]`                         |
 | `files_read`       | TEXT    | Standard+                                       | JSON array text of paths or command names. With the current CLI, pass a comma-separated list.                                                                 | `["PHASE2.md","_harness/HARNESS.md","_harness/bin/harness-cli query matrix"]` |
@@ -26,7 +26,7 @@ the `trace` table.
 | `duration_seconds` | INTEGER | Detailed when available                         | Positive integer estimate or measured duration. Leave null if unknown.                                                                                        | `1800`                                                                                    |
 | `token_estimate`   | INTEGER | Detailed when available                         | Positive integer estimate. Leave null if unknown.                                                                                                             | `24000`                                                                                   |
 | `harness_friction` | TEXT    | Standard+ when friction exists; Detailed always | Free text naming what was hard, missing, ambiguous, or repeated. Use `none` only when the agent actively checked and found no friction.                       | `Permission docs did not define delegated admin; recorded backlog follow-up.`             |
-| `notes`            | TEXT    | Optional                                        | Free text for review context that does not fit other fields.                                                                                                  | `Trace covers US-003, US-004, US-005, and US-006.`                                        |
+| `notes`            | TEXT    | Optional                                        | Free text for review context that does not fit other fields.                                                                                                  | `Trace covers US-002, US-003, and US-005.`                                                |
 
 ## Quality Tiers
 
@@ -165,7 +165,7 @@ _harness/bin/harness-cli trace \
 _harness/bin/harness-cli trace \
   --summary "Added trace specification and Harness reference" \
   --intake 36 \
-  --story US-004 \
+  --story US-003 \
   --agent codex \
   --outcome completed \
   --actions "read PHASE2.md,drafted TRACE_SPEC.md,updated HARNESS.md,ran rg checks" \

@@ -26,3 +26,9 @@ Packaged normal proof created a temporary normal task/story, acknowledged its
 three must-read paths, rendered a versioned capsule, ran proof after that Git
 change, recorded a standard trace, and completed with `--capsule`; the final
 capsule and fixture database were removed afterward.
+
+Required before completion: close CL-41 session/lease identity and CL-42
+branch/output provenance plus artifact-scoped freshness, then rerun the Phase 4
+completion matrix against those final contracts. The implementation proof
+above is retained, but it does not close dependencies that remain
+`in_progress`.

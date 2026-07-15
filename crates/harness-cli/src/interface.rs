@@ -9,11 +9,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
-    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, HarnessContext,
-    HarnessService, InitResult, IntakeInput, InterventionAddInput, InterventionFilter,
-    MigrateResult, ProofRunInput, QueryTable, StoryAddInput, StoryUpdateInput, TaskApprovalInput,
-    TaskContextAcknowledgeInput, TaskFinishInput, TaskHandoffInput, TaskRefreshInput,
-    TaskStartInput, TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput, TraceInput, FrictionAddInput, FrictionResolveInput,
+    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, FrictionAddInput,
+    FrictionResolveInput, HarnessContext, HarnessService, InitResult, IntakeInput,
+    InterventionAddInput, InterventionFilter, MigrateResult, ProofRunInput, QueryTable,
+    StoryAddInput, StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput,
+    TaskFinishInput, TaskHandoffInput, TaskRefreshInput, TaskStartInput, TaskStoryLinkInput,
+    TaskTransitionInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -249,11 +250,42 @@ struct ProofArgs {
 }
 
 #[derive(Args, Debug)]
-struct FrictionArgs { #[command(subcommand)] action: FrictionAction }
+struct FrictionArgs {
+    #[command(subcommand)]
+    action: FrictionAction,
+}
 #[derive(Subcommand, Debug)]
 enum FrictionAction {
-    Add { #[arg(long)] task: Option<String>, #[arg(long)] category: String, #[arg(long)] severity: String, #[arg(long)] summary: String, #[arg(long)] disposition: String, #[arg(long)] baseline: Option<String>, #[arg(long = "predicted-metric")] predicted_metric: Option<String>, #[arg(long = "observation-window")] observation_window: Option<String>, #[arg(long)] json: bool },
-    Resolve { #[arg(long)] fingerprint: String, #[arg(long)] status: String, #[arg(long = "actual-outcome")] actual_outcome: String, #[arg(long)] json: bool },
+    Add {
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        category: String,
+        #[arg(long)]
+        severity: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        disposition: String,
+        #[arg(long)]
+        baseline: Option<String>,
+        #[arg(long = "predicted-metric")]
+        predicted_metric: Option<String>,
+        #[arg(long = "observation-window")]
+        observation_window: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Resolve {
+        #[arg(long)]
+        fingerprint: String,
+        #[arg(long)]
+        status: String,
+        #[arg(long = "actual-outcome")]
+        actual_outcome: String,
+        #[arg(long)]
+        json: bool,
+    },
     Query,
 }
 
@@ -565,6 +597,9 @@ enum MemoryAction {
         /// Replace the active DB only after a validated rebuild and backup.
         #[arg(long)]
         apply: bool,
+        /// Replace a foreign/unhealthy active DB after validation and backup.
+        #[arg(long, requires = "apply")]
+        recover_foreign: bool,
         /// Keep the validated rebuilt database at this new repository-relative path.
         #[arg(long)]
         output: Option<String>,
@@ -1362,6 +1397,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             MemoryAction::Rebuild {
                 dry_run,
                 apply,
+                recover_foreign,
                 output,
                 json,
             } => {
@@ -1377,9 +1413,9 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 }
                 if apply {
                     let active_report = service.doctor()?;
-                    if !matches!(active_report.code.as_str(), "HEALTHY" | "DB_MISSING") {
+                    if !rebuild_apply_state_allowed(&active_report.code, recover_foreign) {
                         return Err(InterfaceError::WorkflowParity(format!(
-                            "memory rebuild --apply refused active DB state {}; use recovery guidance",
+                            "memory rebuild --apply refused active DB state {}; use --recover-foreign only for a reviewed foreign/unhealthy recovery",
                             active_report.code
                         )));
                     }
@@ -1423,6 +1459,15 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     project_artifact_index(&temporary, &repo_root, &artifacts.checked)?;
                 let logical_digest = rebuild_logical_digest(&temporary)?;
                 let report = rebuild.doctor()?;
+                if !report.ok {
+                    let _ = fs::remove_file(&temporary);
+                    let _ = fs::remove_file(format!("{}-wal", temporary.display()));
+                    let _ = fs::remove_file(format!("{}-shm", temporary.display()));
+                    return Err(InterfaceError::WorkflowParity(format!(
+                        "memory rebuild candidate failed doctor with {}; active DB was not replaced",
+                        report.code
+                    )));
+                }
                 checkpoint_rebuild_database(&temporary)?;
                 let output_path = if apply {
                     if active_db_path.exists() {
@@ -1470,9 +1515,6 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     println!("{{\"ok\":{},\"mode\":\"{}\",\"artifacts_checked\":{},\"temp_schema_version\":{},\"doctor\":\"{}\",\"projected_records\":{},\"logical_digest\":\"{}\",\"output\":\"{}\"}}", report.ok, if apply { "apply" } else { "dry_run" }, artifacts.checked.len(), match init { InitResult::Created { .. } => 7, InitResult::Existing { version, .. } => version, InitResult::MigratedExisting { .. } => 7 }, json_escape(&report.code), projected_records, logical_digest, json_escape(&output_path));
                 } else {
                     println!("rebuild dry-run: {} artifacts validated; temporary database doctor={}; projected records={projected_records}; logical digest={logical_digest}", artifacts.checked.len(), report.code);
-                }
-                if !report.ok {
-                    std::process::exit(6);
                 }
             }
             MemoryAction::Capsule(args) => match args.action {
@@ -1922,8 +1964,14 @@ fn print_audit(result: &crate::domain::AuditResult) {
     );
     print_audit_category("Stale stories", &result.stale_stories);
     print_audit_category("Broken tools", &result.broken_tools);
-    print_audit_category("Material friction without observed outcome", &result.friction_without_outcomes);
-    println!("Coverage checked: {}. Zero findings means no debt in these checks only.", result.coverage.join(", "));
+    print_audit_category(
+        "Material friction without observed outcome",
+        &result.friction_without_outcomes,
+    );
+    println!(
+        "Coverage checked: {}. Zero findings means no debt in these checks only.",
+        result.coverage.join(", ")
+    );
     println!(
         "Entropy score: {}/100 (lower is better)",
         result.entropy_score()
@@ -2399,6 +2447,11 @@ fn rebuild_logical_digest(database: &std::path::Path) -> Result<String, Interfac
         "{:x}",
         Sha256::digest(values.join("\n").as_bytes())
     ))
+}
+
+fn rebuild_apply_state_allowed(code: &str, recover_foreign: bool) -> bool {
+    matches!(code, "HEALTHY" | "DB_MISSING")
+        || (recover_foreign && matches!(code, "DB_UNHEALTHY" | "DB_AHEAD_OF_SOURCE"))
 }
 
 fn checkpoint_rebuild_database(database: &std::path::Path) -> Result<(), InterfaceError> {
@@ -3177,6 +3230,17 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn foreign_rebuild_requires_an_explicit_recovery_switch() {
+        assert!(rebuild_apply_state_allowed("HEALTHY", false));
+        assert!(rebuild_apply_state_allowed("DB_MISSING", false));
+        assert!(!rebuild_apply_state_allowed("DB_UNHEALTHY", false));
+        assert!(!rebuild_apply_state_allowed("DB_AHEAD_OF_SOURCE", false));
+        assert!(rebuild_apply_state_allowed("DB_UNHEALTHY", true));
+        assert!(rebuild_apply_state_allowed("DB_AHEAD_OF_SOURCE", true));
+        assert!(!rebuild_apply_state_allowed("DB_UNREADABLE", true));
     }
 
     #[test]

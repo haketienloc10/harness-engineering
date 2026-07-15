@@ -1,4 +1,7 @@
-# Spec Intake
+# Deprecated Compatibility Template: Spec Intake
+
+Use `_harness/templates/initiative.md` only for multi-story initiatives; normal
+work starts with `task start` and `_harness/templates/story.md`.
 
 Date: YYYY-MM-DD
 

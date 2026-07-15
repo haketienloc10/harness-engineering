@@ -17,7 +17,7 @@ Plan ID: `CLP-001`
 | CL-13 | completed | Root `AGENTS.md` is now the canonical shared policy source; installer byte-parity and packaged-command checks are in `tests/installer_state_safety.sh`. |
 | CL-20 | completed | Shadow mode, canonical flag aliases and typed lane/phase context policy are validated from `_harness/workflow.toml`. |
 | CL-21 | completed | Pure checksummed context compiler, shared scoring path and 53 Rust tests passed; persistence/acknowledgement ownership moved to CL-40/41 by amendment. |
-| CL-22 | ready | Story, policy comparison fixture, AGENTS shared source and compiled/tracked command manifest are prepared. |
+| CL-22 | completed | `workflow parity` validates accepted classification/context cases, command-manifest parity and the explicit delta disposition; packaged binary and installer fixtures pass. |
 
 Baseline:
 
@@ -1628,19 +1628,19 @@ Agents update this table only after evidence exists.
 | CL-13 Installer safety | completed | CL-10 | `docs/stories/CL-13-installer-state-safety.md`; installer black-box smoke passed | Start CL-20 |
 | CL-20 workflow.toml | completed | Phase 1 | `docs/stories/CL-20-typed-workflow-policy.md`; typed config, CLI and 53 tests | Start CL-21 |
 | CL-21 Context compiler | completed | CL-20 | `docs/stories/CL-21-context-compiler.md`; pure typed compiler and 53 tests | Persist with CL-40; acknowledge/refresh with CL-41 |
-| CL-22 Policy parity | ready | CL-21 | `docs/stories/CL-22-policy-parity-and-drift-gate.md`; canonical AGENTS source, policy cases and command manifest prepared | Implement shadow parity/drift gate |
-| CL-30 Artifact schemas | blocked | CL-22 | — | — |
-| CL-31 Memory rebuild | blocked | CL-30 | — | — |
-| CL-32 Capsule renderer | blocked | CL-30 | — | — |
-| CL-40 Task schema | blocked | Phase 3 | — | — |
-| CL-41 Task start/status | blocked | CL-40 | — | — |
-| CL-42 Proof run | blocked | CL-40 | — | — |
-| CL-43 Task finish | blocked | CL-41, CL-42, CL-32 | — | — |
-| CL-50 Compact AGENTS | blocked | CL-43 | — | — |
-| CL-51 Templates | blocked | CL-43 | — | — |
-| CL-52 Remove runtime docs | blocked | CL-50, CL-51 | — | — |
-| CL-60 Structured friction | blocked | CL-43 | — | — |
-| CL-61 Maturity | blocked | CL-60 | — | — |
+| CL-22 Policy parity | completed | CL-21 | `docs/stories/CL-22-policy-parity-and-drift-gate.md`; `workflow parity`, ADR 0017, 54 Rust tests and installer black-box proof | Start CL-30 |
+| CL-30 Artifact schemas | completed | CL-22 | Migration 007, legacy/v1 read-only artifact checks, duplicate/reference fixtures, 56 Rust tests and installer proof | Start CL-31 |
+| CL-31 Memory rebuild | completed | CL-30 | Typed temporary rebuild, artifact/story/decision projection, logical digest, conflict gate and explicit safe apply are proven | Start CL-32 |
+| CL-32 Capsule renderer | completed | CL-30 | Versioned renderer/parser, checksum, redaction, collision refusal and orphan detection are proven | Start CL-40 |
+| CL-40 Task schema | completed | Phase 3 | Transition graph and terminal SQLite constraints are tested; the retained DB remains rejected as ahead of source | CL-41 may use the validated root |
+| CL-41 Task start/status | in_progress | CL-40 | Atomic start, policy lane/context, acknowledgement, approval, explicit refresh, owner enforcement/handoff and primary/secondary story links are fixture-tested | Add session/lease identity |
+| CL-42 Proof run | in_progress | CL-40 | Structured `proof run/query` append/expose executable+argv, pass/fail, HEAD and dirty fingerprint; status compares freshness | Add branch/output provenance, artifact-scoped freshness and remove direct boolean normal path |
+| CL-43 Task finish | completed | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery, terminal doctor invariants and normal/high-risk gates are unit-proven | CL-50/CL-60 may begin |
+| CL-50 Compact AGENTS | completed | CL-43 | Canonical/install shared `AGENTS.md` is command-first only and installer byte parity passed | CL-51/CL-60 may begin |
+| CL-51 Templates | completed | CL-43 | Progressive story template owns high-risk expansion, validation and rollback; compatibility templates are deprecated; policy/parity and installer checks pass | CL-52 may begin |
+| CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
+| CL-60 Structured friction | completed | CL-43 | Migration 009, `friction add/resolve/query`, deterministic fingerprint and terminal task gate are unit/black-box proven | CL-61 may begin |
+| CL-61 Maturity | in_progress | CL-60 | Audit now exposes unobserved material friction and explicit coverage scope; measured multi-improvement maturity threshold remains | Add outcome-derived maturity report |
 | CL-70 Release proof | blocked | all prior | — | — |
 
 ## 27. Definition of done cho plan

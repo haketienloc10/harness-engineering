@@ -1,14 +1,19 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
+use rusqlite::{params, Connection};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, HarnessContext,
     HarnessService, InitResult, IntakeInput, InterventionAddInput, InterventionFilter,
-    MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput, ToolRegisterInput, TraceInput,
+    MigrateResult, ProofRunInput, QueryTable, StoryAddInput, StoryUpdateInput, TaskApprovalInput,
+    TaskContextAcknowledgeInput, TaskFinishInput, TaskHandoffInput, TaskRefreshInput,
+    TaskStartInput, TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput, TraceInput, FrictionAddInput, FrictionResolveInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
@@ -43,6 +48,14 @@ enum Command {
     Import(ImportArgs),
     /// Record a feature intake classification.
     Intake(IntakeArgs),
+    /// Start or inspect command-first lifecycle tasks.
+    Task(TaskArgs),
+    /// Run a structured proof command for a lifecycle task.
+    Proof(ProofArgs),
+    /// Record or resolve structured harness friction.
+    Friction(FrictionArgs),
+    /// Validate or inspect Git-tracked semantic artifacts without writing state.
+    Memory(MemoryArgs),
     /// Add or update a story.
     Story(StoryArgs),
     /// Add a decision or run its verification.
@@ -117,6 +130,69 @@ enum WorkflowAction {
         #[arg(long)]
         json: bool,
     },
+    /// Check the shadow policy against its tracked parity fixture and payload contracts.
+    Parity {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyParityFixture {
+    schema_version: u32,
+    source_policy: String,
+    #[serde(default)]
+    classification_cases: Vec<PolicyParityClassificationCase>,
+    #[serde(default)]
+    context_cases: Vec<PolicyParityContextCase>,
+    #[serde(default)]
+    intentional_deltas: Vec<PolicyParityDelta>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyParityClassificationCase {
+    id: String,
+    #[serde(default)]
+    flags: Vec<String>,
+    expected_lane: String,
+    comparison: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyParityContextCase {
+    id: String,
+    lane: String,
+    phase: String,
+    #[serde(default)]
+    paths: Vec<String>,
+    #[serde(default)]
+    flags: Vec<String>,
+    #[serde(default)]
+    must_include: Vec<String>,
+    #[serde(default)]
+    should_include: Vec<String>,
+    #[serde(default)]
+    skip_include: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyParityDelta {
+    id: String,
+    current_markdown: String,
+    shadow_behavior: String,
+    disposition: String,
+    decision: String,
+}
+
+#[derive(Debug, Default)]
+struct PolicyParityResult {
+    checked: Vec<String>,
+    deltas: Vec<String>,
+    failures: Vec<String>,
 }
 
 pub fn compiled_command_manifest() -> Vec<String> {
@@ -161,6 +237,222 @@ struct IntakeArgs {
 }
 
 #[derive(Args, Debug)]
+struct TaskArgs {
+    #[command(subcommand)]
+    action: TaskAction,
+}
+
+#[derive(Args, Debug)]
+struct ProofArgs {
+    #[command(subcommand)]
+    action: ProofAction,
+}
+
+#[derive(Args, Debug)]
+struct FrictionArgs { #[command(subcommand)] action: FrictionAction }
+#[derive(Subcommand, Debug)]
+enum FrictionAction {
+    Add { #[arg(long)] task: Option<String>, #[arg(long)] category: String, #[arg(long)] severity: String, #[arg(long)] summary: String, #[arg(long)] disposition: String, #[arg(long)] baseline: Option<String>, #[arg(long = "predicted-metric")] predicted_metric: Option<String>, #[arg(long = "observation-window")] observation_window: Option<String>, #[arg(long)] json: bool },
+    Resolve { #[arg(long)] fingerprint: String, #[arg(long)] status: String, #[arg(long = "actual-outcome")] actual_outcome: String, #[arg(long)] json: bool },
+    Query,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProofAction {
+    Run(ProofRunArgs),
+    Query {
+        #[arg(long = "task")]
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ProofRunArgs {
+    #[arg(long = "task")]
+    task_id: String,
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long)]
+    layer: String,
+    #[arg(last = true, required = true)]
+    command: Vec<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum TaskAction {
+    Start(TaskStartArgs),
+    Block(TaskBlockArgs),
+    Resume(TaskResumeArgs),
+    Abandon(TaskAbandonArgs),
+    Handoff(TaskHandoffArgs),
+    LinkStory(TaskLinkStoryArgs),
+    Finish(TaskFinishArgs),
+    Refresh(TaskRefreshArgs),
+    Context(TaskContextArgs),
+    Approve(TaskApproveArgs),
+    Status {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+struct TaskStartArgs {
+    #[arg(long = "type")]
+    input_type: String,
+    #[arg(long)]
+    summary: String,
+    #[arg(long, value_name = "tiny|normal|high-risk")]
+    lane: Option<String>,
+    #[arg(long)]
+    lane_reason: Option<String>,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long)]
+    flags: Option<String>,
+    #[arg(long, value_name = "yes|no")]
+    behavior_bearing: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskContextArgs {
+    #[command(subcommand)]
+    action: TaskContextAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum TaskContextAction {
+    Acknowledge {
+        #[arg(long)]
+        id: String,
+        #[arg(long = "read")]
+        path: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+struct TaskBlockArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskResumeArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskAbandonArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    outcome: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskHandoffArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long = "from")]
+    from_owner: String,
+    #[arg(long = "to")]
+    to_owner: String,
+    #[arg(long)]
+    source: String,
+    #[arg(long)]
+    evidence: String,
+    #[arg(long)]
+    scope: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskLinkStoryArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    story: String,
+    #[arg(long, value_name = "primary|secondary")]
+    role: String,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskFinishArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    owner: Option<String>,
+    #[arg(long)]
+    trace: String,
+    #[arg(long)]
+    outcome: String,
+    #[arg(long)]
+    friction: String,
+    #[arg(long)]
+    capsule: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskRefreshArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    accept: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct TaskApproveArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    gate: String,
+    #[arg(long)]
+    source: String,
+    #[arg(long)]
+    evidence: String,
+    #[arg(long)]
+    scope: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 struct ImportArgs {
     #[command(subcommand)]
     source: ImportSource,
@@ -195,6 +487,8 @@ enum StoryAction {
     },
     /// Verify every story, skipping stories without verify_command.
     VerifyAll,
+    /// Validate a tracked legacy or v1 story artifact without writing state.
+    Check(ArtifactCheckArgs),
 }
 
 #[derive(Args, Debug)]
@@ -242,7 +536,80 @@ struct DecisionArgs {
 #[derive(Subcommand, Debug)]
 enum DecisionAction {
     Add(DecisionAddArgs),
-    Verify { id: String },
+    Verify {
+        id: String,
+    },
+    /// Validate a tracked legacy or v1 decision artifact without writing state.
+    Check(ArtifactCheckArgs),
+}
+
+#[derive(Args, Debug)]
+struct MemoryArgs {
+    #[command(subcommand)]
+    action: MemoryAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum MemoryAction {
+    /// Validate all canonical artifacts; this command is always read-only in CL-30.
+    Check {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate artifacts and initialize an isolated temporary rebuild database.
+    Rebuild {
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace the active DB only after a validated rebuild and backup.
+        #[arg(long)]
+        apply: bool,
+        /// Keep the validated rebuilt database at this new repository-relative path.
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Render or inspect portable task capsules.
+    Capsule(CapsuleArgs),
+}
+
+#[derive(Args, Debug)]
+struct CapsuleArgs {
+    #[command(subcommand)]
+    action: CapsuleAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum CapsuleAction {
+    Render {
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        date: String,
+        #[arg(long, value_name = "tiny|normal|high-risk")]
+        lane: String,
+        #[arg(long)]
+        outcome: String,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Check {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+struct ArtifactCheckArgs {
+    /// Repository-relative path. Defaults to every artifact of this type.
+    #[arg(long)]
+    path: Option<String>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -514,10 +881,15 @@ pub enum InterfaceError {
     RepositoryRoot(String),
     #[error("query sql requires a SQL statement")]
     EmptySql,
+    #[error("workflow parity: {0}")]
+    WorkflowParity(String),
 }
 
 pub fn run(cli: Cli) -> Result<(), InterfaceError> {
-    let service = HarnessService::new(resolve_context()?);
+    let context = resolve_context()?;
+    let repo_root = context.repo_root.clone();
+    let active_db_path = context.db_path.clone();
+    let service = HarnessService::new(context);
 
     match cli.command {
         Command::Doctor(args) => {
@@ -676,6 +1048,33 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         }
                     }
                 }
+                WorkflowAction::Parity { json } => {
+                    let result =
+                        workflow_parity(&repo_root, &policy, &compiled_command_manifest())?;
+                    if json {
+                        println!(
+                            "{{\"ok\":{},\"code\":\"{}\",\"checked\":{},\"intentional_deltas\":{},\"failures\":{}}}",
+                            result.failures.is_empty(),
+                            if result.failures.is_empty() { "WORKFLOW_PARITY_OK" } else { "WORKFLOW_PARITY_DRIFT" },
+                            json_strings(&result.checked),
+                            json_strings(&result.deltas),
+                            json_strings(&result.failures),
+                        );
+                    } else {
+                        for check in &result.checked {
+                            println!("ok: {check}");
+                        }
+                        for delta in &result.deltas {
+                            println!("intentional delta: {delta}");
+                        }
+                        for failure in &result.failures {
+                            println!("drift: {failure}");
+                        }
+                    }
+                    if !result.failures.is_empty() {
+                        std::process::exit(6);
+                    }
+                }
             }
         }
         Command::Init => print_init_result(service.init()?),
@@ -697,6 +1096,420 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             })?;
             println!("Intake #{id} recorded.");
         }
+        Command::Task(args) => match args.action {
+            TaskAction::Start(args) => {
+                let id = service.start_task(TaskStartInput {
+                    input_type: InputType::from_str(&args.input_type)?,
+                    summary: args.summary,
+                    risk_lane: args.lane.as_deref().map(RiskLane::from_str).transpose()?,
+                    lane_override_reason: args.lane_reason,
+                    owner: args.owner,
+                    story_id: args.story,
+                    behavior_bearing: parse_behavior_bearing(&args.behavior_bearing)?,
+                    risk_flags: args
+                        .flags
+                        .as_deref()
+                        .map(|value| {
+                            value
+                                .split(',')
+                                .map(|item| item.trim().to_owned())
+                                .filter(|item| !item.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })?;
+                if args.json {
+                    println!(
+                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"in_progress\"}}",
+                        json_escape(&id)
+                    );
+                } else {
+                    println!("Task {id} started (in_progress).");
+                }
+            }
+            TaskAction::Status { id, json } => {
+                let task = service.task_status(&id)?;
+                if json {
+                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"dirty_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
+                } else {
+                    println!(
+                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, dirty-fresh={}",
+                        task.id,
+                        task.status,
+                        task.risk_lane,
+                        task.owner.as_deref().unwrap_or("<none>"),
+                        task.story_id.as_deref().unwrap_or("<none>"),
+                        task.allowed_next.join(", "),
+                        task.context_acknowledged,
+                        task.context_required,
+                        task.approvals,
+                        task.proof_runs,
+                        task.latest_proof_state.as_deref().unwrap_or("<none>"),
+                        task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
+                        task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
+                    );
+                }
+            }
+            TaskAction::Block(args) => {
+                let task = service.transition_task(TaskTransitionInput {
+                    id: args.id,
+                    status: "blocked".to_owned(),
+                    outcome: None,
+                    owner: args.owner,
+                })?;
+                print_task_transition(&task, args.json);
+            }
+            TaskAction::Resume(args) => {
+                let task = service.transition_task(TaskTransitionInput {
+                    id: args.id,
+                    status: "in_progress".to_owned(),
+                    outcome: None,
+                    owner: args.owner,
+                })?;
+                print_task_transition(&task, args.json);
+            }
+            TaskAction::Abandon(args) => {
+                let task = service.transition_task(TaskTransitionInput {
+                    id: args.id,
+                    status: "abandoned".to_owned(),
+                    outcome: Some(args.outcome),
+                    owner: args.owner,
+                })?;
+                print_task_transition(&task, args.json);
+            }
+            TaskAction::Handoff(args) => {
+                service.handoff_task(TaskHandoffInput {
+                    id: args.id,
+                    from_owner: args.from_owner,
+                    to_owner: args.to_owner,
+                    source: args.source,
+                    evidence: args.evidence,
+                    scope: args.scope,
+                })?;
+                if args.json {
+                    println!("{{\"ok\":true,\"handed_off\":true}}");
+                } else {
+                    println!("Task handoff recorded.");
+                }
+            }
+            TaskAction::LinkStory(args) => {
+                service.link_task_story(TaskStoryLinkInput {
+                    id: args.id,
+                    story_id: args.story,
+                    role: args.role,
+                    owner: args.owner,
+                })?;
+                if args.json {
+                    println!("{{\"ok\":true,\"linked\":true}}");
+                } else {
+                    println!("Task story link recorded.");
+                }
+            }
+            TaskAction::Finish(args) => {
+                if args.outcome != "completed" {
+                    return Err(InterfaceError::WorkflowParity(
+                        "task finish currently accepts only --outcome completed".to_owned(),
+                    ));
+                }
+                let trace_id = args.trace.parse::<i64>().map_err(|_| {
+                    InterfaceError::WorkflowParity(
+                        "task finish: --trace must be a numeric trace id".to_owned(),
+                    )
+                })?;
+                let finished = service.finish_task(TaskFinishInput {
+                    id: args.id,
+                    owner: args.owner,
+                    trace_id,
+                    friction: args.friction,
+                    capsule_path: args.capsule,
+                })?;
+                if args.json {
+                    println!(
+                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\"}}",
+                        json_escape(&finished.id),
+                        json_escape(&finished.status)
+                    );
+                } else {
+                    println!("Task {} completed.", finished.id);
+                }
+            }
+            TaskAction::Refresh(args) => {
+                let refresh = service.refresh_task(TaskRefreshInput {
+                    id: args.id,
+                    accept: args.accept,
+                })?;
+                if args.json {
+                    println!("{{\"ok\":{},\"task_id\":\"{}\",\"changed\":{},\"applied\":{},\"previous_checksum\":\"{}\",\"current_checksum\":\"{}\",\"changed_paths\":{}}}", !refresh.changed || refresh.applied, json_escape(&refresh.id), refresh.changed, refresh.applied, json_escape(&refresh.previous_checksum), json_escape(&refresh.current_checksum), json_strings(&refresh.changed_paths));
+                } else if refresh.changed {
+                    println!(
+                        "Task {} context changed: {}. Re-run with --accept to apply.",
+                        refresh.id,
+                        refresh.changed_paths.join(", ")
+                    );
+                } else {
+                    println!("Task {} context is current.", refresh.id);
+                }
+                if refresh.changed && !refresh.applied {
+                    std::process::exit(5);
+                }
+            }
+            TaskAction::Context(args) => match args.action {
+                TaskContextAction::Acknowledge {
+                    id,
+                    path,
+                    actor,
+                    json,
+                } => {
+                    service.acknowledge_task_context(TaskContextAcknowledgeInput {
+                        id,
+                        path,
+                        actor,
+                    })?;
+                    if json {
+                        println!("{{\"ok\":true,\"acknowledged\":true}}");
+                    } else {
+                        println!("Task context acknowledged.");
+                    }
+                }
+            },
+            TaskAction::Approve(args) => {
+                service.approve_task(TaskApprovalInput {
+                    id: args.id,
+                    gate: args.gate,
+                    source: args.source,
+                    evidence: args.evidence,
+                    scope: args.scope,
+                })?;
+                if args.json {
+                    println!("{{\"ok\":true,\"approved\":true}}");
+                } else {
+                    println!("Task approval recorded.");
+                }
+            }
+        },
+        Command::Proof(args) => match args.action {
+            ProofAction::Run(args) => {
+                let (executable, argv) =
+                    args.command
+                        .split_first()
+                        .ok_or(InterfaceError::WorkflowParity(
+                            "proof run requires a command after --".to_owned(),
+                        ))?;
+                let proof = service.run_proof(ProofRunInput {
+                    task_id: args.task_id,
+                    story_id: args.story,
+                    layer: args.layer,
+                    executable: executable.clone(),
+                    argv: argv.to_vec(),
+                })?;
+                if args.json {
+                    println!("{{\"ok\":{},\"task_id\":\"{}\",\"layer\":\"{}\",\"state\":\"{}\",\"exit_code\":{},\"head_commit\":{}}}", proof.state == "pass", json_escape(&proof.task_id), json_escape(&proof.layer), json_escape(&proof.state), proof.exit_code, json_optional(proof.head_commit.as_deref()));
+                } else {
+                    println!(
+                        "Proof {} for task {}: {} (exit {}).",
+                        proof.layer, proof.task_id, proof.state, proof.exit_code
+                    );
+                }
+                if proof.state != "pass" {
+                    std::process::exit(7);
+                }
+            }
+            ProofAction::Query { task_id, json } => {
+                let proofs = service.query_proofs(&task_id)?;
+                if json {
+                    println!("[{}]", proofs.iter().map(|proof| format!("{{\"layer\":\"{}\",\"state\":\"{}\",\"exit_code\":{},\"head_commit\":{},\"summary\":{}}}", json_escape(&proof.layer), json_escape(&proof.state), proof.exit_code.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), json_optional(proof.head_commit.as_deref()), json_optional(proof.summary.as_deref()))).collect::<Vec<_>>().join(","));
+                } else if proofs.is_empty() {
+                    println!("No proof runs.");
+                } else {
+                    for proof in proofs {
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            proof.layer,
+                            proof.state,
+                            proof
+                                .exit_code
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "<none>".to_owned()),
+                            proof.head_commit.unwrap_or_else(|| "<none>".to_owned())
+                        );
+                    }
+                }
+            }
+        },
+        Command::Friction(args) => match args.action {
+            FrictionAction::Add { task, category, severity, summary, disposition, baseline, predicted_metric, observation_window, json } => {
+                let fingerprint = service.add_friction(FrictionAddInput { task_id: task, category, severity, summary, disposition, baseline, predicted_metric, observation_window })?;
+                if json { println!("{{\"ok\":true,\"fingerprint\":\"{}\"}}", json_escape(&fingerprint)); } else { println!("Friction recorded: {fingerprint}"); }
+            }
+            FrictionAction::Resolve { fingerprint, status, actual_outcome, json } => {
+                service.resolve_friction(FrictionResolveInput { fingerprint, status, actual_outcome })?;
+                if json { println!("{{\"ok\":true,\"resolved\":true}}"); } else { println!("Friction resolved."); }
+            }
+            FrictionAction::Query => print_query_table(&service.query_sql(
+                "SELECT fingerprint, category, severity, disposition, status, summary, actual_outcome FROM friction ORDER BY id DESC;"
+            )?),
+        },
+        Command::Memory(args) => match args.action {
+            MemoryAction::Check { dry_run, json } => {
+                if !dry_run {
+                    return Err(InterfaceError::WorkflowParity(
+                        "memory check requires --dry-run in CL-30; rebuild is owned by CL-31"
+                            .to_owned(),
+                    ));
+                }
+                print_artifact_check(artifact_check(&repo_root, None, None), json);
+            }
+            MemoryAction::Rebuild {
+                dry_run,
+                apply,
+                output,
+                json,
+            } => {
+                if dry_run == apply {
+                    return Err(InterfaceError::WorkflowParity(
+                        "memory rebuild requires exactly one of --dry-run or --apply".to_owned(),
+                    ));
+                }
+                if apply && output.is_some() {
+                    return Err(InterfaceError::WorkflowParity(
+                        "memory rebuild --apply cannot be combined with --output".to_owned(),
+                    ));
+                }
+                if apply {
+                    let active_report = service.doctor()?;
+                    if !matches!(active_report.code.as_str(), "HEALTHY" | "DB_MISSING") {
+                        return Err(InterfaceError::WorkflowParity(format!(
+                            "memory rebuild --apply refused active DB state {}; use recovery guidance",
+                            active_report.code
+                        )));
+                    }
+                }
+                let artifacts = artifact_check(&repo_root, None, None);
+                if !artifacts.errors.is_empty() {
+                    print_artifact_check(artifacts, json);
+                    return Ok(());
+                }
+                let output = output
+                    .map(|path| {
+                        if std::path::Path::new(&path).is_absolute()
+                            || path.split('/').any(|part| part == "..")
+                        {
+                            Err(InterfaceError::WorkflowParity(
+                                "memory rebuild --output must be repo-relative without traversal"
+                                    .to_owned(),
+                            ))
+                        } else {
+                            Ok(repo_root.join(path))
+                        }
+                    })
+                    .transpose()?;
+                if let Some(path) = &output {
+                    if path.exists() {
+                        return Err(InterfaceError::WorkflowParity(format!(
+                            "memory rebuild refuses to overwrite existing output {}",
+                            path.display()
+                        )));
+                    }
+                }
+                let temporary =
+                    active_db_path.with_extension(format!("rebuild-{}.db", std::process::id()));
+                let rebuild = HarnessService::new(HarnessContext {
+                    repo_root: repo_root.clone(),
+                    db_path: temporary.clone(),
+                    schema_dir: resolve_schema_dir(&repo_root),
+                });
+                let init = rebuild.init()?;
+                let projected_records =
+                    project_artifact_index(&temporary, &repo_root, &artifacts.checked)?;
+                let logical_digest = rebuild_logical_digest(&temporary)?;
+                let report = rebuild.doctor()?;
+                checkpoint_rebuild_database(&temporary)?;
+                let output_path = if apply {
+                    if active_db_path.exists() {
+                        checkpoint_rebuild_database(&active_db_path)?;
+                        let backup_dir = active_db_path
+                            .parent()
+                            .unwrap_or(&repo_root)
+                            .join("harness.db.backups");
+                        fs::create_dir_all(&backup_dir).map_err(|error| {
+                            InterfaceError::WorkflowParity(format!(
+                                "cannot create rebuild backup directory: {error}"
+                            ))
+                        })?;
+                        let backup = backup_dir.join(format!("rebuild-{}.db", std::process::id()));
+                        fs::copy(&active_db_path, &backup).map_err(|error| {
+                            InterfaceError::WorkflowParity(format!(
+                                "cannot back up active DB: {error}"
+                            ))
+                        })?;
+                    }
+                    fs::rename(&temporary, &active_db_path).map_err(|error| {
+                        InterfaceError::WorkflowParity(format!(
+                            "cannot atomically replace active DB: {error}"
+                        ))
+                    })?;
+                    active_db_path.to_string_lossy().into_owned()
+                } else if let Some(output) = output {
+                    fs::rename(&temporary, &output).map_err(|error| {
+                        InterfaceError::WorkflowParity(format!(
+                            "cannot publish validated rebuild output: {error}"
+                        ))
+                    })?;
+                    output.to_string_lossy().into_owned()
+                } else {
+                    fs::remove_file(&temporary).map_err(|error| {
+                        InterfaceError::WorkflowParity(format!(
+                            "cannot remove temporary rebuild DB: {error}"
+                        ))
+                    })?;
+                    "<discarded>".to_owned()
+                };
+                let _ = fs::remove_file(format!("{}-wal", temporary.display()));
+                let _ = fs::remove_file(format!("{}-shm", temporary.display()));
+                if json {
+                    println!("{{\"ok\":{},\"mode\":\"{}\",\"artifacts_checked\":{},\"temp_schema_version\":{},\"doctor\":\"{}\",\"projected_records\":{},\"logical_digest\":\"{}\",\"output\":\"{}\"}}", report.ok, if apply { "apply" } else { "dry_run" }, artifacts.checked.len(), match init { InitResult::Created { .. } => 7, InitResult::Existing { version, .. } => version, InitResult::MigratedExisting { .. } => 7 }, json_escape(&report.code), projected_records, logical_digest, json_escape(&output_path));
+                } else {
+                    println!("rebuild dry-run: {} artifacts validated; temporary database doctor={}; projected records={projected_records}; logical digest={logical_digest}", artifacts.checked.len(), report.code);
+                }
+                if !report.ok {
+                    std::process::exit(6);
+                }
+            }
+            MemoryAction::Capsule(args) => match args.action {
+                CapsuleAction::Render {
+                    id,
+                    date,
+                    lane,
+                    outcome,
+                    summary,
+                    json,
+                } => {
+                    let path = render_capsule(&repo_root, &id, &date, &lane, &outcome, &summary)?;
+                    if json {
+                        println!("{{\"ok\":true,\"path\":\"{}\"}}", json_escape(&path));
+                    } else {
+                        println!("capsule: {path}");
+                    }
+                }
+                CapsuleAction::Check { json } => {
+                    let result = capsule_check(&repo_root)?;
+                    if json {
+                        println!(
+                            "{{\"ok\":{},\"orphans\":{}}}",
+                            result.is_empty(),
+                            json_strings(&result)
+                        );
+                    } else {
+                        for path in &result {
+                            println!("orphan: {path}");
+                        }
+                    }
+                    if !result.is_empty() {
+                        std::process::exit(6);
+                    }
+                }
+            },
+        },
         Command::Story(args) => match args.action {
             StoryAction::Add(args) => {
                 service.add_story(StoryAddInput {
@@ -742,6 +1555,12 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     std::process::exit(1);
                 }
             }
+            StoryAction::Check(args) => {
+                print_artifact_check(
+                    artifact_check(&repo_root, Some("story"), args.path),
+                    args.json,
+                );
+            }
         },
         Command::Decision(args) => match args.action {
             DecisionAction::Add(args) => {
@@ -763,6 +1582,12 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 if result.result == "fail" {
                     std::process::exit(1);
                 }
+            }
+            DecisionAction::Check(args) => {
+                print_artifact_check(
+                    artifact_check(&repo_root, Some("decision"), args.path),
+                    args.json,
+                );
             }
         },
         Command::Backlog(args) => match args.action {
@@ -1097,6 +1922,8 @@ fn print_audit(result: &crate::domain::AuditResult) {
     );
     print_audit_category("Stale stories", &result.stale_stories);
     print_audit_category("Broken tools", &result.broken_tools);
+    print_audit_category("Material friction without observed outcome", &result.friction_without_outcomes);
+    println!("Coverage checked: {}. Zero findings means no debt in these checks only.", result.coverage.join(", "));
     println!(
         "Entropy score: {}/100 (lower is better)",
         result.entropy_score()
@@ -1204,6 +2031,29 @@ fn parse_optional_bool(
         .map_err(InterfaceError::from)
 }
 
+fn parse_behavior_bearing(value: &str) -> Result<bool, InterfaceError> {
+    match value {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(InterfaceError::WorkflowParity(
+            "task start: --behavior-bearing must be yes or no; the CLI does not infer code impact from a summary"
+                .to_owned(),
+        )),
+    }
+}
+
+fn print_task_transition(task: &crate::application::TaskStatusRecord, json: bool) {
+    if json {
+        println!(
+            "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\"}}",
+            json_escape(&task.id),
+            json_escape(&task.status)
+        );
+    } else {
+        println!("Task {} is now {}.", task.id, task.status);
+    }
+}
+
 fn print_init_result(result: InitResult) {
     match result {
         InitResult::Created { db_path } => {
@@ -1231,6 +2081,661 @@ fn print_migrate_result(result: MigrateResult) {
             println!("Applying migration {version}...");
         }
         println!("Applied {} migration(s).", result.applied.len());
+    }
+}
+
+fn workflow_parity(
+    repo_root: &std::path::Path,
+    policy: &crate::infrastructure::WorkflowPolicy,
+    commands: &[String],
+) -> Result<PolicyParityResult, InterfaceError> {
+    let fixture_path = repo_root.join("_harness/tests/policy-parity-cases.toml");
+    let fixture_text = fs::read_to_string(&fixture_path).map_err(|error| {
+        InterfaceError::WorkflowParity(format!("cannot read {}: {error}", fixture_path.display()))
+    })?;
+    let fixture: PolicyParityFixture = toml::from_str(&fixture_text).map_err(|error| {
+        InterfaceError::WorkflowParity(format!("cannot parse {}: {error}", fixture_path.display()))
+    })?;
+    if fixture.schema_version != 1 {
+        return Err(InterfaceError::WorkflowParity(format!(
+            "unsupported fixture schema version {}",
+            fixture.schema_version
+        )));
+    }
+
+    let mut result = PolicyParityResult::default();
+    let source_policy = repo_root.join(&fixture.source_policy);
+    if source_policy.is_file() {
+        result
+            .checked
+            .push(format!("source policy {}", fixture.source_policy));
+    } else {
+        result
+            .failures
+            .push(format!("missing source policy {}", fixture.source_policy));
+    }
+    if policy.mode == "shadow" {
+        result.checked.push("workflow mode shadow".to_owned());
+    } else {
+        result
+            .failures
+            .push(format!("workflow mode is {}, expected shadow", policy.mode));
+    }
+
+    let tracked_manifest_path = repo_root.join("_harness/command-manifest.txt");
+    match fs::read_to_string(&tracked_manifest_path) {
+        Ok(contents) => {
+            let tracked = contents
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if tracked == commands {
+                result.checked.push("compiled command manifest".to_owned());
+            } else {
+                result.failures.push(
+                    "compiled command manifest differs from _harness/command-manifest.txt"
+                        .to_owned(),
+                );
+            }
+        }
+        Err(error) => result.failures.push(format!(
+            "cannot read {}: {error}",
+            tracked_manifest_path.display()
+        )),
+    }
+
+    for case in fixture.classification_cases {
+        if case.comparison != "accepted" {
+            result.failures.push(format!(
+                "classification case {} has unsupported comparison {}",
+                case.id, case.comparison
+            ));
+            continue;
+        }
+        let (actual_lane, _) = policy.classify(&case.flags);
+        if actual_lane == case.expected_lane {
+            result.checked.push(format!("classification:{}", case.id));
+        } else {
+            result.failures.push(format!(
+                "classification:{} expected {}, got {}",
+                case.id, case.expected_lane, actual_lane
+            ));
+        }
+    }
+
+    for case in fixture.context_cases {
+        let manifest =
+            policy.context_manifest(&case.lane, &case.phase, &case.paths, &case.flags, &[]);
+        let contains = |entries: &[crate::infrastructure::WorkflowContextEntry], expected: &str| {
+            entries.iter().any(|entry| entry.path.starts_with(expected))
+        };
+        let mut missing = Vec::new();
+        for expected in &case.must_include {
+            if !contains(&manifest.must_read, expected) {
+                missing.push(format!("must_read {expected}"));
+            }
+        }
+        for expected in &case.should_include {
+            if !contains(&manifest.should_read, expected) {
+                missing.push(format!("should_read {expected}"));
+            }
+        }
+        for expected in &case.skip_include {
+            if !contains(&manifest.skip, expected) {
+                missing.push(format!("skip {expected}"));
+            }
+        }
+        if missing.is_empty() {
+            result.checked.push(format!("context:{}", case.id));
+        } else {
+            result.failures.push(format!(
+                "context:{} missing {}",
+                case.id,
+                missing.join(", ")
+            ));
+        }
+    }
+
+    for delta in fixture.intentional_deltas {
+        let decision_path = repo_root
+            .join("docs/decisions")
+            .join(format!("{}.md", delta.decision));
+        match fs::read_to_string(&decision_path) {
+            Ok(contents) if contents.contains("## Status\n\nAccepted") => {
+                result.deltas.push(format!(
+                    "{}: {} ({}; {})",
+                    delta.id, delta.shadow_behavior, delta.decision, delta.disposition
+                ))
+            }
+            Ok(_) => result.failures.push(format!(
+                "intentional delta:{} decision {} is not accepted",
+                delta.id, delta.decision
+            )),
+            Err(_) => result.failures.push(format!(
+                "intentional delta:{} missing decision {}",
+                delta.id, delta.decision
+            )),
+        }
+        if delta.current_markdown.trim().is_empty() {
+            result.failures.push(format!(
+                "intentional delta:{} has empty current_markdown",
+                delta.id
+            ));
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Debug)]
+struct ArtifactCheckResult {
+    checked: Vec<String>,
+    legacy: Vec<String>,
+    errors: Vec<String>,
+}
+
+fn project_artifact_index(
+    database: &std::path::Path,
+    repo_root: &std::path::Path,
+    paths: &[String],
+) -> Result<usize, InterfaceError> {
+    let mut connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let transaction = connection
+        .transaction()
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    for path in paths {
+        let content = fs::read_to_string(repo_root.join(path))
+            .map_err(crate::infrastructure::HarnessInfraError::from)?;
+        let artifact_type = if path.starts_with("docs/stories/") {
+            "story"
+        } else if path.starts_with("docs/decisions/") {
+            "decision"
+        } else {
+            "capsule"
+        };
+        let frontmatter = content
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n").map(|(head, _)| head));
+        let fields = frontmatter.map(|head| {
+            head.lines()
+                .filter_map(|line| line.split_once(':'))
+                .map(|(key, value)| (key.trim(), value.trim().trim_matches('"')))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        });
+        let id = fields
+            .as_ref()
+            .and_then(|fields| {
+                fields
+                    .get(if artifact_type == "capsule" {
+                        "task_id"
+                    } else {
+                        "id"
+                    })
+                    .copied()
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                content
+                    .lines()
+                    .find(|line| line.starts_with("# "))
+                    .and_then(|line| line.trim_start_matches("# ").split_whitespace().next())
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| {
+                InterfaceError::WorkflowParity(format!(
+                    "{path}: artifact id missing during projection"
+                ))
+            })?;
+        let status = fields
+            .as_ref()
+            .and_then(|fields| {
+                fields
+                    .get(if artifact_type == "capsule" {
+                        "outcome"
+                    } else {
+                        "status"
+                    })
+                    .copied()
+            })
+            .map(str::to_owned)
+            .or_else(|| {
+                content
+                    .lines()
+                    .find(|line| line.starts_with("Status:"))
+                    .and_then(|line| line.split_once(':'))
+                    .map(|(_, value)| value.trim().to_owned())
+            })
+            .unwrap_or_else(|| "legacy".to_owned());
+        let schema = fields
+            .as_ref()
+            .and_then(|fields| fields.get("schema").copied())
+            .unwrap_or("legacy");
+        let checksum = format!("{:x}", Sha256::digest(content.as_bytes()));
+        transaction.execute("INSERT INTO artifact_index(artifact_type, artifact_id, path, checksum, schema_version, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![artifact_type, id, path, checksum, schema, status]).map_err(crate::infrastructure::HarnessInfraError::from)?;
+        let title = content
+            .lines()
+            .find_map(|line| line.strip_prefix("# "))
+            .unwrap_or(&id)
+            .trim();
+        let section_value = |section: &str| {
+            content
+                .split(&format!("## {section}\n\n"))
+                .nth(1)
+                .and_then(|rest| rest.lines().next())
+                .or_else(|| {
+                    content
+                        .lines()
+                        .find_map(|line| line.strip_prefix(&format!("{section}:")))
+                })
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        };
+        match artifact_type {
+            "story" => {
+                let lane = fields
+                    .as_ref()
+                    .and_then(|fields| fields.get("lane").copied())
+                    .or_else(|| section_value("Lane"))
+                    .map(|lane| lane.replace('-', "_"))
+                    .filter(|lane| matches!(lane.as_str(), "tiny" | "normal" | "high_risk"))
+                    .unwrap_or_else(|| "high_risk".to_owned());
+                let story_status = match status.as_str() {
+                    "completed" => "implemented",
+                    "ready" => "planned",
+                    value
+                        if matches!(
+                            value,
+                            "planned" | "in_progress" | "implemented" | "changed" | "retired"
+                        ) =>
+                    {
+                        value
+                    }
+                    _ => "planned",
+                };
+                let evidence = content
+                    .split("## Evidence")
+                    .nth(1)
+                    .map(|body| body.split("\n## ").next().unwrap_or(body).trim())
+                    .filter(|body| !body.is_empty());
+                transaction.execute("INSERT INTO story(id, title, risk_lane, status, evidence, notes) VALUES (?1, ?2, ?3, ?4, ?5, 'Rebuilt from canonical artifact by memory rebuild dry-run.')", params![id, title, lane, story_status, evidence]).map_err(crate::infrastructure::HarnessInfraError::from)?;
+            }
+            "decision" => {
+                let decision_status = match status.as_str() {
+                    value
+                        if matches!(value, "proposed" | "accepted" | "superseded" | "rejected") =>
+                    {
+                        value
+                    }
+                    _ => "proposed",
+                };
+                transaction.execute("INSERT INTO decision(id, title, status, doc_path, notes) VALUES (?1, ?2, ?3, ?4, 'Rebuilt from canonical artifact by memory rebuild dry-run.')", params![id, title, decision_status, path]).map_err(crate::infrastructure::HarnessInfraError::from)?;
+            }
+            _ => {}
+        }
+    }
+    let count = paths.len();
+    transaction
+        .commit()
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    Ok(count)
+}
+
+fn rebuild_logical_digest(database: &std::path::Path) -> Result<String, InterfaceError> {
+    let connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let mut values = Vec::new();
+    for query in [
+        "SELECT artifact_type || '|' || artifact_id || '|' || path || '|' || checksum || '|' || schema_version || '|' || status FROM artifact_index ORDER BY artifact_type, artifact_id",
+        "SELECT id || '|' || title || '|' || risk_lane || '|' || status || '|' || COALESCE(evidence, '') FROM story ORDER BY id",
+        "SELECT id || '|' || title || '|' || status || '|' || doc_path FROM decision ORDER BY id",
+    ] {
+        let mut statement = connection.prepare(query).map_err(crate::infrastructure::HarnessInfraError::from)?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0)).map_err(crate::infrastructure::HarnessInfraError::from)?;
+        for row in rows { values.push(row.map_err(crate::infrastructure::HarnessInfraError::from)?); }
+    }
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(values.join("\n").as_bytes())
+    ))
+}
+
+fn checkpoint_rebuild_database(database: &std::path::Path) -> Result<(), InterfaceError> {
+    let connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    connection
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    Ok(())
+}
+
+fn render_capsule(
+    repo_root: &std::path::Path,
+    id: &str,
+    date: &str,
+    lane: &str,
+    outcome: &str,
+    summary: &str,
+) -> Result<String, InterfaceError> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '-')
+        || !date
+            .chars()
+            .all(|value| value.is_ascii_digit() || value == '-')
+        || !matches!(lane, "tiny" | "normal" | "high-risk" | "high_risk")
+        || outcome.is_empty()
+    {
+        return Err(InterfaceError::WorkflowParity(
+            "invalid capsule id, date, lane, or outcome".to_owned(),
+        ));
+    }
+    let redacted = redact_capsule_text(summary);
+    let body = format!("# Outcome\n\n{}\n", redacted);
+    let checksum = format!("{:x}", Sha256::digest(body.as_bytes()));
+    let month = date.get(0..7).ok_or_else(|| {
+        InterfaceError::WorkflowParity("capsule date must be YYYY-MM-DD".to_owned())
+    })?;
+    let directory = repo_root
+        .join("docs/tasks")
+        .join(&date[..4])
+        .join(&month[5..]);
+    let slug = redacted
+        .to_lowercase()
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() {
+                value
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+    let path = directory.join(format!(
+        "{}-{}.md",
+        id,
+        if slug.is_empty() { "task" } else { &slug }
+    ));
+    if path.exists() {
+        return Err(InterfaceError::WorkflowParity(format!(
+            "capsule already exists at {}",
+            path.display()
+        )));
+    }
+    fs::create_dir_all(&directory).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let content = format!("---\nschema: harness/task-capsule/v1\ntask_id: {id}\ndate: {date}\nlane: {}\noutcome: {outcome}\ncontent_checksum: sha256:{checksum}\n---\n{body}", lane.replace('-', "_"));
+    let temporary = directory.join(format!(".{}-{}.tmp", id, std::process::id()));
+    fs::write(&temporary, content).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    fs::rename(&temporary, &path).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    Ok(path
+        .strip_prefix(repo_root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned())
+}
+
+fn redact_capsule_text(value: &str) -> String {
+    let mut redact_next = false;
+    value
+        .split_whitespace()
+        .map(|word| {
+            let lower = word.to_lowercase();
+            let sensitive_key =
+                lower.contains("password") || lower.contains("token") || lower.contains("secret");
+            let redact =
+                redact_next || sensitive_key || word.starts_with('/') || word.starts_with("C:\\");
+            redact_next = sensitive_key;
+            if redact {
+                "[redacted]".to_owned()
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn capsule_check(repo_root: &std::path::Path) -> Result<Vec<String>, InterfaceError> {
+    let root = repo_root.join("docs/tasks");
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut orphans = Vec::new();
+    fn visit(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        output: &mut Vec<String>,
+    ) -> std::io::Result<()> {
+        for entry in fs::read_dir(current)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                visit(root, &path, output)?;
+            } else if path.extension().is_some_and(|extension| extension == "tmp") {
+                output.push(
+                    path.strip_prefix(root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                let content = fs::read_to_string(&path)?;
+                let Some((frontmatter, body)) = content
+                    .strip_prefix("---\n")
+                    .and_then(|rest| rest.split_once("\n---\n"))
+                else {
+                    output.push(format!("invalid capsule {relative}: missing frontmatter"));
+                    continue;
+                };
+                let fields = frontmatter
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .map(|(key, value)| (key.trim(), value.trim()))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let expected = fields
+                    .get("content_checksum")
+                    .and_then(|value| value.strip_prefix("sha256:"));
+                let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
+                if fields.get("schema") != Some(&"harness/task-capsule/v1")
+                    || !fields.contains_key("task_id")
+                    || !fields.contains_key("date")
+                    || !fields.contains_key("lane")
+                    || !fields.contains_key("outcome")
+                    || expected != Some(actual.as_str())
+                {
+                    output.push(format!(
+                        "invalid capsule {relative}: schema, required field, or checksum mismatch"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    visit(&root, &root, &mut orphans).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    Ok(orphans)
+}
+
+fn artifact_check(
+    repo_root: &std::path::Path,
+    only_kind: Option<&str>,
+    requested_path: Option<String>,
+) -> ArtifactCheckResult {
+    let mut result = ArtifactCheckResult {
+        checked: Vec::new(),
+        legacy: Vec::new(),
+        errors: Vec::new(),
+    };
+    let mut seen_ids = std::collections::BTreeMap::<(String, String), String>::new();
+    let kinds: Vec<(&str, &str)> = match only_kind {
+        Some("story") => vec![("story", "docs/stories")],
+        Some("decision") => vec![("decision", "docs/decisions")],
+        _ => vec![
+            ("story", "docs/stories"),
+            ("decision", "docs/decisions"),
+            ("capsule", "docs/tasks"),
+        ],
+    };
+    for (kind, directory) in kinds {
+        let paths = if let Some(path) = requested_path.as_ref() {
+            if std::path::Path::new(path).is_absolute() || path.split('/').any(|part| part == "..")
+            {
+                result.errors.push(format!("unsafe artifact path {path}"));
+                continue;
+            }
+            vec![repo_root.join(path)]
+        } else {
+            let Ok(entries) = fs::read_dir(repo_root.join(directory)) else {
+                continue;
+            };
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
+                .filter(|path| path.file_name().is_some_and(|name| name != "README.md"))
+                .collect()
+        };
+        for path in paths {
+            let relative = path
+                .strip_prefix(repo_root)
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            match fs::read_to_string(&path) {
+                Err(error) => result.errors.push(format!("{relative}: {error}")),
+                Ok(content) => {
+                    let frontmatter = content
+                        .strip_prefix("---\n")
+                        .and_then(|rest| rest.split_once("\n---\n").map(|(head, _)| head));
+                    let fields = frontmatter.map(|head| {
+                        head.lines()
+                            .filter_map(|line| line.split_once(':'))
+                            .map(|(key, value)| (key.trim(), value.trim().trim_matches('"')))
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    });
+                    if let Some(fields) = fields {
+                        let expected = format!("harness/{kind}/v1");
+                        let required = match kind {
+                            "story" => ["id", "title", "status", "lane"].as_slice(),
+                            "decision" => ["id", "title", "status", "date"].as_slice(),
+                            "capsule" => ["task_id", "date", "lane", "outcome"].as_slice(),
+                            _ => [].as_slice(),
+                        };
+                        let missing = required
+                            .iter()
+                            .filter(|key| !fields.contains_key(**key))
+                            .copied()
+                            .collect::<Vec<_>>();
+                        let id = fields
+                            .get(if kind == "capsule" { "task_id" } else { "id" })
+                            .copied()
+                            .unwrap_or_default();
+                        let lane_valid = fields.get("lane").is_none_or(|lane| {
+                            matches!(*lane, "tiny" | "normal" | "high_risk" | "high-risk")
+                        });
+                        let references = frontmatter
+                            .unwrap()
+                            .lines()
+                            .skip_while(|line| !line.starts_with("product_docs:"))
+                            .skip(1)
+                            .take_while(|line| line.trim_start().starts_with('-'))
+                            .filter_map(|line| line.trim().strip_prefix('-'))
+                            .map(str::trim)
+                            .collect::<Vec<_>>();
+                        let references_valid = references.iter().all(|reference| {
+                            !std::path::Path::new(reference).is_absolute()
+                                && !reference.split('/').any(|part| part == "..")
+                                && repo_root.join(reference).is_file()
+                        });
+                        let valid = fields.get("schema") == Some(&expected.as_str())
+                            && missing.is_empty()
+                            && !id.is_empty()
+                            && !id.contains('/')
+                            && lane_valid
+                            && (kind != "story" || references_valid);
+                        if valid {
+                            let id = id.to_owned();
+                            let key = (kind.to_owned(), id.clone());
+                            if let Some(existing) = seen_ids.insert(key, relative.clone()) {
+                                result.errors.push(format!(
+                                    "duplicate {kind} id {id}: {existing} and {relative}"
+                                ));
+                            }
+                            result.checked.push(relative);
+                        } else {
+                            result.errors.push(format!("{relative}: invalid {kind} v1 frontmatter (schema/required fields/lane/product references)"));
+                        }
+                    } else {
+                        let title = content
+                            .lines()
+                            .find(|line| line.starts_with("# "))
+                            .map(|line| line.trim_start_matches("# ").trim());
+                        let status = content.contains("## Status\n\n")
+                            || content.lines().any(|line| line.starts_with("Status:"));
+                        if let Some(title) = title.filter(|_| status) {
+                            let id = title
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or_default()
+                                .to_owned();
+                            if id.is_empty() {
+                                result.errors.push(format!(
+                                    "{relative}: legacy {kind} title has no artifact id"
+                                ));
+                                continue;
+                            }
+                            let key = (kind.to_owned(), id.clone());
+                            if let Some(existing) = seen_ids.insert(key, relative.clone()) {
+                                result.errors.push(format!(
+                                    "duplicate {kind} id {id}: {existing} and {relative}"
+                                ));
+                            }
+                            result.checked.push(relative.clone());
+                            result.legacy.push(relative);
+                        } else {
+                            result.errors.push(format!(
+                                "{relative}: legacy {kind} requires a title and Status section"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+fn print_artifact_check(result: ArtifactCheckResult, json: bool) {
+    if json {
+        println!(
+            "{{\"ok\":{},\"checked\":{},\"legacy\":{},\"errors\":{}}}",
+            result.errors.is_empty(),
+            json_strings(&result.checked),
+            json_strings(&result.legacy),
+            json_strings(&result.errors)
+        );
+    } else {
+        for path in &result.checked {
+            println!("ok: {path}");
+        }
+        for path in &result.legacy {
+            println!("legacy: {path}");
+        }
+        for error in &result.errors {
+            println!("error: {error}");
+        }
+    }
+    if !result.errors.is_empty() {
+        std::process::exit(6);
     }
 }
 
@@ -1755,6 +3260,59 @@ mod tests {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         assert_eq!(compiled_command_manifest(), expected);
+    }
+
+    #[test]
+    fn workflow_parity_accepts_tracked_shadow_fixture() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .unwrap()
+            .to_path_buf();
+        let policy =
+            crate::infrastructure::parse_workflow_policy(&repo_root.join("_harness/workflow.toml"))
+                .unwrap();
+        let result = workflow_parity(&repo_root, &policy, &compiled_command_manifest()).unwrap();
+        assert!(result.failures.is_empty(), "{:?}", result.failures);
+        assert!(result
+            .deltas
+            .iter()
+            .any(|delta| delta.starts_with("one-flag-code-impact:")));
+    }
+
+    #[test]
+    fn artifact_check_reports_duplicate_v1_ids_without_writing_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let stories = temp.path().join("docs/stories");
+        let product = temp.path().join("docs/product");
+        std::fs::create_dir_all(&stories).unwrap();
+        std::fs::create_dir_all(&product).unwrap();
+        std::fs::write(product.join("sample.md"), "# Sample\n").unwrap();
+        let content = "---\nschema: harness/story/v1\nid: US-900\ntitle: Duplicate\nstatus: planned\nlane: normal\nproduct_docs:\n  - docs/product/sample.md\n---\n# Duplicate\n";
+        std::fs::write(stories.join("one.md"), content).unwrap();
+        std::fs::write(stories.join("two.md"), content).unwrap();
+        let result = artifact_check(temp.path(), Some("story"), None);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("duplicate story id US-900")));
+        assert_eq!(
+            std::fs::read_to_string(stories.join("one.md")).unwrap(),
+            content
+        );
+    }
+
+    #[test]
+    fn artifact_check_rejects_v1_story_with_invalid_lane_or_missing_product_doc() {
+        let temp = tempfile::tempdir().unwrap();
+        let stories = temp.path().join("docs/stories");
+        std::fs::create_dir_all(&stories).unwrap();
+        std::fs::write(stories.join("bad.md"), "---\nschema: harness/story/v1\nid: US-901\ntitle: Bad\nstatus: planned\nlane: sideways\nproduct_docs:\n  - docs/product/missing.md\n---\n# Bad\n").unwrap();
+        let result = artifact_check(temp.path(), Some("story"), None);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("invalid story v1 frontmatter")));
     }
 
     #[test]

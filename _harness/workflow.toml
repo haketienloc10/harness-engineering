@@ -52,6 +52,7 @@ required_for = [
   "risk-policy",
   "weaken-validation",
   "destructive-data-action",
+  "handoff",
 ]
 
 [friction]
@@ -69,7 +70,7 @@ high_risk = 10000
 id = "intake-base"
 phases = ["intake"]
 always = true
-must_read = ["AGENTS.md", "_harness/FEATURE_INTAKE.md", "_harness/bin/harness-cli query matrix"]
+must_read = ["AGENTS.md", "_harness/bin/harness-cli query matrix"]
 
 [[context.rules]]
 id = "intake-tiny-skip"
@@ -83,7 +84,7 @@ id = "intake-expanded"
 phases = ["intake"]
 lanes = ["normal", "high_risk"]
 always = true
-must_read = ["README.md", "_harness/HARNESS.md"]
+must_read = ["README.md"]
 
 [[context.rules]]
 id = "planning-base"
@@ -96,14 +97,14 @@ id = "planning-story"
 phases = ["planning"]
 lanes = ["normal", "high_risk"]
 always = true
-must_read = ["_harness/templates/story.md", "_harness/TEST_MATRIX.md"]
+must_read = ["_harness/templates/story.md"]
 
 [[context.rules]]
 id = "planning-high-risk"
 phases = ["planning"]
 lanes = ["high_risk"]
 always = true
-must_read = ["_harness/templates/high-risk-story/"]
+must_read = ["_harness/templates/story.md"]
 
 [[context.rules]]
 id = "work-base"
@@ -124,13 +125,13 @@ id = "work-high-risk"
 phases = ["work"]
 lanes = ["high_risk"]
 always = true
-must_read = ["_harness/ARCHITECTURE.md", "_harness/templates/high-risk-story/"]
+must_read = ["_harness/ARCHITECTURE.md", "_harness/templates/story.md"]
 
 [[context.rules]]
 id = "finish-base"
 phases = ["finish"]
 always = true
-must_read = ["_harness/TRACE_SPEC.md", "git status --short"]
+must_read = ["git status --short"]
 
 [[context.rules]]
 id = "finish-tiny"
@@ -161,7 +162,7 @@ should_read = ["_harness/bin/harness-cli --help"]
 id = "provider-security"
 lanes = ["high_risk"]
 when_flags = ["auth", "authorization", "audit-security", "external-provider", "data-migration", "weaken-validation"]
-must_read = ["_harness/templates/high-risk-story/", "docs/decisions/"]
+must_read = ["_harness/templates/story.md", "docs/decisions/"]
 
 [[context.rules]]
 id = "public-contract"

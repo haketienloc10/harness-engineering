@@ -1,4 +1,6 @@
-# Validation
+# Deprecated Compatibility Template: High-Risk Validation
+
+Use Validation and Evidence in `_harness/templates/story.md` plus `proof run`.
 
 ## Proof Strategy
 

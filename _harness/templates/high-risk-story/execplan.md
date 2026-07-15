@@ -1,4 +1,7 @@
-# Exec Plan
+# Deprecated Compatibility Template: High-Risk Exec Plan
+
+Use the Lane and Scope, Human Gates, and Rollback sections in
+`_harness/templates/story.md`.
 
 ## Goal
 

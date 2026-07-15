@@ -1,6 +1,6 @@
 # CL-22 Policy Parity and Drift Gate
 
-Status: ready
+Status: completed
 
 ## Start State
 
@@ -42,6 +42,30 @@ not rename, migrate or overwrite the retained database.
 - Intentional deltas name their disposition and approval/ADR reference.
 - Installer test passes using `_harness/bin/harness-cli`, not only a Cargo-built
   test binary.
+
+## Evidence
+
+- Added `workflow parity [--json]`. It parses
+  `_harness/tests/policy-parity-cases.toml`, checks every accepted
+  classification/context case against the pure typed policy, compares the
+  tracked and Clap-compiled command manifests, and fails with exit `6` on
+  drift.
+- `docs/decisions/0017-explicit-code-impact-classification.md` accepts the
+  only intentional delta: free-text summary does not infer code impact; the
+  later lifecycle command must collect that input explicitly. Shadow mode
+  therefore stays `tiny` for a single non-hard-gate flag.
+- Validation passed: `cargo fmt --check`; `cargo test -p harness-cli` (54
+  passed); `cargo clippy -p harness-cli -- -D warnings`;
+  `_harness/bin/harness-cli workflow parity --json`; and
+  `bash tests/installer_state_safety.sh`.
+
+## Durable-record gap
+
+The retained repository-local `harness.db` is the intentional foreign/ahead
+`001..008` recovery input. This story does not write an intake, decision row,
+proof row, or trace to it; `doctor --strict` continues to reject it. The
+Git-tracked story, decision, fixture and plan hold the CL-22 semantic record
+until CL-31 can rebuild an authoritative operational index.
 
 ## Validation Commands
 

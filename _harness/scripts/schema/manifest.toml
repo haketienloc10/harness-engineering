@@ -30,3 +30,18 @@ sha256 = "43394d8a3669a818b0fbbacc71650b4f37f4c2992ed8de0f9fb9b87e06d7982c"
 version = 6
 path = "006-command-first-foundation.sql"
 sha256 = "9067520c44bd7f4d5ab1c7d8d0268f8dd26645d45095218ed69b6ee07e1ed9e8"
+
+[[migration]]
+version = 7
+path = "007-artifact-index.sql"
+sha256 = "18dc0fdb04138f7a1a9c36a12587fcabf0cb13e2411aba9482c79c86f0c4b208"
+
+[[migration]]
+version = 8
+path = "008-task-closure.sql"
+sha256 = "ec01beabd3103204084aad19c53bcef4c4dd665fea664305508c8c1fe14f2cc8"
+
+[[migration]]
+version = 9
+path = "009-structured-friction.sql"
+sha256 = "c1cf74965c79024763de18945e4cc818b6e2c08551d3eabac6d7dc0b0ccab87c"

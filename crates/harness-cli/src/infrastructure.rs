@@ -9,21 +9,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{
     params, types::ValueRef, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput,
     DecisionVerifyResult, HarnessContext, InitResult, IntakeInput, InterventionAddInput,
-    InterventionFilter, MigrateResult, QueryTable, StoryAddInput, StoryUpdateInput,
-    StoryVerifyResult, ToolRegisterInput, TraceInput,
+    InterventionFilter, MigrateResult, ProofRecord, ProofRunInput, ProofRunRecord, QueryTable,
+    StoryAddInput, StoryUpdateInput, StoryVerifyResult, TaskApprovalInput,
+    TaskContextAcknowledgeInput, TaskFinishInput, TaskFinishRecord, TaskHandoffInput,
+    TaskRefreshInput, TaskRefreshRecord, TaskStartInput, TaskStatusRecord, TaskStoryLinkInput, FrictionAddInput, FrictionResolveInput,
+    TaskTransitionInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
-    score_trace, validate_tool_description, AuditFinding, AuditResult, BacklogFilter,
-    BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord, FrictionRecord,
-    HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord, RiskLane,
+    score_trace, task_transition_allowed, validate_tool_description, AuditFinding, AuditResult,
+    BacklogFilter, BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord,
+    FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord, RiskLane,
     StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus, ToolArgSpec,
     ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
 };
@@ -56,6 +59,45 @@ pub enum HarnessInfraError {
     BacklogNotFound(i64),
     #[error("trace '{0}' not found")]
     TraceNotFound(i64),
+    #[error("task '{0}' not found")]
+    TaskNotFound(String),
+    #[error("task transition from '{current}' to '{next}' is not allowed")]
+    InvalidTaskTransition { current: String, next: String },
+    #[error("task start: a primary story is required for this lane and behavior-bearing setting")]
+    TaskStoryRequired,
+    #[error("task start: story '{story_id}' is already active under owner '{owner}'")]
+    TaskOwnerConflict { story_id: String, owner: String },
+    #[error("task owner mismatch: task owner is '{expected}', caller supplied '{actual}'")]
+    TaskOwnerMismatch { expected: String, actual: String },
+    #[error("task owner required: task is owned by '{0}'")]
+    TaskOwnerRequired(String),
+    #[error("task handoff: source and target owner must differ")]
+    TaskHandoffSameOwner,
+    #[error("task story link: role must be primary or secondary")]
+    InvalidTaskStoryRole,
+    #[error("task finish gate failed: {0}")]
+    TaskFinishGate(String),
+    #[error("task context: path '{0}' is not in the task's stored context manifest")]
+    TaskContextPathNotRequired(String),
+    #[error("task context: task '{0}' has an invalid stored context manifest")]
+    InvalidTaskContextManifest(String),
+    #[error("serialization error: {0}")]
+    Serialization(String),
+    #[error("task approve: gate '{0}' is not declared in workflow policy")]
+    UnknownApprovalGate(String),
+    #[error(
+        "task start: --lane requires --lane-reason when it differs from policy classification"
+    )]
+    TaskLaneOverrideReasonRequired,
+    #[error("task start: cannot lower policy lane '{recommended}' to '{requested}'")]
+    TaskLaneOverrideCannotLower {
+        recommended: String,
+        requested: String,
+    },
+    #[error("proof run: command after -- is required")]
+    MissingProofCommand,
+    #[error("proof run: story '{story_id}' is not linked to task '{task_id}'")]
+    ProofStoryNotLinked { task_id: String, story_id: String },
     #[error("no traces found")]
     NoTraces,
     #[error("story update: nothing to update")]
@@ -195,13 +237,13 @@ pub struct WorkflowContextRule {
     pub skip: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowContextEntry {
     pub path: String,
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowContextManifest {
     pub policy_id: String,
     pub policy_version: String,
@@ -488,6 +530,37 @@ type RepositoryProvenance = (
     Vec<String>,
 );
 
+type TaskFinishSource = (
+    String,
+    Option<String>,
+    String,
+    i64,
+    i64,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+);
+
+#[derive(Debug)]
+struct ValidatedCapsule {
+    path: String,
+    checksum: String,
+}
+
+#[derive(Debug)]
+struct StagedCapsule {
+    final_path: String,
+    staged_path: PathBuf,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProofSummary {
+    schema: String,
+    exit_code: i32,
+    dirty_fingerprint: String,
+}
+
 pub trait HarnessRepository {
     fn doctor(&self) -> Result<DoctorReport>;
     fn workflow_policy(&self) -> Result<WorkflowPolicy>;
@@ -496,6 +569,17 @@ pub trait HarnessRepository {
     fn migrate(&self) -> Result<MigrateResult>;
     fn import_brownfield(&self) -> Result<BrownfieldImportResult>;
     fn record_intake(&self, input: IntakeInput) -> Result<i64>;
+    fn start_task(&self, input: TaskStartInput) -> Result<String>;
+    fn task_status(&self, id: &str) -> Result<TaskStatusRecord>;
+    fn transition_task(&self, input: TaskTransitionInput) -> Result<TaskStatusRecord>;
+    fn handoff_task(&self, input: TaskHandoffInput) -> Result<()>;
+    fn link_task_story(&self, input: TaskStoryLinkInput) -> Result<()>;
+    fn finish_task(&self, input: TaskFinishInput) -> Result<TaskFinishRecord>;
+    fn refresh_task(&self, input: TaskRefreshInput) -> Result<TaskRefreshRecord>;
+    fn acknowledge_task_context(&self, input: TaskContextAcknowledgeInput) -> Result<()>;
+    fn approve_task(&self, input: TaskApprovalInput) -> Result<()>;
+    fn run_proof(&self, input: ProofRunInput) -> Result<ProofRunRecord>;
+    fn query_proofs(&self, task_id: &str) -> Result<Vec<ProofRecord>>;
     fn add_story(&self, input: StoryAddInput) -> Result<()>;
     fn update_story(&self, input: StoryUpdateInput) -> Result<()>;
     fn verify_story(&self, id: &str) -> Result<StoryVerifyResult>;
@@ -518,6 +602,8 @@ pub trait HarnessRepository {
     fn query_intakes(&self) -> Result<Vec<IntakeRecord>>;
     fn query_traces(&self) -> Result<Vec<TraceRecord>>;
     fn query_friction(&self) -> Result<Vec<FrictionRecord>>;
+    fn add_friction(&self, input: FrictionAddInput) -> Result<String>;
+    fn resolve_friction(&self, input: FrictionResolveInput) -> Result<()>;
     fn query_tools(
         &self,
         responsibility: Option<String>,
@@ -528,6 +614,144 @@ pub trait HarnessRepository {
     fn audit(&self) -> Result<AuditResult>;
     fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
     fn query_sql(&self, sql: &str) -> Result<QueryTable>;
+}
+
+fn allowed_task_transitions(status: &str) -> Vec<String> {
+    [
+        "open",
+        "in_progress",
+        "blocked",
+        "closing",
+        "completed",
+        "abandoned",
+        "failed",
+    ]
+    .into_iter()
+    .filter(|next| task_transition_allowed(status, next))
+    .map(str::to_owned)
+    .collect()
+}
+
+fn manifest_paths(manifest: &WorkflowContextManifest) -> HashSet<String> {
+    manifest
+        .must_read
+        .iter()
+        .chain(manifest.should_read.iter())
+        .chain(manifest.skip.iter())
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+fn validate_task_capsule(
+    repo_root: &Path,
+    relative_path: &str,
+    task_id: &str,
+) -> Result<ValidatedCapsule> {
+    let path = Path::new(relative_path);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+        || !relative_path.starts_with("docs/tasks/")
+    {
+        return Err(HarnessInfraError::TaskFinishGate(
+            "capsule path must be a safe docs/tasks repository-relative path".to_owned(),
+        ));
+    }
+    let content = fs::read_to_string(repo_root.join(path))?;
+    let (frontmatter, body) = content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .ok_or_else(|| {
+            HarnessInfraError::TaskFinishGate("capsule frontmatter is invalid".to_owned())
+        })?;
+    let fields = frontmatter
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect::<BTreeMap<_, _>>();
+    let checksum = fields
+        .get("content_checksum")
+        .and_then(|value| value.strip_prefix("sha256:"))
+        .ok_or_else(|| {
+            HarnessInfraError::TaskFinishGate("capsule checksum is missing".to_owned())
+        })?;
+    let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
+    if fields.get("schema") != Some(&"harness/task-capsule/v1")
+        || fields.get("task_id") != Some(&task_id)
+        || checksum != actual
+    {
+        return Err(HarnessInfraError::TaskFinishGate(
+            "capsule schema, task id, or checksum is invalid".to_owned(),
+        ));
+    }
+    Ok(ValidatedCapsule {
+        path: relative_path.to_owned(),
+        checksum: checksum.to_owned(),
+    })
+}
+
+fn closure_nonce(task_id: &str, capsule_checksum: Option<&str>) -> String {
+    let disposition = capsule_checksum.unwrap_or("non-material-tiny-v1");
+    format!("{:x}", Sha256::digest(format!("{task_id}\0{disposition}").as_bytes()))
+}
+
+fn stage_task_capsule(
+    repo_root: &Path,
+    capsule: &ValidatedCapsule,
+    task_id: &str,
+    nonce: &str,
+) -> Result<StagedCapsule> {
+    let final_path = repo_root.join(&capsule.path);
+    let file_name = final_path.file_name().and_then(|name| name.to_str()).ok_or_else(|| {
+        HarnessInfraError::TaskFinishGate("capsule path has no valid file name".to_owned())
+    })?;
+    let staged_path = final_path.with_file_name(format!(".{file_name}.closing-{task_id}-{nonce}.tmp"));
+    fs::copy(&final_path, &staged_path)?;
+    let staged_file = fs::File::open(&staged_path)?;
+    staged_file.sync_all()?;
+    let staged_relative = staged_path
+        .strip_prefix(repo_root)
+        .map_err(|_| HarnessInfraError::TaskFinishGate("staged capsule escaped repository".to_owned()))?
+        .to_string_lossy()
+        .into_owned();
+    if let Err(error) = validate_task_capsule(repo_root, &staged_relative, task_id) {
+        let _ = fs::remove_file(&staged_path);
+        return Err(error);
+    }
+    Ok(StagedCapsule {
+        final_path: capsule.path.clone(),
+        staged_path,
+    })
+}
+
+fn staged_capsule_paths(root: &Path) -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    if !root.exists() {
+        return Ok(paths);
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            paths.extend(staged_capsule_paths(&path)?);
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.contains(".closing-") && name.ends_with(".tmp"))
+        {
+            paths.push(path.to_string_lossy().into_owned());
+        }
+    }
+    Ok(paths)
+}
+
+fn lane_rank(lane: &RiskLane) -> u8 {
+    match lane {
+        RiskLane::Tiny => 0,
+        RiskLane::Normal => 1,
+        RiskLane::HighRisk => 2,
+    }
 }
 
 #[derive(Debug)]
@@ -808,6 +1032,50 @@ impl SqliteHarnessRepository {
         } else {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
         }
+    }
+
+    fn git_bytes(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.repo_root)
+            .args(args)
+            .output()?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(HarnessInfraError::WorkflowInvalid(
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ))
+        }
+    }
+
+    fn dirty_worktree_fingerprint(&self) -> Result<String> {
+        let diff = self.git_bytes(&["diff", "--binary", "--no-ext-diff", "HEAD"])?;
+        let untracked = self.git_bytes(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"tracked-diff\0");
+        hasher.update(&diff);
+        hasher.update(b"untracked\0");
+        for raw_path in untracked
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+        {
+            let path = std::str::from_utf8(raw_path).map_err(|_| {
+                HarnessInfraError::WorkflowInvalid(
+                    "git returned non-UTF-8 untracked path".to_owned(),
+                )
+            })?;
+            let content = match fs::read(self.repo_root.join(path)) {
+                Ok(content) => content,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(HarnessInfraError::Io(error)),
+            };
+            hasher.update(raw_path);
+            hasher.update([0]);
+            hasher.update((content.len() as u64).to_le_bytes());
+            hasher.update(content);
+        }
+        Ok(format!("{:x}", hasher.finalize()))
     }
 
     fn repository_provenance(&self) -> RepositoryProvenance {
@@ -1155,6 +1423,45 @@ impl HarnessRepository for SqliteHarnessRepository {
         if fk_error {
             findings.push("FOREIGN_KEY_VIOLATION".to_owned());
         }
+        for path in staged_capsule_paths(&self.repo_root.join("docs/tasks"))? {
+            findings.push(format!("STAGED_CAPSULE_RECOVERY_REQUIRED:{path}"));
+        }
+        let has_task_table: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='task')",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_task_table {
+            let mut statement = connection.prepare(
+                "SELECT id, capsule_required, capsule_path, capsule_omission_reason
+                 FROM task WHERE status='completed';",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (task_id, capsule_required, capsule_path, omission_reason) = row?;
+                if capsule_required == 1 {
+                    match capsule_path
+                        .as_deref()
+                        .ok_or_else(|| {
+                            HarnessInfraError::TaskFinishGate("missing capsule path".to_owned())
+                        })
+                        .and_then(|path| validate_task_capsule(&self.repo_root, path, &task_id))
+                    {
+                        Ok(_) => {}
+                        Err(_) => findings.push(format!("TERMINAL_CAPSULE_INVALID:{task_id}")),
+                    }
+                } else if omission_reason.as_deref().is_none_or(str::is_empty) {
+                    findings.push(format!("TERMINAL_CAPSULE_OMISSION_MISSING:{task_id}"));
+                }
+            }
+        }
         let has_schema_version: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",
             [], |row| row.get(0),
@@ -1385,6 +1692,805 @@ impl HarnessRepository for SqliteHarnessRepository {
         )?;
 
         Ok(connection.last_insert_rowid())
+    }
+
+    fn start_task(&self, input: TaskStartInput) -> Result<String> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let TaskStartInput {
+            input_type,
+            summary,
+            risk_lane: requested_lane,
+            lane_override_reason,
+            owner,
+            story_id,
+            behavior_bearing,
+            risk_flags,
+        } = input;
+        let policy = self.load_workflow_policy()?;
+        let (recommended_lane, _) = policy.classify(&risk_flags);
+        let recommended_lane = RiskLane::from_str(&recommended_lane)
+            .map_err(|error| HarnessInfraError::WorkflowInvalid(error.to_string()))?;
+        let risk_lane = if let Some(requested_lane) = requested_lane {
+            if requested_lane != recommended_lane && lane_override_reason.is_none() {
+                return Err(HarnessInfraError::TaskLaneOverrideReasonRequired);
+            }
+            if lane_rank(&requested_lane) < lane_rank(&recommended_lane) {
+                return Err(HarnessInfraError::TaskLaneOverrideCannotLower {
+                    recommended: recommended_lane.as_db_value().to_owned(),
+                    requested: requested_lane.as_db_value().to_owned(),
+                });
+            }
+            requested_lane
+        } else {
+            recommended_lane
+        };
+        let lane_policy = match risk_lane {
+            RiskLane::Tiny => &policy.lanes.tiny,
+            RiskLane::Normal => &policy.lanes.normal,
+            RiskLane::HighRisk => &policy.lanes.high_risk,
+        };
+        let story_required = lane_policy.story == "required"
+            || (lane_policy.story == "when_behavior_bearing" && behavior_bearing);
+        if story_required && story_id.is_none() {
+            return Err(HarnessInfraError::TaskStoryRequired);
+        }
+        let linked_artifacts = story_id
+            .as_ref()
+            .map(|_| vec!["docs/stories/".to_owned()])
+            .unwrap_or_default();
+        let context_manifest = policy.context_manifest(
+            risk_lane.as_db_value(),
+            "work",
+            &[],
+            &risk_flags,
+            &linked_artifacts,
+        );
+        let context_manifest_json = serde_json::to_string(&context_manifest)
+            .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
+        let capsule_required = (lane_policy.capsule == "required") as i64;
+        let mut connection = self.open_existing()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let (Some(story_id), Some(owner)) = (&story_id, &owner) {
+            let conflicting_owner: Option<String> = transaction
+                .query_row(
+                    "SELECT task.owner
+                     FROM task
+                     JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
+                     WHERE task_story.story_id=?1
+                       AND task.status IN ('open','in_progress','blocked','closing')
+                       AND task.owner IS NOT NULL AND task.owner != ?2
+                     LIMIT 1;",
+                    params![story_id, owner],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(conflicting_owner) = conflicting_owner {
+                return Err(HarnessInfraError::TaskOwnerConflict {
+                    story_id: story_id.clone(),
+                    owner: conflicting_owner,
+                });
+            }
+        }
+        let sequence: i64 =
+            transaction.query_row("SELECT COUNT(*) + 1 FROM task;", [], |row| row.get(0))?;
+        let id = format!("TASK-{sequence:06}");
+        transaction.execute(
+            "INSERT INTO intake (input_type, summary, risk_lane, risk_flags, story_id, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
+            params![
+                input_type.as_db_value(),
+                summary,
+                risk_lane.as_db_value(),
+                format!(
+                    "[{}]",
+                    risk_flags
+                        .iter()
+                        .map(|flag| format!("\"{}\"", flag.replace('"', "\\\"")))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                ),
+                story_id,
+                lane_override_reason.map(|reason| format!(
+                    "Created atomically by task start. Lane override: {reason}"
+                ))
+            ],
+        )?;
+        let intake_id = transaction.last_insert_rowid();
+        transaction.execute(
+            "INSERT INTO task (id, intake_id, status, risk_lane, behavior_bearing, summary, owner, worktree, context_manifest_json, context_manifest_checksum, capsule_required)
+             VALUES (?1, ?2, 'in_progress', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
+            params![id, intake_id, risk_lane.as_db_value(), behavior_bearing as i64, summary, owner, self.repo_root.to_string_lossy().into_owned(), context_manifest_json, context_manifest.checksum, capsule_required],
+        )?;
+        if let Some(story_id) = story_id {
+            transaction.execute(
+                "INSERT INTO task_story (task_id, story_id, role) VALUES (?1, ?2, 'primary');",
+                params![id, story_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(id)
+    }
+
+    fn task_status(&self, id: &str) -> Result<TaskStatusRecord> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let connection = self.open_existing()?;
+        let mut task = connection
+            .query_row(
+                "SELECT task.id, task.status, task.risk_lane, task.owner, task_story.story_id,
+                        task.context_manifest_json
+                 FROM task LEFT JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
+                 WHERE task.id=?1;",
+                params![id],
+                |row| {
+                    Ok((TaskStatusRecord {
+                        id: row.get(0)?,
+                        status: row.get(1)?,
+                        risk_lane: row.get(2)?,
+                        owner: row.get(3)?,
+                        story_id: row.get(4)?,
+                        allowed_next: Vec::new(),
+                        context_required: 0,
+                        context_acknowledged: 0,
+                        approvals: 0,
+                        proof_runs: 0,
+                        latest_proof_state: None,
+                        latest_proof_head_fresh: None,
+                        latest_proof_dirty_fresh: None,
+                    }, row.get::<_, String>(5)?))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| HarnessInfraError::TaskNotFound(id.to_owned()))?;
+        let manifest: WorkflowContextManifest = serde_json::from_str(&task.1)
+            .map_err(|_| HarnessInfraError::InvalidTaskContextManifest(id.to_owned()))?;
+        task.0.context_required = manifest.must_read.len();
+        task.0.context_acknowledged = connection.query_row(
+            "SELECT COUNT(*) FROM task_context_read WHERE task_id=?1;",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        task.0.approvals = connection.query_row(
+            "SELECT COUNT(*) FROM task_approval WHERE task_id=?1;",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        task.0.proof_runs = connection.query_row(
+            "SELECT COUNT(*) FROM proof_run WHERE task_id=?1;",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )? as usize;
+        let latest_proof: Option<(String, Option<String>, Option<String>)> = connection
+            .query_row(
+                "SELECT state, head_commit, summary FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((state, head_commit, summary)) = latest_proof {
+            let current_head = self.git_output(&["rev-parse", "HEAD"]).ok();
+            task.0.latest_proof_head_fresh = match (&head_commit, &current_head) {
+                (Some(recorded), Some(current)) => Some(recorded == current),
+                _ => None,
+            };
+            task.0.latest_proof_dirty_fresh = summary
+                .as_deref()
+                .and_then(|summary| serde_json::from_str::<ProofSummary>(summary).ok())
+                .and_then(|summary| {
+                    self.dirty_worktree_fingerprint()
+                        .ok()
+                        .map(|current| current == summary.dirty_fingerprint)
+                });
+            task.0.latest_proof_state = Some(state);
+        }
+        task.0.allowed_next = allowed_task_transitions(&task.0.status);
+        Ok(task.0)
+    }
+
+    fn transition_task(&self, input: TaskTransitionInput) -> Result<TaskStatusRecord> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let mut connection = self.open_existing()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "SELECT status, owner FROM task WHERE id=?1;",
+                params![input.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (current, stored_owner) =
+            current.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        if let Some(expected) = stored_owner {
+            let actual = input
+                .owner
+                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
+            if actual != expected {
+                return Err(HarnessInfraError::TaskOwnerMismatch { expected, actual });
+            }
+        }
+        if !task_transition_allowed(&current, &input.status) {
+            return Err(HarnessInfraError::InvalidTaskTransition {
+                current,
+                next: input.status,
+            });
+        }
+        transaction.execute(
+            "UPDATE task
+             SET status=?2, outcome=?3,
+                 closed_at=CASE WHEN ?2 IN ('abandoned','failed') THEN datetime('now') ELSE NULL END,
+                 updated_at=datetime('now')
+             WHERE id=?1;",
+            params![input.id, input.status, input.outcome],
+        )?;
+        transaction.commit()?;
+        self.task_status(&input.id)
+    }
+
+    fn handoff_task(&self, input: TaskHandoffInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if input.from_owner == input.to_owner {
+            return Err(HarnessInfraError::TaskHandoffSameOwner);
+        }
+        let mut connection = self.open_existing()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<(String, Option<String>)> = transaction
+            .query_row(
+                "SELECT status, owner FROM task WHERE id=?1;",
+                params![input.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let (status, owner) =
+            current.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        if matches!(status.as_str(), "completed" | "abandoned" | "failed") {
+            return Err(HarnessInfraError::InvalidTaskTransition {
+                current: status,
+                next: "handoff".to_owned(),
+            });
+        }
+        match owner {
+            Some(expected) if expected != input.from_owner => {
+                return Err(HarnessInfraError::TaskOwnerMismatch {
+                    expected,
+                    actual: input.from_owner,
+                })
+            }
+            None => return Err(HarnessInfraError::TaskOwnerRequired(input.from_owner)),
+            _ => {}
+        }
+        transaction.execute(
+            "UPDATE task SET owner=?2, updated_at=datetime('now') WHERE id=?1;",
+            params![input.id, input.to_owner],
+        )?;
+        transaction.execute(
+            "INSERT INTO task_approval (task_id, gate, source, evidence, scope) VALUES (?1, 'handoff', ?2, ?3, ?4);",
+            params![input.id, input.source, input.evidence, input.scope],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn link_task_story(&self, input: TaskStoryLinkInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if !matches!(input.role.as_str(), "primary" | "secondary") {
+            return Err(HarnessInfraError::InvalidTaskStoryRole);
+        }
+        let mut connection = self.open_existing()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let owner: Option<Option<String>> = transaction
+            .query_row(
+                "SELECT owner FROM task WHERE id=?1;",
+                params![input.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let stored_owner =
+            owner.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        if let Some(expected) = stored_owner {
+            let actual = input
+                .owner
+                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
+            if actual != expected {
+                return Err(HarnessInfraError::TaskOwnerMismatch { expected, actual });
+            }
+        }
+        if input.role == "primary" {
+            transaction.execute(
+                "UPDATE task_story SET role='secondary' WHERE task_id=?1 AND role='primary' AND story_id != ?2;",
+                params![input.id, input.story_id],
+            )?;
+        }
+        transaction.execute(
+            "INSERT INTO task_story (task_id, story_id, role) VALUES (?1, ?2, ?3)
+             ON CONFLICT(task_id, story_id) DO UPDATE SET role=excluded.role;",
+            params![input.id, input.story_id, input.role],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn finish_task(&self, input: TaskFinishInput) -> Result<TaskFinishRecord> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if input.friction != "none" {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "unresolved friction requires a structured disposition".to_owned(),
+            ));
+        }
+        let friction_connection = self.open_existing()?;
+        let unresolved_friction: i64 = friction_connection.query_row(
+            "SELECT COUNT(*) FROM friction
+             WHERE task_id=?1 AND disposition <> 'not-friction'
+               AND status NOT IN ('validated', 'ineffective', 'reverted');",
+            params![input.id],
+            |row| row.get(0),
+        )?;
+        if unresolved_friction > 0 {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "linked material friction requires a terminal observation outcome".to_owned(),
+            ));
+        }
+        let refresh = self.refresh_task(TaskRefreshInput {
+            id: input.id.clone(),
+            accept: false,
+        })?;
+        if refresh.changed {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "context manifest changed; run task refresh --accept first".to_owned(),
+            ));
+        }
+        let connection = self.open_existing()?;
+        let task: Option<TaskFinishSource> = connection
+            .query_row(
+                "SELECT status, owner, risk_lane, behavior_bearing, intake_id, capsule_required, context_manifest_json, capsule_path, closure_nonce
+                 FROM task WHERE id=?1;",
+                params![input.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+            )
+            .optional()?;
+        let (
+            status,
+            stored_owner,
+            lane,
+            behavior_bearing,
+            intake_id,
+            capsule_required,
+            manifest_json,
+            stored_capsule_path,
+            stored_closure_nonce,
+        ) = task.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        if let Some(expected) = stored_owner.as_ref() {
+            let actual = input
+                .owner
+                .as_ref()
+                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
+            if actual != expected {
+                return Err(HarnessInfraError::TaskOwnerMismatch {
+                    expected: expected.clone(),
+                    actual: actual.clone(),
+                });
+            }
+        }
+        if status == "completed" {
+            if stored_capsule_path.as_deref() != input.capsule_path.as_deref() {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "completed task capsule does not match the requested finish".to_owned(),
+                ));
+            }
+            let nonce = match input.capsule_path.as_deref() {
+                Some(path) => closure_nonce(&input.id, Some(&validate_task_capsule(&self.repo_root, path, &input.id)?.checksum)),
+                None => closure_nonce(&input.id, None),
+            };
+            if stored_closure_nonce.as_deref() != Some(&nonce) {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "completed task closure nonce does not match the requested finish".to_owned(),
+                ));
+            }
+            return Ok(TaskFinishRecord {
+                id: input.id,
+                status,
+            });
+        }
+        if status != "in_progress" {
+            return Err(HarnessInfraError::InvalidTaskTransition {
+                current: status,
+                next: "completed".to_owned(),
+            });
+        }
+        if lane == "high_risk" {
+            let approvals: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM task_approval WHERE task_id=?1;",
+                params![input.id],
+                |row| row.get(0),
+            )?;
+            if approvals == 0 {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "high-risk task requires an approval record".to_owned(),
+                ));
+            }
+        }
+        let capsule = match (capsule_required, input.capsule_path.as_deref()) {
+            (0, None) => None,
+            (0, Some(_)) => {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "non-material tiny task must not attach a capsule".to_owned(),
+                ))
+            }
+            (_, Some(path)) => Some(validate_task_capsule(&self.repo_root, path, &input.id)?),
+            (_, None) => {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "capsule is required for this task".to_owned(),
+                ))
+            }
+        };
+        if lane != "tiny" && capsule.is_none() {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "capsule is required for this task".to_owned(),
+            ));
+        }
+        if behavior_bearing != 0 {
+            let stories: i64 = connection.query_row(
+                "SELECT COUNT(*) FROM task_story WHERE task_id=?1;",
+                params![input.id],
+                |row| row.get(0),
+            )?;
+            if stories == 0 {
+                return Err(HarnessInfraError::TaskFinishGate(
+                    "behavior-bearing task has no story link".to_owned(),
+                ));
+            }
+        }
+        let manifest: WorkflowContextManifest = serde_json::from_str(&manifest_json)
+            .map_err(|_| HarnessInfraError::InvalidTaskContextManifest(input.id.clone()))?;
+        let acknowledged: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM task_context_read WHERE task_id=?1;",
+            params![input.id],
+            |row| row.get(0),
+        )?;
+        if acknowledged < manifest.must_read.len() as i64 {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "required context paths are not all acknowledged".to_owned(),
+            ));
+        }
+        let latest: Option<(String, Option<String>, Option<String>)> = connection
+            .query_row(
+                "SELECT state, head_commit, summary FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
+                params![input.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (proof_state, proof_head, proof_summary) = latest
+            .ok_or_else(|| HarnessInfraError::TaskFinishGate("no proof run recorded".to_owned()))?;
+        if proof_state != "pass"
+            || proof_head.as_deref() != self.git_output(&["rev-parse", "HEAD"]).ok().as_deref()
+        {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "latest proof is failing or stale at HEAD".to_owned(),
+            ));
+        }
+        let proof_dirty = proof_summary
+            .as_deref()
+            .and_then(|summary| serde_json::from_str::<ProofSummary>(summary).ok())
+            .map(|summary| summary.dirty_fingerprint);
+        if proof_dirty.as_deref() != Some(self.dirty_worktree_fingerprint()?.as_str()) {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "latest proof has a stale dirty-worktree fingerprint".to_owned(),
+            ));
+        }
+        let trace_intake: Option<i64> = connection
+            .query_row(
+                "SELECT intake_id FROM trace WHERE id=?1;",
+                params![input.trace_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if trace_intake != Some(intake_id) {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "final trace is missing or belongs to another intake".to_owned(),
+            ));
+        }
+        if !self.score_trace(Some(input.trace_id))?.meets_requirement {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "final trace does not meet the task lane tier".to_owned(),
+            ));
+        }
+        let nonce = closure_nonce(&input.id, capsule.as_ref().map(|value| value.checksum.as_str()));
+        let staged_capsule = match capsule.as_ref() {
+            Some(capsule) => Some(stage_task_capsule(&self.repo_root, capsule, &input.id, &nonce)?),
+            None => None,
+        };
+        let mut connection = self.open_existing()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let closure_result = (|| -> Result<()> {
+            transaction.execute(
+                "UPDATE task SET status='closing', closure_nonce=?2, updated_at=datetime('now') WHERE id=?1;",
+                params![input.id, nonce],
+            )?;
+            if let Some(staged) = staged_capsule.as_ref() {
+                fs::rename(&staged.staged_path, self.repo_root.join(&staged.final_path))?;
+            }
+            if let Some(capsule) = capsule {
+            transaction.execute(
+                "UPDATE task
+                 SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
+                     capsule_path=?2, capsule_checksum=?3, capsule_omission_reason=NULL, closure_nonce=?4
+                 WHERE id=?1;",
+                params![input.id, capsule.path, capsule.checksum, nonce],
+            )?;
+        } else {
+            transaction.execute(
+                "UPDATE task
+                 SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
+                     capsule_omission_reason='non-material tiny task; friction none', closure_nonce=?2
+                 WHERE id=?1;",
+                params![input.id, nonce],
+            )?;
+        }
+            transaction.commit()?;
+            Ok(())
+        })();
+        if closure_result.is_err() {
+            if let Some(staged) = staged_capsule.as_ref() {
+                let _ = fs::remove_file(&staged.staged_path);
+            }
+        }
+        closure_result?;
+        Ok(TaskFinishRecord {
+            id: input.id,
+            status: "completed".to_owned(),
+        })
+    }
+
+    fn refresh_task(&self, input: TaskRefreshInput) -> Result<TaskRefreshRecord> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let connection = self.open_existing()?;
+        let task: Option<(String, String, String)> = connection
+            .query_row(
+                "SELECT task.risk_lane, intake.risk_flags, task.context_manifest_checksum
+                 FROM task JOIN intake ON intake.id=task.intake_id WHERE task.id=?1;",
+                params![input.id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        row.get(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let (lane, risk_flags, previous_checksum) =
+            task.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        let mut statement = connection
+            .prepare("SELECT story_id FROM task_story WHERE task_id=?1 ORDER BY story_id;")?;
+        let stories =
+            collect_rows(statement.query_map(params![input.id], |row| row.get::<_, String>(0))?)?;
+        let linked_artifacts = if stories.is_empty() {
+            Vec::new()
+        } else {
+            vec!["docs/stories/".to_owned()]
+        };
+        let policy = self.load_workflow_policy()?;
+        let current = policy.context_manifest(
+            &lane,
+            "work",
+            &[],
+            &jsonish_list(Some(&risk_flags)),
+            &linked_artifacts,
+        );
+        let changed = current.checksum != previous_checksum;
+        let stored_manifest: String = connection.query_row(
+            "SELECT context_manifest_json FROM task WHERE id=?1;",
+            params![input.id],
+            |row| row.get(0),
+        )?;
+        let stored: WorkflowContextManifest = serde_json::from_str(&stored_manifest)
+            .map_err(|_| HarnessInfraError::InvalidTaskContextManifest(input.id.clone()))?;
+        let stored_paths = manifest_paths(&stored);
+        let current_paths = manifest_paths(&current);
+        let mut changed_paths = stored_paths
+            .symmetric_difference(&current_paths)
+            .cloned()
+            .collect::<Vec<_>>();
+        changed_paths.sort();
+        let applied = changed && input.accept;
+        if applied {
+            connection.execute(
+                "UPDATE task SET context_manifest_json=?2, context_manifest_checksum=?3, updated_at=datetime('now') WHERE id=?1;",
+                params![input.id, serde_json::to_string(&current).map_err(|error| HarnessInfraError::Serialization(error.to_string()))?, current.checksum],
+            )?;
+        }
+        Ok(TaskRefreshRecord {
+            id: input.id,
+            changed,
+            applied,
+            previous_checksum,
+            current_checksum: current.checksum,
+            changed_paths,
+        })
+    }
+
+    fn acknowledge_task_context(&self, input: TaskContextAcknowledgeInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let connection = self.open_existing()?;
+        let manifest_json: Option<String> = connection
+            .query_row(
+                "SELECT context_manifest_json FROM task WHERE id=?1;",
+                params![input.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let manifest_json =
+            manifest_json.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        let manifest: WorkflowContextManifest = serde_json::from_str(&manifest_json)
+            .map_err(|_| HarnessInfraError::InvalidTaskContextManifest(input.id.clone()))?;
+        let allowed = manifest
+            .must_read
+            .iter()
+            .chain(manifest.should_read.iter())
+            .any(|entry| entry.path == input.path);
+        if !allowed {
+            return Err(HarnessInfraError::TaskContextPathNotRequired(input.path));
+        }
+        connection.execute(
+            "INSERT OR IGNORE INTO task_context_read (task_id, path, actor) VALUES (?1, ?2, ?3);",
+            params![input.id, input.path, input.actor],
+        )?;
+        Ok(())
+    }
+
+    fn approve_task(&self, input: TaskApprovalInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let policy = self.load_workflow_policy()?;
+        if !policy
+            .approvals
+            .required_for
+            .iter()
+            .any(|gate| gate == &input.gate)
+        {
+            return Err(HarnessInfraError::UnknownApprovalGate(input.gate));
+        }
+        let connection = self.open_existing()?;
+        let exists: Option<String> = connection
+            .query_row(
+                "SELECT id FROM task WHERE id=?1;",
+                params![input.id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(HarnessInfraError::TaskNotFound(input.id));
+        }
+        connection.execute(
+            "INSERT INTO task_approval (task_id, gate, source, evidence, scope) VALUES (?1, ?2, ?3, ?4, ?5);",
+            params![input.id, input.gate, input.source, input.evidence, input.scope],
+        )?;
+        Ok(())
+    }
+
+    fn run_proof(&self, input: ProofRunInput) -> Result<ProofRunRecord> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if input.executable.trim().is_empty() {
+            return Err(HarnessInfraError::MissingProofCommand);
+        }
+        let connection = self.open_existing()?;
+        let exists: Option<String> = connection
+            .query_row(
+                "SELECT id FROM task WHERE id=?1;",
+                params![input.task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(HarnessInfraError::TaskNotFound(input.task_id));
+        }
+        if let Some(story_id) = &input.story_id {
+            let linked: Option<String> = connection
+                .query_row(
+                    "SELECT story_id FROM task_story WHERE task_id=?1 AND story_id=?2;",
+                    params![input.task_id, story_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if linked.is_none() {
+                return Err(HarnessInfraError::ProofStoryNotLinked {
+                    task_id: input.task_id,
+                    story_id: story_id.clone(),
+                });
+            }
+        }
+        let output = Command::new(&input.executable)
+            .args(&input.argv)
+            .current_dir(&self.repo_root)
+            .output()?;
+        let exit_code = output.status.code().unwrap_or(-1);
+        let state = if output.status.success() {
+            "pass"
+        } else {
+            "fail"
+        }
+        .to_owned();
+        let head_commit = self.git_output(&["rev-parse", "HEAD"]).ok();
+        let dirty_fingerprint = self.dirty_worktree_fingerprint()?;
+        let argv_json = serde_json::to_string(&input.argv)
+            .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
+        let summary = serde_json::to_string(&ProofSummary {
+            schema: "harness/proof-summary/v1".to_owned(),
+            exit_code,
+            dirty_fingerprint,
+        })
+        .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
+        connection.execute(
+            "INSERT INTO proof_run (task_id, layer, state, executable, argv_json, finished_at, exit_code, head_commit, summary)
+             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), ?6, ?7, ?8);",
+            params![input.task_id, input.layer, state, input.executable, argv_json, exit_code, head_commit, summary],
+        )?;
+        Ok(ProofRunRecord {
+            task_id: input.task_id,
+            layer: input.layer,
+            state,
+            exit_code,
+            head_commit,
+        })
+    }
+
+    fn query_proofs(&self, task_id: &str) -> Result<Vec<ProofRecord>> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        let connection = self.open_existing()?;
+        let exists: Option<String> = connection
+            .query_row(
+                "SELECT id FROM task WHERE id=?1;",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(HarnessInfraError::TaskNotFound(task_id.to_owned()));
+        }
+        let mut statement = connection.prepare(
+            "SELECT layer, state, exit_code, head_commit, summary
+             FROM proof_run WHERE task_id=?1 ORDER BY id;",
+        )?;
+        let rows = statement.query_map(params![task_id], |row| {
+            Ok(ProofRecord {
+                layer: row.get(0)?,
+                state: row.get(1)?,
+                exit_code: row.get(2)?,
+                head_commit: row.get(3)?,
+                summary: row.get(4)?,
+            })
+        })?;
+        collect_rows(rows)
     }
 
     fn add_story(&self, input: StoryAddInput) -> Result<()> {
@@ -2055,6 +3161,37 @@ impl HarnessRepository for SqliteHarnessRepository {
         collect_rows(rows)
     }
 
+    fn add_friction(&self, input: FrictionAddInput) -> Result<String> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" { return Err(HarnessInfraError::UnsafeDurableState(report.code)); }
+        if !["low", "medium", "high", "critical"].contains(&input.severity.as_str())
+            || !["fixed-now", "backlog", "accepted-risk", "not-friction"].contains(&input.disposition.as_str()) {
+            return Err(HarnessInfraError::WorkflowInvalid("invalid friction severity or disposition".to_owned()));
+        }
+        let fingerprint = format!("{:x}", Sha256::digest(format!("{}\0{}", input.category.trim().to_lowercase(), input.summary.trim().to_lowercase()).as_bytes()));
+        let connection = self.open_existing()?;
+        connection.execute(
+            "INSERT INTO friction (task_id, fingerprint, category, severity, summary, disposition, status, baseline, predicted_metric, observation_window)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'proposed', ?7, ?8, ?9)
+             ON CONFLICT(fingerprint) DO NOTHING;",
+            params![input.task_id, fingerprint, input.category, input.severity, input.summary, input.disposition, input.baseline, input.predicted_metric, input.observation_window],
+        )?;
+        Ok(fingerprint)
+    }
+
+    fn resolve_friction(&self, input: FrictionResolveInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" { return Err(HarnessInfraError::UnsafeDurableState(report.code)); }
+        if !["validated", "ineffective", "reverted"].contains(&input.status.as_str()) {
+            return Err(HarnessInfraError::WorkflowInvalid("friction resolution must be validated, ineffective, or reverted".to_owned()));
+        }
+        let connection = self.open_existing()?;
+        if connection.execute("UPDATE friction SET status=?2, actual_outcome=?3, resolved_at=datetime('now') WHERE fingerprint=?1;", params![input.fingerprint, input.status, input.actual_outcome])? == 0 {
+            return Err(HarnessInfraError::WorkflowInvalid("friction fingerprint was not found".to_owned()));
+        }
+        Ok(())
+    }
+
     fn query_tools(
         &self,
         responsibility: Option<String>,
@@ -2198,6 +3335,18 @@ impl HarnessRepository for SqliteHarnessRepository {
                  ORDER BY story.id;",
             )?,
             broken_tools: Vec::new(),
+            friction_without_outcomes: audit_findings(
+                &connection,
+                "SELECT fingerprint, summary FROM friction
+                 WHERE disposition <> 'not-friction'
+                   AND status NOT IN ('validated', 'ineffective', 'reverted')
+                 ORDER BY id;",
+            )?,
+            coverage: vec![
+                "stories/traces".to_owned(), "verification commands".to_owned(),
+                "backlog outcomes".to_owned(), "friction outcomes".to_owned(),
+                "registered tools".to_owned(),
+            ],
         };
 
         let mut statement =
@@ -2451,7 +3600,7 @@ fn validate_workflow_policy(path: &Path) -> std::result::Result<(), String> {
     parse_workflow_policy(path).map(|_| ())
 }
 
-fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, String> {
+pub(crate) fn parse_workflow_policy(path: &Path) -> std::result::Result<WorkflowPolicy, String> {
     let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let policy: WorkflowPolicy = toml::from_str(&content).map_err(|error| error.to_string())?;
     let major = policy.policy_version.split('.').next().unwrap_or_default();
@@ -3220,11 +4369,610 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 6);
+        assert_eq!(schema_version, 9);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
         assert!(story_columns.contains(&"last_verified_result".to_owned()));
+    }
+
+    #[test]
+    fn task_schema_rejects_terminal_state_without_outcome() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        let result = connection.execute(
+            "INSERT INTO task (
+                id, status, risk_lane, behavior_bearing, summary, worktree,
+                context_manifest_json, context_manifest_checksum, capsule_required
+             ) VALUES ('TASK-TEST', 'completed', 'normal', 0, 'invalid terminal',
+                '/tmp/worktree', '{}', 'checksum', 0);",
+            [],
+        );
+        assert!(result.is_err());
+        let invalid_status = connection.execute(
+            "INSERT INTO task (
+                id, status, risk_lane, behavior_bearing, summary, worktree,
+                context_manifest_json, context_manifest_checksum, capsule_required
+             ) VALUES ('TASK-INVALID', 'unknown', 'normal', 0, 'invalid status',
+                '/tmp/worktree', '{}', 'checksum', 0);",
+            [],
+        );
+        assert!(invalid_status.is_err());
+    }
+
+    #[test]
+    fn doctor_rejects_a_completed_required_capsule_when_file_is_missing() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute(
+                "INSERT INTO task (
+                    id, status, outcome, risk_lane, behavior_bearing, summary, worktree,
+                    context_manifest_json, context_manifest_checksum, capsule_required, capsule_path
+                 ) VALUES ('TASK-CAPSULE-MISSING', 'completed', 'completed', 'normal', 0,
+                    'invalid terminal capsule', '/tmp/worktree', '{}', 'checksum', 1,
+                    'docs/tasks/2099/01/TASK-CAPSULE-MISSING.md');",
+                [],
+            )
+            .unwrap();
+        let report = repository.doctor().unwrap();
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "TERMINAL_CAPSULE_INVALID:TASK-CAPSULE-MISSING"));
+    }
+
+    #[test]
+    fn task_start_is_atomic_links_primary_story_and_allows_only_valid_transitions() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-TASK".to_owned(),
+                title: "Task fixture".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-SECOND".to_owned(),
+                title: "Secondary task fixture".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: crate::domain::InputType::ChangeRequest,
+                summary: "Validate task lifecycle".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                story_id: Some("CL-TASK".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(id, "TASK-000001");
+        let task = repository.task_status(&id).unwrap();
+        assert_eq!(task.status, "in_progress");
+        assert_eq!(task.risk_lane, "normal");
+        assert_eq!(task.story_id.as_deref(), Some("CL-TASK"));
+        repository
+            .acknowledge_task_context(TaskContextAcknowledgeInput {
+                id: id.clone(),
+                path: "docs/stories/".to_owned(),
+                actor: Some("codex".to_owned()),
+            })
+            .unwrap();
+        assert!(matches!(
+            repository.acknowledge_task_context(TaskContextAcknowledgeInput {
+                id: id.clone(),
+                path: "docs/not-in-manifest.md".to_owned(),
+                actor: None,
+            }),
+            Err(HarnessInfraError::TaskContextPathNotRequired(_))
+        ));
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE task SET context_manifest_checksum='stale-fixture' WHERE id=?1;",
+                params![id],
+            )
+            .unwrap();
+        let pending_refresh = repository
+            .refresh_task(TaskRefreshInput {
+                id: id.clone(),
+                accept: false,
+            })
+            .unwrap();
+        assert!(pending_refresh.changed);
+        assert!(!pending_refresh.applied);
+        let accepted_refresh = repository
+            .refresh_task(TaskRefreshInput {
+                id: id.clone(),
+                accept: true,
+            })
+            .unwrap();
+        assert!(accepted_refresh.changed);
+        assert!(accepted_refresh.applied);
+        repository
+            .approve_task(TaskApprovalInput {
+                id: id.clone(),
+                gate: "risk-policy".to_owned(),
+                source: "human".to_owned(),
+                evidence: "review reference TEST-1".to_owned(),
+                scope: Some("fixture".to_owned()),
+            })
+            .unwrap();
+        assert!(matches!(
+            repository.approve_task(TaskApprovalInput {
+                id: id.clone(),
+                gate: "undeclared-gate".to_owned(),
+                source: "human".to_owned(),
+                evidence: "invalid".to_owned(),
+                scope: None,
+            }),
+            Err(HarnessInfraError::UnknownApprovalGate(_))
+        ));
+        let passing_proof = repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: Some("CL-TASK".to_owned()),
+                layer: "unit".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["--version".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(passing_proof.state, "pass");
+        let failing_proof = repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: Some("CL-TASK".to_owned()),
+                layer: "integration".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["definitely-not-a-git-command".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(failing_proof.state, "fail");
+        let proof_runs: i64 = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM proof_run WHERE task_id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(proof_runs, 2);
+        let task_after_proof = repository.task_status(&id).unwrap();
+        assert_eq!(task_after_proof.proof_runs, 2);
+        assert_eq!(task_after_proof.latest_proof_state.as_deref(), Some("fail"));
+        assert_eq!(task_after_proof.latest_proof_head_fresh, Some(true));
+        assert_eq!(task_after_proof.latest_proof_dirty_fresh, Some(true));
+        let dirty_path = repository.repo_root.join("proof-dirty-fixture.txt");
+        fs::write(&dirty_path, "changes after proof").unwrap();
+        assert_eq!(
+            repository
+                .task_status(&id)
+                .unwrap()
+                .latest_proof_dirty_fresh,
+            Some(false)
+        );
+        fs::remove_file(dirty_path).unwrap();
+        assert!(matches!(
+            repository.start_task(TaskStartInput {
+                input_type: crate::domain::InputType::ChangeRequest,
+                summary: "Competing task".to_owned(),
+                risk_lane: Some(RiskLane::Normal),
+                lane_override_reason: None,
+                owner: Some("other-agent".to_owned()),
+                story_id: Some("CL-TASK".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+            }),
+            Err(HarnessInfraError::TaskOwnerConflict { .. })
+        ));
+        assert!(matches!(
+            repository.transition_task(TaskTransitionInput {
+                id: id.clone(),
+                status: "blocked".to_owned(),
+                outcome: None,
+                owner: Some("other-agent".to_owned()),
+            }),
+            Err(HarnessInfraError::TaskOwnerMismatch { .. })
+        ));
+        repository
+            .handoff_task(TaskHandoffInput {
+                id: id.clone(),
+                from_owner: "codex".to_owned(),
+                to_owner: "reviewer".to_owned(),
+                source: "human".to_owned(),
+                evidence: "fixture handoff".to_owned(),
+                scope: Some("task".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            repository.task_status(&id).unwrap().owner.as_deref(),
+            Some("reviewer")
+        );
+        repository
+            .link_task_story(TaskStoryLinkInput {
+                id: id.clone(),
+                story_id: "CL-SECOND".to_owned(),
+                role: "secondary".to_owned(),
+                owner: Some("reviewer".to_owned()),
+            })
+            .unwrap();
+        repository
+            .link_task_story(TaskStoryLinkInput {
+                id: id.clone(),
+                story_id: "CL-SECOND".to_owned(),
+                role: "primary".to_owned(),
+                owner: Some("reviewer".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(
+            repository.task_status(&id).unwrap().story_id.as_deref(),
+            Some("CL-SECOND")
+        );
+
+        let blocked = repository
+            .transition_task(TaskTransitionInput {
+                id: id.clone(),
+                status: "blocked".to_owned(),
+                outcome: None,
+                owner: Some("reviewer".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(blocked.status, "blocked");
+        let resumed = repository
+            .transition_task(TaskTransitionInput {
+                id: id.clone(),
+                status: "in_progress".to_owned(),
+                outcome: None,
+                owner: Some("reviewer".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(resumed.status, "in_progress");
+        let abandoned = repository
+            .transition_task(TaskTransitionInput {
+                id: id.clone(),
+                status: "abandoned".to_owned(),
+                outcome: Some("No longer needed".to_owned()),
+                owner: Some("reviewer".to_owned()),
+            })
+            .unwrap();
+        assert_eq!(abandoned.status, "abandoned");
+        assert!(matches!(
+            repository.transition_task(TaskTransitionInput {
+                id,
+                status: "in_progress".to_owned(),
+                outcome: None,
+                owner: Some("reviewer".to_owned()),
+            }),
+            Err(HarnessInfraError::InvalidTaskTransition { .. })
+        ));
+
+        let failed_start = repository.start_task(TaskStartInput {
+            input_type: crate::domain::InputType::ChangeRequest,
+            summary: "Reject missing story".to_owned(),
+            risk_lane: Some(RiskLane::Normal),
+            lane_override_reason: None,
+            owner: None,
+            story_id: Some("MISSING".to_owned()),
+            behavior_bearing: true,
+            risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+        });
+        assert!(failed_start.is_err());
+        assert_eq!(repository.query_stats().unwrap().intakes, 1);
+
+        assert!(matches!(
+            repository.start_task(TaskStartInput {
+                input_type: crate::domain::InputType::ChangeRequest,
+                summary: "Require behavior story".to_owned(),
+                risk_lane: Some(RiskLane::Normal),
+                lane_override_reason: None,
+                owner: None,
+                story_id: None,
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+            }),
+            Err(HarnessInfraError::TaskStoryRequired)
+        ));
+        assert!(matches!(
+            repository.start_task(TaskStartInput {
+                input_type: crate::domain::InputType::ChangeRequest,
+                summary: "Reject hard-gate downgrade".to_owned(),
+                risk_lane: Some(RiskLane::Tiny),
+                lane_override_reason: Some("fixture request".to_owned()),
+                owner: None,
+                story_id: None,
+                behavior_bearing: false,
+                risk_flags: vec!["auth".to_owned()],
+            }),
+            Err(HarnessInfraError::TaskLaneOverrideCannotLower { .. })
+        ));
+    }
+
+    #[test]
+    fn task_finish_completes_only_a_gated_non_material_tiny_task() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Finish a tiny fixture".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                story_id: None,
+                behavior_bearing: false,
+                risk_flags: Vec::new(),
+            })
+            .unwrap();
+        repository
+            .acknowledge_task_context(TaskContextAcknowledgeInput {
+                id: id.clone(),
+                path: "<changed-files>".to_owned(),
+                actor: Some("codex".to_owned()),
+            })
+            .unwrap();
+        repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: None,
+                layer: "quick".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["--version".to_owned()],
+            })
+            .unwrap();
+        let intake_id: i64 = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT intake_id FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let trace_id = repository
+            .record_trace(TraceInput {
+                task_summary: "Finish tiny task fixture".to_owned(),
+                intake_id: Some(intake_id),
+                story_id: None,
+                agent: None,
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("none".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(None),
+                files_read: CsvList::from_optional(None),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        let friction_fingerprint = "fixture-unresolved-material-friction";
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "INSERT INTO friction (task_id, fingerprint, category, severity, summary, disposition, status)
+                 VALUES (?1, ?2, 'workflow', 'high', 'fixture material friction', 'backlog', 'proposed');",
+                params![id, friction_fingerprint],
+            )
+            .unwrap();
+        assert!(matches!(
+            repository.finish_task(TaskFinishInput {
+                id: id.clone(), owner: Some("codex".to_owned()), trace_id,
+                friction: "none".to_owned(), capsule_path: None,
+            }),
+            Err(HarnessInfraError::TaskFinishGate(_))
+        ));
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE friction SET status='validated', actual_outcome='fixture observed', resolved_at=datetime('now') WHERE fingerprint=?1;",
+                params![friction_fingerprint],
+            )
+            .unwrap();
+        let result = repository
+            .finish_task(TaskFinishInput {
+                id: id.clone(),
+                owner: Some("codex".to_owned()),
+                trace_id,
+                friction: "none".to_owned(),
+                capsule_path: None,
+            })
+            .unwrap();
+        assert_eq!(result.status, "completed");
+        assert_eq!(repository.task_status(&id).unwrap().status, "completed");
+        assert_eq!(
+            repository
+                .finish_task(TaskFinishInput {
+                    id,
+                    owner: Some("codex".to_owned()),
+                    trace_id,
+                    friction: "none".to_owned(),
+                    capsule_path: None,
+                })
+                .unwrap()
+                .status,
+            "completed"
+        );
+    }
+
+    #[test]
+    fn task_finish_records_a_valid_required_capsule_for_normal_work() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-FINISH".to_owned(),
+                title: "Finish capsule fixture".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Finish normal capsule fixture".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                story_id: Some("CL-FINISH".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+            })
+            .unwrap();
+        let manifest_json: String = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT context_manifest_json FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let manifest: WorkflowContextManifest = serde_json::from_str(&manifest_json).unwrap();
+        for entry in manifest.must_read {
+            repository
+                .acknowledge_task_context(TaskContextAcknowledgeInput {
+                    id: id.clone(),
+                    path: entry.path,
+                    actor: Some("codex".to_owned()),
+                })
+                .unwrap();
+        }
+        let capsule_path = "docs/tasks/2099/01/TASK-000001-normal-fixture.md";
+        let capsule_full_path = repository.repo_root.join(capsule_path);
+        fs::create_dir_all(capsule_full_path.parent().unwrap()).unwrap();
+        let body = "# Outcome\n\nnormal fixture completed\n";
+        let checksum = format!("{:x}", Sha256::digest(body.as_bytes()));
+        fs::write(
+            &capsule_full_path,
+            format!(
+                "---\nschema: harness/task-capsule/v1\ntask_id: {id}\ndate: 2099-01-01\nlane: normal\noutcome: completed\ncontent_checksum: sha256:{checksum}\n---\n{body}"
+            ),
+        )
+        .unwrap();
+        repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: Some("CL-FINISH".to_owned()),
+                layer: "integration".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["--version".to_owned()],
+            })
+            .unwrap();
+        let intake_id: i64 = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT intake_id FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let trace_id = repository
+            .record_trace(TraceInput {
+                task_summary: "Finish normal capsule fixture".to_owned(),
+                intake_id: Some(intake_id),
+                story_id: Some("CL-FINISH".to_owned()),
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: None,
+                token_estimate: None,
+                friction: Some("none".to_owned()),
+                notes: None,
+                actions: CsvList::from_optional(Some("implemented".to_owned())),
+                files_read: CsvList::from_optional(Some("docs/stories/".to_owned())),
+                files_changed: CsvList::from_optional(Some(
+                    "docs/tasks/2099/01/TASK-000001-normal-fixture.md".to_owned(),
+                )),
+                decisions: CsvList::from_optional(None),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+        repository
+            .open_existing()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_terminal_closure
+                 BEFORE UPDATE OF status ON task
+                 WHEN NEW.status='completed'
+                 BEGIN SELECT RAISE(ABORT, 'simulated terminal closure crash'); END;",
+            )
+            .unwrap();
+        let failed_finish = repository.finish_task(TaskFinishInput {
+            id: id.clone(),
+            owner: Some("codex".to_owned()),
+            trace_id,
+            friction: "none".to_owned(),
+            capsule_path: Some(capsule_path.to_owned()),
+        });
+        assert!(failed_finish.is_err());
+        assert_eq!(repository.task_status(&id).unwrap().status, "in_progress");
+        assert!(capsule_full_path.exists());
+        repository
+            .open_existing()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_terminal_closure;")
+            .unwrap();
+        repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: Some("CL-FINISH".to_owned()),
+                layer: "integration".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["--version".to_owned()],
+            })
+            .unwrap();
+        let result = repository
+            .finish_task(TaskFinishInput {
+                id: id.clone(),
+                owner: Some("codex".to_owned()),
+                trace_id,
+                friction: "none".to_owned(),
+                capsule_path: Some(capsule_path.to_owned()),
+            })
+            .unwrap();
+        assert_eq!(result.status, "completed");
+        let saved: (Option<String>, Option<String>, Option<String>) = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT capsule_path, capsule_checksum, closure_nonce FROM task WHERE id=?1;",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(saved.0.as_deref(), Some(capsule_path));
+        assert_eq!(saved.1.as_deref(), Some(checksum.as_str()));
+        assert_eq!(saved.2.as_deref(), Some(closure_nonce(&id, Some(&checksum)).as_str()));
+        let staged = capsule_full_path.with_file_name(format!(
+            ".TASK-000001-normal-fixture.md.closing-{id}-{}.tmp",
+            closure_nonce(&id, Some(&checksum))
+        ));
+        assert!(!staged.exists());
+        fs::remove_file(&capsule_full_path).unwrap();
+        fs::remove_dir_all(repository.repo_root.join("docs/tasks/2099")).unwrap();
     }
 
     #[test]
@@ -3237,7 +4985,26 @@ mod tests {
         assert_eq!(report.code, "DB_MISSING");
         assert!(report.ok);
         assert!(!db_path.exists());
-        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    }
+
+    #[test]
+    fn doctor_rejects_a_leftover_staged_capsule() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let staged = repository
+            .repo_root
+            .join("docs/tasks/2099/01/.TASK-staged.closing-TASK-staged-nonce.tmp");
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, "partial capsule").unwrap();
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding.starts_with("STAGED_CAPSULE_RECOVERY_REQUIRED:")));
     }
 
     #[test]
@@ -3246,7 +5013,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (7)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (10)", [])
             .unwrap();
         drop(connection);
         let db_path = repository.db_path.clone();
@@ -3260,7 +5027,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            7
+            10
         );
     }
 
@@ -3446,7 +5213,7 @@ mod tests {
         assert!(high_finish
             .must_read
             .iter()
-            .any(|entry| entry.path == "_harness/TRACE_SPEC.md"));
+            .any(|entry| entry.path == "git status --short"));
         assert!(high_finish
             .must_read
             .iter()
@@ -3616,11 +5383,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            6
+            9
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -3747,7 +5514,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (7)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (10)", [])
             .unwrap();
         drop(connection);
         let before = sha256_file(&repository.db_path).unwrap();
@@ -3766,7 +5533,7 @@ mod tests {
 
         let result = repository.migrate().unwrap();
 
-        assert_eq!(result.current_version, 6);
+        assert_eq!(result.current_version, 9);
         assert!(result.applied.is_empty());
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
@@ -3846,7 +5613,7 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6]);
+        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8, 9]);
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection

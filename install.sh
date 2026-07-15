@@ -58,6 +58,9 @@ is_excluded() {
     _harness/evidence/*) return 0 ;;
     # Ma trận test được generate riêng cho repo nguồn
     _harness/docs/TEST_MATRIX.md) return 0 ;;
+    # Runtime policy is now command/config-backed. Retain source-only records
+    # in harness-engineering but do not install them into target repositories.
+    _harness/HARNESS.md|_harness/FEATURE_INTAKE.md|_harness/CONTEXT_RULES.md|_harness/TRACE_SPEC.md|_harness/TOOL_REGISTRY.md|_harness/TEST_MATRIX.md|_harness/ARCHITECTURE.md|_harness/IMPROVEMENT_PROTOCOL.md|_harness/HARNESS_AUDIT.md|_harness/HARNESS_COMPONENTS.md|_harness/HARNESS_MATURITY.md|_harness/README.md) return 0 ;;
     # Bản đồ orient + wiki được generate riêng cho repo nguồn
     docs/KNOWLEDGE_INDEX.md) return 0 ;;
     docs/wiki/*) return 0 ;;

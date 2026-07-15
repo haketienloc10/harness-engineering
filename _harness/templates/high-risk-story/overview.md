@@ -1,4 +1,7 @@
-# Overview
+# Deprecated Compatibility Template: High-Risk Overview
+
+Use the progressive `_harness/templates/story.md`; its lane, scope, contract,
+human-gate and validation sections expand for high-risk work.
 
 ## Current Behavior
 

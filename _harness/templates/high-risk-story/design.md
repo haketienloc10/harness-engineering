@@ -1,4 +1,6 @@
-# Design
+# Deprecated Compatibility Template: High-Risk Design
+
+Use the Design and Decisions section in `_harness/templates/story.md`.
 
 ## Domain Model
 

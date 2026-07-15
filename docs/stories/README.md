@@ -18,7 +18,7 @@ docs/stories/epics/E01-domain-name/US-001-short-story-title.md
 
 ## High-Risk Story
 
-Use `_harness/templates/high-risk-story/` when the feature intake
+Use the progressive `_harness/templates/story.md` when the feature intake
 classifies work as high-risk.
 
 Suggested path:

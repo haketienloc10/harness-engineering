@@ -29,6 +29,145 @@ pub struct IntakeInput {
 }
 
 #[derive(Debug)]
+pub struct FrictionAddInput {
+    pub task_id: Option<String>, pub category: String, pub severity: String,
+    pub summary: String, pub disposition: String, pub baseline: Option<String>,
+    pub predicted_metric: Option<String>, pub observation_window: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct FrictionResolveInput { pub fingerprint: String, pub status: String, pub actual_outcome: String }
+
+#[derive(Debug)]
+pub struct TaskStartInput {
+    pub input_type: InputType,
+    pub summary: String,
+    pub risk_lane: Option<RiskLane>,
+    pub lane_override_reason: Option<String>,
+    pub owner: Option<String>,
+    pub story_id: Option<String>,
+    pub behavior_bearing: bool,
+    pub risk_flags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskStatusRecord {
+    pub id: String,
+    pub status: String,
+    pub risk_lane: String,
+    pub owner: Option<String>,
+    pub story_id: Option<String>,
+    pub allowed_next: Vec<String>,
+    pub context_required: usize,
+    pub context_acknowledged: usize,
+    pub approvals: usize,
+    pub proof_runs: usize,
+    pub latest_proof_state: Option<String>,
+    pub latest_proof_head_fresh: Option<bool>,
+    pub latest_proof_dirty_fresh: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct TaskTransitionInput {
+    pub id: String,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub owner: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskHandoffInput {
+    pub id: String,
+    pub from_owner: String,
+    pub to_owner: String,
+    pub source: String,
+    pub evidence: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskStoryLinkInput {
+    pub id: String,
+    pub story_id: String,
+    pub role: String,
+    pub owner: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskFinishInput {
+    pub id: String,
+    pub owner: Option<String>,
+    pub trace_id: i64,
+    pub friction: String,
+    pub capsule_path: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskFinishRecord {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Debug)]
+pub struct TaskRefreshInput {
+    pub id: String,
+    pub accept: bool,
+}
+
+#[derive(Debug)]
+pub struct TaskRefreshRecord {
+    pub id: String,
+    pub changed: bool,
+    pub applied: bool,
+    pub previous_checksum: String,
+    pub current_checksum: String,
+    pub changed_paths: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskContextAcknowledgeInput {
+    pub id: String,
+    pub path: String,
+    pub actor: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskApprovalInput {
+    pub id: String,
+    pub gate: String,
+    pub source: String,
+    pub evidence: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRunInput {
+    pub task_id: String,
+    pub story_id: Option<String>,
+    pub layer: String,
+    pub executable: String,
+    pub argv: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRunRecord {
+    pub task_id: String,
+    pub layer: String,
+    pub state: String,
+    pub exit_code: i32,
+    pub head_commit: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRecord {
+    pub layer: String,
+    pub state: String,
+    pub exit_code: Option<i32>,
+    pub head_commit: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct StoryAddInput {
     pub id: String,
     pub title: String,
@@ -173,6 +312,62 @@ impl HarnessService {
         self.repository.record_intake(input)
     }
 
+    pub fn start_task(&self, input: TaskStartInput) -> crate::infrastructure::Result<String> {
+        self.repository.start_task(input)
+    }
+
+    pub fn task_status(&self, id: &str) -> crate::infrastructure::Result<TaskStatusRecord> {
+        self.repository.task_status(id)
+    }
+
+    pub fn transition_task(
+        &self,
+        input: TaskTransitionInput,
+    ) -> crate::infrastructure::Result<TaskStatusRecord> {
+        self.repository.transition_task(input)
+    }
+
+    pub fn handoff_task(&self, input: TaskHandoffInput) -> crate::infrastructure::Result<()> {
+        self.repository.handoff_task(input)
+    }
+
+    pub fn link_task_story(&self, input: TaskStoryLinkInput) -> crate::infrastructure::Result<()> {
+        self.repository.link_task_story(input)
+    }
+
+    pub fn finish_task(
+        &self,
+        input: TaskFinishInput,
+    ) -> crate::infrastructure::Result<TaskFinishRecord> {
+        self.repository.finish_task(input)
+    }
+
+    pub fn refresh_task(
+        &self,
+        input: TaskRefreshInput,
+    ) -> crate::infrastructure::Result<TaskRefreshRecord> {
+        self.repository.refresh_task(input)
+    }
+
+    pub fn acknowledge_task_context(
+        &self,
+        input: TaskContextAcknowledgeInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.acknowledge_task_context(input)
+    }
+
+    pub fn approve_task(&self, input: TaskApprovalInput) -> crate::infrastructure::Result<()> {
+        self.repository.approve_task(input)
+    }
+
+    pub fn run_proof(&self, input: ProofRunInput) -> crate::infrastructure::Result<ProofRunRecord> {
+        self.repository.run_proof(input)
+    }
+
+    pub fn query_proofs(&self, task_id: &str) -> crate::infrastructure::Result<Vec<ProofRecord>> {
+        self.repository.query_proofs(task_id)
+    }
+
     pub fn add_story(&self, input: StoryAddInput) -> crate::infrastructure::Result<()> {
         self.repository.add_story(input)
     }
@@ -272,6 +467,9 @@ impl HarnessService {
     pub fn query_friction(&self) -> crate::infrastructure::Result<Vec<FrictionRecord>> {
         self.repository.query_friction()
     }
+
+    pub fn add_friction(&self, input: FrictionAddInput) -> crate::infrastructure::Result<String> { self.repository.add_friction(input) }
+    pub fn resolve_friction(&self, input: FrictionResolveInput) -> crate::infrastructure::Result<()> { self.repository.resolve_friction(input) }
 
     pub fn query_tools(
         &self,

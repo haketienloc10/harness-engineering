@@ -1,4 +1,7 @@
-# Validation Report
+# Deprecated Compatibility Template: Validation Report
+
+Validation/evidence now belongs in `_harness/templates/story.md` and structured
+`proof run` records. Retained through the compatibility release only.
 
 Date: YYYY-MM-DD
 

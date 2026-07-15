@@ -212,6 +212,25 @@ pub fn validate_tool_kind(value: &str) -> Result<String, ToolValidationError> {
         .ok_or_else(|| ToolValidationError::Kind(value.to_owned(), TOOL_KINDS.join(", ")))
 }
 
+/// Lifecycle transitions are validated in the application layer before SQL;
+/// the schema independently constrains the allowed stored values.
+#[allow(dead_code)] // CL-41 consumes this after task commands are exposed.
+pub fn task_transition_allowed(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("open", "in_progress")
+            | ("in_progress", "blocked")
+            | ("blocked", "in_progress")
+            | ("open", "abandoned")
+            | ("in_progress", "abandoned")
+            | ("blocked", "abandoned")
+            | ("open", "failed")
+            | ("in_progress", "failed")
+            | ("in_progress", "closing")
+            | ("closing", "completed")
+    )
+}
+
 /// Capability is intentionally an open, format-validated vocabulary rather than
 /// a closed list: the registry is the base for arbitrary future extensions, so
 /// new capabilities must not require a code change. Normalizing to kebab-case
@@ -978,6 +997,8 @@ pub struct AuditResult {
     pub backlog_without_outcomes: Vec<AuditFinding>,
     pub stale_stories: Vec<AuditFinding>,
     pub broken_tools: Vec<AuditFinding>,
+    pub friction_without_outcomes: Vec<AuditFinding>,
+    pub coverage: Vec<String>,
 }
 
 impl AuditResult {
@@ -987,7 +1008,8 @@ impl AuditResult {
             + (self.unverified_decisions.len() as i64 * 5)
             + (self.backlog_without_outcomes.len() as i64 * 2)
             + (self.stale_stories.len() as i64 * 3)
-            + (self.broken_tools.len() as i64 * 8);
+            + (self.broken_tools.len() as i64 * 8)
+            + (self.friction_without_outcomes.len() as i64 * 4);
         raw.min(100)
     }
 }
@@ -1259,5 +1281,17 @@ mod tests {
         assert!(result.must.iter().any(|item| item.target
             == "docs/decisions/0005-prebuilt-rust-harness-cli.md"
             && item.met));
+    }
+
+    #[test]
+    fn task_lifecycle_allows_only_declared_transitions() {
+        assert!(task_transition_allowed("open", "in_progress"));
+        assert!(task_transition_allowed("in_progress", "blocked"));
+        assert!(task_transition_allowed("blocked", "in_progress"));
+        assert!(task_transition_allowed("in_progress", "closing"));
+        assert!(task_transition_allowed("closing", "completed"));
+        assert!(!task_transition_allowed("open", "completed"));
+        assert!(!task_transition_allowed("completed", "in_progress"));
+        assert!(!task_transition_allowed("blocked", "completed"));
     }
 }

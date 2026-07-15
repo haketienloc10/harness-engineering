@@ -33,6 +33,11 @@ run_install >"$WORK/first.log"
 test -f "$TARGET/.harness-id"
 test -f "$TARGET/AGENTS.md"
 test -f "$TARGET/_harness/.harness-manifest"
+test ! -e "$TARGET/_harness/HARNESS.md"
+test ! -e "$TARGET/_harness/FEATURE_INTAKE.md"
+test ! -e "$TARGET/_harness/CONTEXT_RULES.md"
+test ! -e "$TARGET/_harness/TRACE_SPEC.md"
+test ! -e "$TARGET/_harness/TEST_MATRIX.md"
 test "$(cat "$TARGET/docs/product/existing.md")" = "existing product contract"
 test "$(sha256sum "$TARGET/harness.db" | awk '{print $1}')" = "$DB_HASH_BEFORE"
 grep -qx 'custom.cache' "$TARGET/.gitignore"
@@ -47,6 +52,7 @@ awk '
 cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
 
 "$TARGET/_harness/bin/harness-cli" workflow validate --json | grep -q '"mode":"shadow"'
+"$TARGET/_harness/bin/harness-cli" workflow parity --json | grep -q '"code":"WORKFLOW_PARITY_OK"'
 "$TARGET/_harness/bin/harness-cli" workflow commands >"$WORK/installed-commands.txt"
 grep -v '^#' "$TARGET/_harness/command-manifest.txt" | sed '/^[[:space:]]*$/d' >"$WORK/tracked-commands.txt"
 cmp "$WORK/tracked-commands.txt" "$WORK/installed-commands.txt"

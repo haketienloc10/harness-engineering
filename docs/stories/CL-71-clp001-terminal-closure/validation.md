@@ -17,7 +17,7 @@ story link. Read-only post-finish checks confirm terminal durable state.
 | E2E | clean and dirty release qualification modes and fixtures | Task 1 dirty and clean proofs pass |
 | Platform | `doctor --strict --json` is `HEALTHY` on Linux `x86_64` | source/operational migrations `001..012` are `HEALTHY` after backup-first migration |
 | Audit | `audit --strict --json` has no unresolved or unknown coverage | Task 2 structured strict audit passes; accepted findings remain visible |
-| Release | `bash tests/release_qualification.sh all` from clean committed `HEAD` | Task 1 clean proof passes; Task 2 dirty candidate proof passes; terminal clean rerun pending |
+| Release | `bash tests/release_qualification.sh all` from clean committed `HEAD` | Task 1 and Task 2 clean committed-HEAD proofs pass; terminal Task 3 rerun pending |
 
 ## Story Reconciliation Evidence Required
 
@@ -90,17 +90,24 @@ trace before status/evidence changes.
 - Legacy backlog `#4` recovery sources and checksums map to open canonical
   successor `#2`, created through `harness-cli backlog add`; it remains open
   until terminal qualification.
-- Task 2 initial structured proof ladder passed format, Clippy, 75 workspace
-  tests, installer safety, full release qualification, workflow parity, memory
-  dry-run, strict doctor, strict audit and `git diff --check`. A final
-  fail-closed doctor contract test raised the suite to 76; its full clean-HEAD
-  structured rerun is recorded after the implementation commit.
+- Task 2 initial structured proof ladder passed before commit. After adding the
+  final fail-closed doctor contract test, the complete 76-test ladder passed
+  again from clean committed HEAD
+  `531709413a15587230fb91843ec8a411380b04ce`.
 - Initial proof hashes: unit stdout
   `818dc59b3f3f0380785bb11b37184a2c2e74145f38db8eebb1b8db7c5e119b8d`;
   release stdout
   `7e479dde1fa63674f8180f58bad851ddc86b87f54966a0549efe22c15b209fbe`;
   doctor stdout
   `a356c704fe556eb49b9dcfc52e30e2a29fcc3a40b4eac2716f85be71fa8eb97e`;
+  audit stdout
+  `058ff899e1e1d0d8be17bdbc76f4be6e119bff6679f6f9a09d4629fdb8d4bba4`.
+- Clean-HEAD proof hashes: unit stdout
+  `9b40c3c81d3f93180d7c42c507bcc52f8f460cfd22ccbbebca0df9c6f1f84471`;
+  release stdout
+  `2729cfd8b9103de0dfeeed97bf27a3b77a5cbbde9ec5a98356a78ee1d7b311d7`;
+  doctor stdout
+  `5ee6ec6f287283e7d3e06b411417944778c516779417e8318a1e3b7516845fa0`;
   audit stdout
   `058ff899e1e1d0d8be17bdbc76f4be6e119bff6679f6f9a09d4629fdb8d4bba4`.
 

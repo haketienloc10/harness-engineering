@@ -40,9 +40,10 @@ data/migration ownership, UI/platform effects, observability and alternatives.
 | Platform | | not run |
 | Release | | not run |
 
-Record repeatable proof with `proof run`; use numeric booleans for legacy
-`story update` compatibility. Record commands, artifacts and remaining gaps
-below rather than creating a separate validation report.
+Record repeatable proof with `proof run`. Legacy numeric proof columns remain
+read-compatible, but new direct `story update` proof-boolean writes are rejected.
+Record commands, artifacts and remaining gaps below rather than creating a
+separate validation report.
 
 ## Rollback and Harness Delta
 

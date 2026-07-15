@@ -79,7 +79,10 @@ pub struct TaskStatusRecord {
     pub proof_runs: usize,
     pub latest_proof_state: Option<String>,
     pub latest_proof_head_fresh: Option<bool>,
+    pub latest_proof_branch_fresh: Option<bool>,
     pub latest_proof_dirty_fresh: Option<bool>,
+    pub latest_proof_output_fresh: Option<bool>,
+    pub latest_proof_artifact_fresh: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -169,6 +172,7 @@ pub struct ProofRunInput {
     pub layer: String,
     pub executable: String,
     pub argv: Vec<String>,
+    pub artifact_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -178,14 +182,35 @@ pub struct ProofRunRecord {
     pub state: String,
     pub exit_code: i32,
     pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub stdout_path: String,
+    pub stdout_hash: String,
+    pub stderr_path: String,
+    pub stderr_hash: String,
+    pub artifact_path: Option<String>,
+    pub artifact_hash: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct ProofRecord {
+    pub story_id: Option<String>,
     pub layer: String,
     pub state: String,
+    pub executable: Option<String>,
+    pub argv_json: Option<String>,
     pub exit_code: Option<i32>,
     pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub dirty_fingerprint: Option<String>,
+    pub cli_version: Option<String>,
+    pub platform: Option<String>,
+    pub command_digest: Option<String>,
+    pub stdout_path: Option<String>,
+    pub stdout_hash: Option<String>,
+    pub stderr_path: Option<String>,
+    pub stderr_hash: Option<String>,
+    pub artifact_path: Option<String>,
+    pub artifact_hash: Option<String>,
     pub summary: Option<String>,
 }
 

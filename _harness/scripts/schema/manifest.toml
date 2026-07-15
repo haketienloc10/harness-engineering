@@ -50,3 +50,8 @@ sha256 = "c1cf74965c79024763de18945e4cc818b6e2c08551d3eabac6d7dc0b0ccab87c"
 version = 10
 path = "010-task-session-lease.sql"
 sha256 = "834026e7ba62d6c07ab6288ccf686c40d85853ef8d8749447f5d8a1246923a69"
+
+[[migration]]
+version = 11
+path = "011-proof-provenance.sql"
+sha256 = "457efcd3c958d52d94bc85e90ae4402ccbfc4ccd90476f129cda1589078ca2bd"

@@ -36,6 +36,7 @@ pub type Result<T> = std::result::Result<T, HarnessInfraError>;
 const DEFAULT_TASK_LEASE_SECONDS: i64 = 3_600;
 const MIN_TASK_LEASE_SECONDS: i64 = 60;
 const MAX_TASK_LEASE_SECONDS: i64 = 86_400;
+const MAX_PROOF_OUTPUT_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Error)]
 pub enum HarnessInfraError {
@@ -125,6 +126,8 @@ pub enum HarnessInfraError {
     NoTraces,
     #[error("story update: nothing to update")]
     EmptyStoryUpdate,
+    #[error("story update: direct proof booleans are legacy-only; record structured evidence with proof run")]
+    DirectProofBooleanDeprecated,
     #[error(
         "query sql only permits a single read-only SELECT, WITH, or diagnostic PRAGMA statement"
     )]
@@ -569,6 +572,20 @@ type TaskFinishSource = (
 
 type TaskTransitionSource = (String, Option<String>, Option<String>, String, i64);
 
+type LatestProofSource = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 #[derive(Debug)]
 struct ValidatedCapsule {
     path: String,
@@ -586,6 +603,12 @@ struct ProofSummary {
     schema: String,
     exit_code: i32,
     dirty_fingerprint: String,
+    #[serde(default)]
+    stdout_truncated: bool,
+    #[serde(default)]
+    stderr_truncated: bool,
+    #[serde(default)]
+    artifact_error: Option<String>,
 }
 
 pub trait HarnessRepository {
@@ -2078,7 +2101,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                         proof_runs: 0,
                         latest_proof_state: None,
                         latest_proof_head_fresh: None,
+                        latest_proof_branch_fresh: None,
                         latest_proof_dirty_fresh: None,
+                        latest_proof_output_fresh: None,
+                        latest_proof_artifact_fresh: None,
                     }, row.get::<_, String>(8)?))
                 },
             )
@@ -2102,27 +2128,83 @@ impl HarnessRepository for SqliteHarnessRepository {
             params![id],
             |row| row.get::<_, i64>(0),
         )? as usize;
-        let latest_proof: Option<(String, Option<String>, Option<String>)> = connection
+        let latest_proof: Option<LatestProofSource> = connection
             .query_row(
-                "SELECT state, head_commit, summary FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
+                "SELECT state, head_commit, branch, dirty_fingerprint,
+                        stdout_path, stdout_hash, stderr_path, stderr_hash,
+                        artifact_path, artifact_hash, summary
+                 FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                    ))
+                },
             )
             .optional()?;
-        if let Some((state, head_commit, summary)) = latest_proof {
+        if let Some((
+            state,
+            head_commit,
+            branch,
+            dirty_fingerprint,
+            stdout_path,
+            stdout_hash,
+            stderr_path,
+            stderr_hash,
+            artifact_path,
+            artifact_hash,
+            summary,
+        )) = latest_proof
+        {
             let current_head = self.git_output(&["rev-parse", "HEAD"]).ok();
             task.0.latest_proof_head_fresh = match (&head_commit, &current_head) {
                 (Some(recorded), Some(current)) => Some(recorded == current),
-                _ => None,
+                _ => Some(false),
             };
-            task.0.latest_proof_dirty_fresh = summary
-                .as_deref()
-                .and_then(|summary| serde_json::from_str::<ProofSummary>(summary).ok())
-                .and_then(|summary| {
-                    self.dirty_worktree_fingerprint()
-                        .ok()
-                        .map(|current| current == summary.dirty_fingerprint)
-                });
+            let current_branch = self.git_output(&["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+            task.0.latest_proof_branch_fresh = Some(matches!(
+                (&branch, &current_branch),
+                (Some(recorded), Some(current)) if recorded == current
+            ));
+            let recorded_dirty = dirty_fingerprint.or_else(|| {
+                summary
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<ProofSummary>(value).ok())
+                    .map(|value| value.dirty_fingerprint)
+            });
+            task.0.latest_proof_dirty_fresh = Some(matches!(
+                (recorded_dirty, self.dirty_worktree_fingerprint().ok()),
+                (Some(recorded), Some(current)) if recorded == current
+            ));
+            task.0.latest_proof_output_fresh = Some(
+                proof_file_fresh(
+                    &self.repo_root,
+                    stdout_path.as_deref(),
+                    stdout_hash.as_deref(),
+                ) && proof_file_fresh(
+                    &self.repo_root,
+                    stderr_path.as_deref(),
+                    stderr_hash.as_deref(),
+                ),
+            );
+            task.0.latest_proof_artifact_fresh = match (artifact_path, artifact_hash) {
+                (None, None) => None,
+                (path, hash) => Some(proof_file_fresh(
+                    &self.repo_root,
+                    path.as_deref(),
+                    hash.as_deref(),
+                )),
+            };
             task.0.latest_proof_state = Some(state);
         }
         task.0.allowed_next = allowed_task_transitions(&task.0.status);
@@ -2513,14 +2595,43 @@ impl HarnessRepository for SqliteHarnessRepository {
                 "required context paths are not all acknowledged".to_owned(),
             ));
         }
-        let latest: Option<(String, Option<String>, Option<String>)> = connection
+        let latest: Option<LatestProofSource> = connection
             .query_row(
-                "SELECT state, head_commit, summary FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
+                "SELECT state, head_commit, branch, dirty_fingerprint,
+                        stdout_path, stdout_hash, stderr_path, stderr_hash,
+                        artifact_path, artifact_hash, summary
+                 FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
                 params![input.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                    ))
+                },
             )
             .optional()?;
-        let (proof_state, proof_head, proof_summary) = latest
+        let (
+            proof_state,
+            proof_head,
+            proof_branch,
+            proof_dirty,
+            stdout_path,
+            stdout_hash,
+            stderr_path,
+            stderr_hash,
+            artifact_path,
+            artifact_hash,
+            proof_summary,
+        ) = latest
             .ok_or_else(|| HarnessInfraError::TaskFinishGate("no proof run recorded".to_owned()))?;
         if proof_state != "pass"
             || proof_head.as_deref() != self.git_output(&["rev-parse", "HEAD"]).ok().as_deref()
@@ -2529,13 +2640,49 @@ impl HarnessRepository for SqliteHarnessRepository {
                 "latest proof is failing or stale at HEAD".to_owned(),
             ));
         }
-        let proof_dirty = proof_summary
-            .as_deref()
-            .and_then(|summary| serde_json::from_str::<ProofSummary>(summary).ok())
-            .map(|summary| summary.dirty_fingerprint);
+        if proof_branch.as_deref()
+            != self
+                .git_output(&["rev-parse", "--abbrev-ref", "HEAD"])
+                .ok()
+                .as_deref()
+        {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "latest proof is missing branch provenance or is stale on this branch".to_owned(),
+            ));
+        }
+        let proof_dirty = proof_dirty.or_else(|| {
+            proof_summary
+                .as_deref()
+                .and_then(|summary| serde_json::from_str::<ProofSummary>(summary).ok())
+                .map(|summary| summary.dirty_fingerprint)
+        });
         if proof_dirty.as_deref() != Some(self.dirty_worktree_fingerprint()?.as_str()) {
             return Err(HarnessInfraError::TaskFinishGate(
                 "latest proof has a stale dirty-worktree fingerprint".to_owned(),
+            ));
+        }
+        if !proof_file_fresh(
+            &self.repo_root,
+            stdout_path.as_deref(),
+            stdout_hash.as_deref(),
+        ) || !proof_file_fresh(
+            &self.repo_root,
+            stderr_path.as_deref(),
+            stderr_hash.as_deref(),
+        ) {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "latest proof output provenance is missing or stale".to_owned(),
+            ));
+        }
+        if artifact_path.is_some()
+            && !proof_file_fresh(
+                &self.repo_root,
+                artifact_path.as_deref(),
+                artifact_hash.as_deref(),
+            )
+        {
+            return Err(HarnessInfraError::TaskFinishGate(
+                "latest proof artifact is missing or stale".to_owned(),
             ));
         }
         let trace_intake: Option<i64> = connection
@@ -2755,6 +2902,15 @@ impl HarnessRepository for SqliteHarnessRepository {
         if input.executable.trim().is_empty() {
             return Err(HarnessInfraError::MissingProofCommand);
         }
+        if input
+            .artifact_path
+            .as_deref()
+            .is_some_and(|path| !safe_repo_relative_path(path))
+        {
+            return Err(HarnessInfraError::WorkflowInvalid(
+                "proof artifact must be a repository-relative path without traversal".to_owned(),
+            ));
+        }
         let connection = self.open_existing()?;
         let exists: Option<String> = connection
             .query_row(
@@ -2781,31 +2937,101 @@ impl HarnessRepository for SqliteHarnessRepository {
                 });
             }
         }
+        let started_at: String =
+            connection.query_row("SELECT datetime('now');", [], |row| row.get(0))?;
         let output = Command::new(&input.executable)
             .args(&input.argv)
             .current_dir(&self.repo_root)
             .output()?;
         let exit_code = output.status.code().unwrap_or(-1);
-        let state = if output.status.success() {
+        let finished_at: String =
+            connection.query_row("SELECT datetime('now');", [], |row| row.get(0))?;
+        let head_commit = self.git_output(&["rev-parse", "HEAD"]).ok();
+        let branch = self.git_output(&["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+        let run_key = proof_run_key();
+        let task_component = input
+            .task_id
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let stdout_path = format!(".harness-evidence/proofs/{task_component}/{run_key}.stdout");
+        let stderr_path = format!(".harness-evidence/proofs/{task_component}/{run_key}.stderr");
+        let (stdout_hash, stdout_truncated) =
+            bounded_proof_output(&self.repo_root, &stdout_path, &output.stdout)?;
+        let (stderr_hash, stderr_truncated) =
+            bounded_proof_output(&self.repo_root, &stderr_path, &output.stderr)?;
+        let (artifact_hash, artifact_error) = match input.artifact_path.as_deref() {
+            Some(path) => match repo_file(&self.repo_root, path) {
+                Some(path) => (Some(sha256_file(&path)?), None),
+                None => (
+                    None,
+                    Some("declared proof artifact is missing, unsafe, or not a file".to_owned()),
+                ),
+            },
+            None => (None, None),
+        };
+        let state = if output.status.success() && artifact_error.is_none() {
             "pass"
         } else {
             "fail"
         }
         .to_owned();
-        let head_commit = self.git_output(&["rev-parse", "HEAD"]).ok();
         let dirty_fingerprint = self.dirty_worktree_fingerprint()?;
         let argv_json = serde_json::to_string(&input.argv)
             .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
         let summary = serde_json::to_string(&ProofSummary {
-            schema: "harness/proof-summary/v1".to_owned(),
+            schema: "harness/proof-summary/v2".to_owned(),
             exit_code,
-            dirty_fingerprint,
+            dirty_fingerprint: dirty_fingerprint.clone(),
+            stdout_truncated,
+            stderr_truncated,
+            artifact_error,
         })
         .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
+        let cli_version = env!("CARGO_PKG_VERSION");
+        let platform = format!("{}/{}", env::consts::OS, env::consts::ARCH);
+        let command_digest = proof_command_digest(&input.executable, &input.argv);
         connection.execute(
-            "INSERT INTO proof_run (task_id, layer, state, executable, argv_json, finished_at, exit_code, head_commit, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), ?6, ?7, ?8);",
-            params![input.task_id, input.layer, state, input.executable, argv_json, exit_code, head_commit, summary],
+            "INSERT INTO proof_run (
+                task_id, story_id, layer, state, executable, argv_json, shell_mode,
+                cwd, started_at, finished_at, exit_code, head_commit, branch,
+                dirty_fingerprint, cli_version, platform, command_digest,
+                stdout_path, stdout_hash, stderr_path, stderr_hash,
+                artifact_path, artifact_hash, summary
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, 0, '.', ?7, ?8, ?9, ?10, ?11,
+                ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22
+             );",
+            params![
+                input.task_id,
+                input.story_id,
+                input.layer,
+                state,
+                input.executable,
+                argv_json,
+                started_at,
+                finished_at,
+                exit_code,
+                head_commit,
+                branch,
+                dirty_fingerprint,
+                cli_version,
+                platform,
+                command_digest,
+                stdout_path,
+                stdout_hash,
+                stderr_path,
+                stderr_hash,
+                input.artifact_path,
+                artifact_hash,
+                summary,
+            ],
         )?;
         Ok(ProofRunRecord {
             task_id: input.task_id,
@@ -2813,6 +3039,13 @@ impl HarnessRepository for SqliteHarnessRepository {
             state,
             exit_code,
             head_commit,
+            branch,
+            stdout_path,
+            stdout_hash,
+            stderr_path,
+            stderr_hash,
+            artifact_path: input.artifact_path,
+            artifact_hash,
         })
     }
 
@@ -2833,16 +3066,33 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::TaskNotFound(task_id.to_owned()));
         }
         let mut statement = connection.prepare(
-            "SELECT layer, state, exit_code, head_commit, summary
+            "SELECT story_id, layer, state, executable, argv_json, exit_code,
+                    head_commit, branch, dirty_fingerprint, cli_version, platform,
+                    command_digest, stdout_path, stdout_hash, stderr_path, stderr_hash,
+                    artifact_path, artifact_hash, summary
              FROM proof_run WHERE task_id=?1 ORDER BY id;",
         )?;
         let rows = statement.query_map(params![task_id], |row| {
             Ok(ProofRecord {
-                layer: row.get(0)?,
-                state: row.get(1)?,
-                exit_code: row.get(2)?,
-                head_commit: row.get(3)?,
-                summary: row.get(4)?,
+                story_id: row.get(0)?,
+                layer: row.get(1)?,
+                state: row.get(2)?,
+                executable: row.get(3)?,
+                argv_json: row.get(4)?,
+                exit_code: row.get(5)?,
+                head_commit: row.get(6)?,
+                branch: row.get(7)?,
+                dirty_fingerprint: row.get(8)?,
+                cli_version: row.get(9)?,
+                platform: row.get(10)?,
+                command_digest: row.get(11)?,
+                stdout_path: row.get(12)?,
+                stdout_hash: row.get(13)?,
+                stderr_path: row.get(14)?,
+                stderr_hash: row.get(15)?,
+                artifact_path: row.get(16)?,
+                artifact_hash: row.get(17)?,
+                summary: row.get(18)?,
             })
         })?;
         collect_rows(rows)
@@ -2875,6 +3125,13 @@ impl HarnessRepository for SqliteHarnessRepository {
             && input.verify_command.is_none()
         {
             return Err(HarnessInfraError::EmptyStoryUpdate);
+        }
+        if input.unit.is_some()
+            || input.integration.is_some()
+            || input.e2e.is_some()
+            || input.platform.is_some()
+        {
+            return Err(HarnessInfraError::DirectProofBooleanDeprecated);
         }
 
         let connection = self.open_existing()?;
@@ -3371,8 +3628,25 @@ impl HarnessRepository for SqliteHarnessRepository {
     fn query_matrix(&self) -> Result<Vec<StoryMatrixRecord>> {
         let connection = self.open_existing()?;
         let mut statement = connection.prepare(
-            "SELECT id, title, status, unit_proof, integration_proof, e2e_proof, platform_proof, evidence
-             FROM story ORDER BY id;",
+            "SELECT story.id, story.title, story.status,
+                    COALESCE((SELECT CASE state WHEN 'pass' THEN 1 ELSE 0 END
+                              FROM proof_run
+                              WHERE story_id=story.id AND layer='unit'
+                              ORDER BY id DESC LIMIT 1), story.unit_proof),
+                    COALESCE((SELECT CASE state WHEN 'pass' THEN 1 ELSE 0 END
+                              FROM proof_run
+                              WHERE story_id=story.id AND layer='integration'
+                              ORDER BY id DESC LIMIT 1), story.integration_proof),
+                    COALESCE((SELECT CASE state WHEN 'pass' THEN 1 ELSE 0 END
+                              FROM proof_run
+                              WHERE story_id=story.id AND layer='e2e'
+                              ORDER BY id DESC LIMIT 1), story.e2e_proof),
+                    COALESCE((SELECT CASE state WHEN 'pass' THEN 1 ELSE 0 END
+                              FROM proof_run
+                              WHERE story_id=story.id AND layer='platform'
+                              ORDER BY id DESC LIMIT 1), story.platform_proof),
+                    story.evidence
+             FROM story ORDER BY story.id;",
         )?;
 
         let rows = statement.query_map([], |row| {
@@ -3902,6 +4176,68 @@ fn sha256_file(path: &Path) -> Result<String> {
     let mut hash = Sha256::new();
     hash.update(fs::read(path)?);
     Ok(format!("{:x}", hash.finalize()))
+}
+
+fn safe_repo_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+}
+
+fn repo_file(repo_root: &Path, relative_path: &str) -> Option<PathBuf> {
+    if !safe_repo_relative_path(relative_path) {
+        return None;
+    }
+    let root = repo_root.canonicalize().ok()?;
+    let path = repo_root.join(relative_path);
+    let canonical = path.canonicalize().ok()?;
+    (canonical.starts_with(root) && canonical.is_file()).then_some(path)
+}
+
+fn proof_file_fresh(repo_root: &Path, path: Option<&str>, expected_hash: Option<&str>) -> bool {
+    let (Some(path), Some(expected_hash)) = (path, expected_hash) else {
+        return false;
+    };
+    repo_file(repo_root, path)
+        .and_then(|path| sha256_file(&path).ok())
+        .is_some_and(|actual| actual == expected_hash)
+}
+
+fn proof_command_digest(executable: &str, argv: &[String]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"harness/proof-command/v1\0");
+    for part in std::iter::once(executable).chain(argv.iter().map(String::as_str)) {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part.as_bytes());
+    }
+    format!("{:x}", hash.finalize())
+}
+
+fn proof_run_key() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{nanos}-{}", std::process::id())
+}
+
+fn bounded_proof_output(
+    repo_root: &Path,
+    relative_path: &str,
+    output: &[u8],
+) -> Result<(String, bool)> {
+    let retained_len = output.len().min(MAX_PROOF_OUTPUT_BYTES);
+    let retained = &output[..retained_len];
+    let path = repo_root.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, retained)?;
+    let hash = format!("{:x}", Sha256::digest(retained));
+    Ok((hash, output.len() > retained_len))
 }
 
 fn parse_migration_manifest(path: &Path) -> std::result::Result<MigrationManifest, String> {
@@ -4694,7 +5030,7 @@ mod tests {
         .unwrap();
         fs::write(
             repo_root.join(".gitignore"),
-            "harness.db\nharness.db-wal\nharness.db-shm\n",
+            "harness.db\nharness.db-wal\nharness.db-shm\n.harness-evidence/\n",
         )
         .unwrap();
         assert!(Command::new("git")
@@ -4728,8 +5064,10 @@ mod tests {
         (temp_dir, repository)
     }
 
-    fn story_columns(connection: &Connection) -> Vec<String> {
-        let mut statement = connection.prepare("PRAGMA table_info(story);").unwrap();
+    fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table});"))
+            .unwrap();
         let rows = statement
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap();
@@ -4746,11 +5084,39 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 10);
-        let story_columns = story_columns(&connection);
+        assert_eq!(schema_version, 11);
+        let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
         assert!(story_columns.contains(&"last_verified_result".to_owned()));
+        let proof_columns = table_columns(&connection, "proof_run");
+        for column in [
+            "story_id",
+            "branch",
+            "dirty_fingerprint",
+            "command_digest",
+            "stdout_path",
+            "stdout_hash",
+            "stderr_path",
+            "stderr_hash",
+            "artifact_path",
+            "artifact_hash",
+        ] {
+            assert!(proof_columns.contains(&column.to_owned()));
+        }
+    }
+
+    #[test]
+    fn proof_output_is_size_limited_and_hashed_from_retained_bytes() {
+        let temp_dir = TempDir::new().unwrap();
+        let output = vec![b'x'; MAX_PROOF_OUTPUT_BYTES + 17];
+        let (hash, truncated) =
+            bounded_proof_output(temp_dir.path(), "evidence/proof.stdout", &output).unwrap();
+        let retained = fs::read(temp_dir.path().join("evidence/proof.stdout")).unwrap();
+
+        assert!(truncated);
+        assert_eq!(retained.len(), MAX_PROOF_OUTPUT_BYTES);
+        assert_eq!(hash, format!("{:x}", Sha256::digest(&retained)));
     }
 
     #[test]
@@ -4922,6 +5288,7 @@ mod tests {
                 layer: "unit".to_owned(),
                 executable: "git".to_owned(),
                 argv: vec!["--version".to_owned()],
+                artifact_path: Some("README.md".to_owned()),
             })
             .unwrap();
         assert_eq!(passing_proof.state, "pass");
@@ -4932,6 +5299,7 @@ mod tests {
                 layer: "integration".to_owned(),
                 executable: "git".to_owned(),
                 argv: vec!["definitely-not-a-git-command".to_owned()],
+                artifact_path: Some("README.md".to_owned()),
             })
             .unwrap();
         assert_eq!(failing_proof.state, "fail");
@@ -4949,7 +5317,76 @@ mod tests {
         assert_eq!(task_after_proof.proof_runs, 2);
         assert_eq!(task_after_proof.latest_proof_state.as_deref(), Some("fail"));
         assert_eq!(task_after_proof.latest_proof_head_fresh, Some(true));
+        assert_eq!(task_after_proof.latest_proof_branch_fresh, Some(true));
         assert_eq!(task_after_proof.latest_proof_dirty_fresh, Some(true));
+        assert_eq!(task_after_proof.latest_proof_output_fresh, Some(true));
+        assert_eq!(task_after_proof.latest_proof_artifact_fresh, Some(true));
+        let proofs = repository.query_proofs(&id).unwrap();
+        assert_eq!(proofs.len(), 2);
+        assert_eq!(proofs[1].story_id.as_deref(), Some("CL-TASK"));
+        assert_eq!(
+            proofs[1].branch.as_deref(),
+            repository
+                .git_output(&["rev-parse", "--abbrev-ref", "HEAD"])
+                .ok()
+                .as_deref()
+        );
+        assert_eq!(proofs[1].artifact_path.as_deref(), Some("README.md"));
+        assert!(proofs[1].stdout_hash.is_some());
+        assert!(proofs[1].stderr_hash.is_some());
+        assert!(proofs[1].command_digest.is_some());
+        let matrix = repository.query_matrix().unwrap();
+        let task_story = matrix.iter().find(|story| story.id == "CL-TASK").unwrap();
+        assert_eq!(task_story.unit, 1);
+        assert_eq!(task_story.integration, 0);
+        let artifact = fs::read(repository.repo_root.join("README.md")).unwrap();
+        fs::write(repository.repo_root.join("README.md"), "tampered\n").unwrap();
+        assert_eq!(
+            repository
+                .task_status(&id)
+                .unwrap()
+                .latest_proof_artifact_fresh,
+            Some(false)
+        );
+        fs::write(repository.repo_root.join("README.md"), artifact).unwrap();
+        let original_branch = repository
+            .git_output(&["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap();
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE proof_run SET branch='proof-branch-fixture' WHERE task_id=?1;",
+                params![id],
+            )
+            .unwrap();
+        assert_eq!(
+            repository
+                .task_status(&id)
+                .unwrap()
+                .latest_proof_branch_fresh,
+            Some(false)
+        );
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE proof_run SET branch=?2 WHERE task_id=?1;",
+                params![id, original_branch],
+            )
+            .unwrap();
+        fs::write(
+            repository.repo_root.join(&failing_proof.stderr_path),
+            "tampered output\n",
+        )
+        .unwrap();
+        assert_eq!(
+            repository
+                .task_status(&id)
+                .unwrap()
+                .latest_proof_output_fresh,
+            Some(false)
+        );
         let dirty_path = repository.repo_root.join("proof-dirty-fixture.txt");
         fs::write(&dirty_path, "changes after proof").unwrap();
         assert_eq!(
@@ -5261,6 +5698,7 @@ mod tests {
                 layer: "quick".to_owned(),
                 executable: "git".to_owned(),
                 argv: vec!["--version".to_owned()],
+                artifact_path: None,
             })
             .unwrap();
         let intake_id: i64 = repository
@@ -5413,6 +5851,7 @@ mod tests {
                 layer: "integration".to_owned(),
                 executable: "git".to_owned(),
                 argv: vec!["--version".to_owned()],
+                artifact_path: None,
             })
             .unwrap();
         let intake_id: i64 = repository
@@ -5477,6 +5916,7 @@ mod tests {
                 layer: "integration".to_owned(),
                 executable: "git".to_owned(),
                 argv: vec!["--version".to_owned()],
+                artifact_path: None,
             })
             .unwrap();
         let result = repository
@@ -5524,7 +5964,10 @@ mod tests {
         assert_eq!(report.code, "DB_MISSING");
         assert!(report.ok);
         assert!(!db_path.exists());
-        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(
+            report.source_versions,
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        );
     }
 
     #[test]
@@ -5552,7 +5995,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (11)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (12)", [])
             .unwrap();
         drop(connection);
         let db_path = repository.db_path.clone();
@@ -5566,7 +6009,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            11
+            12
         );
     }
 
@@ -5943,13 +6386,13 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            10
+            11
         );
-        let story_columns = story_columns(&connection);
+        let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
         assert!(story_columns.contains(&"last_verified_result".to_owned()));
@@ -5992,7 +6435,7 @@ mod tests {
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
             1
         );
-        assert!(!story_columns(&connection).contains(&"should_not_persist".to_owned()));
+        assert!(!table_columns(&connection, "story").contains(&"should_not_persist".to_owned()));
         let backups = fs::read_dir(repository.repo_root.join("harness.db.backups"))
             .unwrap()
             .collect::<std::result::Result<Vec<_>, _>>()
@@ -6074,7 +6517,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (11)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (12)", [])
             .unwrap();
         drop(connection);
         let before = sha256_file(&repository.db_path).unwrap();
@@ -6093,7 +6536,7 @@ mod tests {
 
         let result = repository.migrate().unwrap();
 
-        assert_eq!(result.current_version, 10);
+        assert_eq!(result.current_version, 11);
         assert!(result.applied.is_empty());
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
@@ -6216,7 +6659,7 @@ mod tests {
         // Upgrade: migration 005 must infer kind from the command prefix.
         assert_eq!(
             repository.migrate().unwrap().applied,
-            vec![5, 6, 7, 8, 9, 10]
+            vec![5, 6, 7, 8, 9, 10, 11]
         );
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
@@ -6779,17 +7222,35 @@ mod tests {
                 notes: None,
             })
             .unwrap();
-        repository
-            .update_story(StoryUpdateInput {
+        assert!(matches!(
+            repository.update_story(StoryUpdateInput {
                 id: "US-T".to_owned(),
-                status: Some("implemented".to_owned()),
-                evidence: Some("unit test".to_owned()),
+                status: None,
+                evidence: None,
                 unit: Some(BoolFlag(1)),
                 integration: None,
                 e2e: None,
                 platform: None,
                 verify_command: None,
+            }),
+            Err(HarnessInfraError::DirectProofBooleanDeprecated)
+        ));
+        repository
+            .update_story(StoryUpdateInput {
+                id: "US-T".to_owned(),
+                status: Some("implemented".to_owned()),
+                evidence: Some("unit test".to_owned()),
+                unit: None,
+                integration: None,
+                e2e: None,
+                platform: None,
+                verify_command: None,
             })
+            .unwrap();
+        repository
+            .open_existing()
+            .unwrap()
+            .execute("UPDATE story SET unit_proof=1 WHERE id='US-T';", [])
             .unwrap();
         assert_eq!(repository.query_matrix().unwrap()[0].unit, 1);
 

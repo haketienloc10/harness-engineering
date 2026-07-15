@@ -11,8 +11,8 @@ use thiserror::Error;
 use crate::application::{
     BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, FrictionAddInput,
     FrictionResolveInput, HarnessContext, HarnessService, InitResult, IntakeInput,
-    InterventionAddInput, InterventionFilter, MigrateResult, ProofRunInput, QueryTable,
-    StoryAddInput, StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput,
+    InterventionAddInput, InterventionFilter, MigrateResult, ProofRecord, ProofRunInput,
+    QueryTable, StoryAddInput, StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput,
     TaskFinishInput, TaskHandoffInput, TaskRefreshInput, TaskStartInput, TaskStoryLinkInput,
     TaskTransitionInput, ToolRegisterInput, TraceInput,
 };
@@ -308,6 +308,8 @@ struct ProofRunArgs {
     story: Option<String>,
     #[arg(long)]
     layer: String,
+    #[arg(long, value_name = "REPO_RELATIVE_PATH")]
+    artifact: Option<String>,
     #[arg(last = true, required = true)]
     command: Vec<String>,
     #[arg(long)]
@@ -1200,10 +1202,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             TaskAction::Status { id, json } => {
                 let task = service.task_status(&id)?;
                 if json {
-                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"session_id\":{},\"worktree\":\"{}\",\"lease_expires_at\":{},\"lease_state\":\"{}\",\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"dirty_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.session_id.as_deref()), json_escape(&task.worktree), json_optional(task.lease_expires_at.as_deref()), json_escape(&task.lease_state), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
+                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"session_id\":{},\"worktree\":\"{}\",\"lease_expires_at\":{},\"lease_state\":\"{}\",\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"branch_fresh\":{},\"dirty_fresh\":{},\"output_fresh\":{},\"artifact_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.session_id.as_deref()), json_escape(&task.worktree), json_optional(task.lease_expires_at.as_deref()), json_escape(&task.lease_state), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_branch_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_output_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_artifact_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
                 } else {
                     println!(
-                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nsession: {}\nworktree: {}\nlease: {} ({})\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, dirty-fresh={}",
+                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nsession: {}\nworktree: {}\nlease: {} ({})\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, branch-fresh={}, dirty-fresh={}, output-fresh={}, artifact-fresh={}",
                         task.id,
                         task.status,
                         task.risk_lane,
@@ -1220,7 +1222,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         task.proof_runs,
                         task.latest_proof_state.as_deref().unwrap_or("<none>"),
                         task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
+                        task.latest_proof_branch_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
                         task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
+                        task.latest_proof_output_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
+                        task.latest_proof_artifact_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<not-scoped>".to_owned()),
                     );
                 }
             }
@@ -1386,9 +1391,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     layer: args.layer,
                     executable: executable.clone(),
                     argv: argv.to_vec(),
+                    artifact_path: args.artifact,
                 })?;
                 if args.json {
-                    println!("{{\"ok\":{},\"task_id\":\"{}\",\"layer\":\"{}\",\"state\":\"{}\",\"exit_code\":{},\"head_commit\":{}}}", proof.state == "pass", json_escape(&proof.task_id), json_escape(&proof.layer), json_escape(&proof.state), proof.exit_code, json_optional(proof.head_commit.as_deref()));
+                    println!("{{\"ok\":{},\"task_id\":\"{}\",\"layer\":\"{}\",\"state\":\"{}\",\"exit_code\":{},\"head_commit\":{},\"branch\":{},\"stdout_path\":\"{}\",\"stdout_hash\":\"{}\",\"stderr_path\":\"{}\",\"stderr_hash\":\"{}\",\"artifact_path\":{},\"artifact_hash\":{}}}", proof.state == "pass", json_escape(&proof.task_id), json_escape(&proof.layer), json_escape(&proof.state), proof.exit_code, json_optional(proof.head_commit.as_deref()), json_optional(proof.branch.as_deref()), json_escape(&proof.stdout_path), json_escape(&proof.stdout_hash), json_escape(&proof.stderr_path), json_escape(&proof.stderr_hash), json_optional(proof.artifact_path.as_deref()), json_optional(proof.artifact_hash.as_deref()));
                 } else {
                     println!(
                         "Proof {} for task {}: {} (exit {}).",
@@ -1402,7 +1408,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             ProofAction::Query { task_id, json } => {
                 let proofs = service.query_proofs(&task_id)?;
                 if json {
-                    println!("[{}]", proofs.iter().map(|proof| format!("{{\"layer\":\"{}\",\"state\":\"{}\",\"exit_code\":{},\"head_commit\":{},\"summary\":{}}}", json_escape(&proof.layer), json_escape(&proof.state), proof.exit_code.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), json_optional(proof.head_commit.as_deref()), json_optional(proof.summary.as_deref()))).collect::<Vec<_>>().join(","));
+                    println!("[{}]", proofs.iter().map(proof_record_json).collect::<Vec<_>>().join(","));
                 } else if proofs.is_empty() {
                     println!("No proof runs.");
                 } else {
@@ -3173,6 +3179,34 @@ fn json_optional(value: Option<&str>) -> String {
         Some(value) => format!("\"{}\"", json_escape(value)),
         None => "null".to_owned(),
     }
+}
+
+fn proof_record_json(proof: &ProofRecord) -> String {
+    format!(
+        "{{\"story_id\":{},\"layer\":\"{}\",\"state\":\"{}\",\"executable\":{},\"argv_json\":{},\"exit_code\":{},\"head_commit\":{},\"branch\":{},\"dirty_fingerprint\":{},\"cli_version\":{},\"platform\":{},\"command_digest\":{},\"stdout_path\":{},\"stdout_hash\":{},\"stderr_path\":{},\"stderr_hash\":{},\"artifact_path\":{},\"artifact_hash\":{},\"summary\":{}}}",
+        json_optional(proof.story_id.as_deref()),
+        json_escape(&proof.layer),
+        json_escape(&proof.state),
+        json_optional(proof.executable.as_deref()),
+        json_optional(proof.argv_json.as_deref()),
+        proof
+            .exit_code
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".to_owned()),
+        json_optional(proof.head_commit.as_deref()),
+        json_optional(proof.branch.as_deref()),
+        json_optional(proof.dirty_fingerprint.as_deref()),
+        json_optional(proof.cli_version.as_deref()),
+        json_optional(proof.platform.as_deref()),
+        json_optional(proof.command_digest.as_deref()),
+        json_optional(proof.stdout_path.as_deref()),
+        json_optional(proof.stdout_hash.as_deref()),
+        json_optional(proof.stderr_path.as_deref()),
+        json_optional(proof.stderr_hash.as_deref()),
+        json_optional(proof.artifact_path.as_deref()),
+        json_optional(proof.artifact_hash.as_deref()),
+        json_optional(proof.summary.as_deref()),
+    )
 }
 
 fn print_interventions(records: &[InterventionRecord]) {

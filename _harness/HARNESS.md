@@ -61,7 +61,8 @@ _harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
 _harness/bin/harness-cli query matrix
 _harness/bin/harness-cli tool check
 _harness/bin/harness-cli story add --id <id> --title <text> --lane <lane> --verify "<command>"
-_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands>"
+_harness/bin/harness-cli story update --id <id> --status in_progress --evidence "<summary>"
+_harness/bin/harness-cli proof run --task <task-id> --story <story-id> --layer unit -- <command>
 _harness/bin/harness-cli story verify <id>
 _harness/bin/harness-cli story verify-all
 _harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
@@ -145,12 +146,13 @@ the result:
 
 ```bash
 _harness/bin/harness-cli story verify <story-id>
-_harness/bin/harness-cli story update --id <story-id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands run>"
+_harness/bin/harness-cli proof run --task <task-id> --story <story-id> --layer unit -- <command>
 _harness/bin/harness-cli query matrix
 ```
 
-Use numeric booleans: `1` means yes, `0` means no. Use
-`query matrix --numeric` when copying proof values back into `story update`.
+`query matrix` derives current layer results from append-only `proof run` rows.
+Legacy numeric proof columns remain read-compatible, but `story update` rejects
+new direct proof-boolean writes.
 
 ## External Tools
 

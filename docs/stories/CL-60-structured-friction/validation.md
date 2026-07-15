@@ -1,6 +1,7 @@
 # CL-60 Validation
 
-`cargo test -p harness-cli` (63 tests) and Clippy pass. Temporary-DB black-box
+`cargo test -p harness-cli` (63 tests) and Clippy passed during implementation.
+Temporary-DB black-box
 proof ran `init`, `friction add`, `friction resolve --status validated`, and
 `friction query`, confirming the fingerprint and actual outcome persist.
 
@@ -20,6 +21,14 @@ Observation-window reporting is owned by CL-61 maturity evidence.
   parity assertion.
 - `cargo fmt --all -- --check` also fails on the newly added friction code.
 
-Required before completion: format the source, rebuild the packaged binary from
-the same source revision, and rerun format, Clippy, unit, command-parity and
-installer black-box checks.
+2026-07-15 completion rerun at HEAD `0df8291`:
+
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy --workspace -- -D warnings` passed.
+- `cargo test --workspace` passed all 66 tests.
+- Packaged and source `workflow parity --json` both returned
+  `WORKFLOW_PARITY_OK`, including the tracked `friction` command surface.
+- `bash tests/installer_state_safety.sh` returned
+  `installer state safety: ok`.
+- Packaged and source `doctor --json` both returned `HEALTHY` with source and
+  DB migrations `001..009`.

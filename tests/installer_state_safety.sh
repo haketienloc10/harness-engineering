@@ -74,5 +74,27 @@ if PATH="$MOCK_BIN:$PATH" HARNESS_TEST_ARCHIVE="$ARCHIVE" HARNESS_LITE_TARGET_DI
   exit 1
 fi
 grep -q 'Không có harness-cli binary' "$WORK/platform.log"
+rm "$MOCK_BIN/uname"
+
+MISSING_SOURCE="$WORK/missing-source"
+mkdir -p "$MISSING_SOURCE"
+tar -xzf "$ARCHIVE" -C "$MISSING_SOURCE"
+rm "$MISSING_SOURCE/harness-fixture/_harness/bin/harness-cli"
+MISSING_ARCHIVE="$WORK/missing-cli.tar.gz"
+tar -czf "$MISSING_ARCHIVE" -C "$MISSING_SOURCE" harness-fixture
+MISSING_TARGET="$WORK/missing-target"
+mkdir -p "$MISSING_TARGET"
+printf 'preserve before failed install\n' >"$MISSING_TARGET/user-file.txt"
+if PATH="$MOCK_BIN:$PATH" HARNESS_TEST_ARCHIVE="$MISSING_ARCHIVE" \
+  HARNESS_LITE_TARGET_DIR="$MISSING_TARGET" HARNESS_LITE_OWNER="test" \
+  HARNESS_LITE_REPO="harness" HARNESS_LITE_REF="fixture" \
+  bash "$ROOT/install.sh" >"$WORK/missing-cli.log" 2>&1; then
+  echo "archive without harness-cli unexpectedly installed" >&2
+  exit 1
+fi
+grep -q 'Thiếu executable _harness/bin/harness-cli' "$WORK/missing-cli.log"
+test "$(cat "$MISSING_TARGET/user-file.txt")" = "preserve before failed install"
+test ! -e "$MISSING_TARGET/AGENTS.md"
+test ! -e "$MISSING_TARGET/_harness"
 
 printf 'installer state safety: ok\n'

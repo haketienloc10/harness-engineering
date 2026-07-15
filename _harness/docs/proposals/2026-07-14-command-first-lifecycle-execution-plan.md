@@ -2,9 +2,10 @@
 
 Date: 2026-07-14
 
-Status: In implementation. The 2026-07-15 CL-61 reconciliation records 21 of
-22 work items completed, with CL-70 not started. Release qualification has not
-started.
+Status: Release-qualified. The 2026-07-15 CL-70 qualification records all 22
+work items completed on the approved Linux `x86_64` scope. Plan-level terminal
+audit still exposes historical debt, including the non-reproducible original
+backlog `#4` closure requirement after the canonical DB rebuild.
 
 Plan ID: `CLP-001`
 
@@ -33,7 +34,7 @@ Plan ID: `CLP-001`
 | CL-52 | completed | Runtime workflow no longer depends on source-only policy docs. |
 | CL-60 | completed | Format, 66 workspace tests, Clippy, packaged/source command parity and installer state-safety proof pass at HEAD `0df8291`. |
 | CL-61 | completed | Outcome-derived human/JSON audit report, strict debt semantics, explicit unknown coverage, multiple measured improvements and dogfood observation gaps are proven by `TASK-000011` and `docs/stories/CL-61-evidence-based-maturity/validation.md`. |
-| CL-70 | not_started | All prerequisite implementation stories are complete; release environments and the remaining H5 observation-window evidence are not yet qualified. |
+| CL-70 | completed | `TASK-000012..14`; repeatable state/distribution suite, source/packaged matrices, installer missing-CLI preflight, deterministic fresh-clone rebuild, parity/latency evidence and terminal H5 observation. |
 
 Original approved baseline (historical, not current runtime state):
 
@@ -1661,7 +1662,7 @@ Agents update this table only after evidence exists.
 | CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
 | CL-60 Structured friction | completed | CL-43 | Format, 66 workspace tests, Clippy, packaged/source `WORKFLOW_PARITY_OK`, installer state-safety and healthy `001..009` doctor proof pass at HEAD `0df8291` | Continue CL-61 observation evidence |
 | CL-61 Maturity | completed | CL-60 | `TASK-000011`; 73 unit tests plus source failure-matrix test; source/packaged audit and workflow parity; installer state-safety; two measured improvements; explicit H5 observation gaps | Preserve fail-closed H5 status until CL-70 supplies the missing observation/release evidence |
-| CL-70 Release proof | not_started | all prior | — | Run release/upgrade qualification and complete the remaining H5 observation window |
+| CL-70 Release proof | completed | all prior | `TASK-000012..14`; `docs/stories/CL-70-release-upgrade-qualification/validation.md`; source/packaged release matrix and terminal audit | Preserve release proof and observe the next compatibility window |
 
 ## 27. Definition of done cho plan
 
@@ -1889,8 +1890,38 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   packaged binary together. No schema rollback is required; preserve
   operational task, trace, proof and friction evidence.
 
+### 2026-07-15 — Complete CL-70 release and upgrade qualification
+
+- Author/agent: Codex tasks `TASK-000012`, `TASK-000013` and `TASK-000014`,
+  requested by the current CL-70 implementation instruction.
+- Affected work items: CL-70 and the plan-level H5/release exit.
+- Old assumption: the implementation stories were complete, but release
+  environments, installed payload parity, portable rebuild/latency evidence,
+  two normal dogfood tasks and blocked/resumed/fresh-clone observations were
+  missing.
+- New evidence: the repeatable release suite passes legacy/ahead migration,
+  backup/restore, source/packaged crash recovery, fresh candidate clone and
+  deterministic memory rebuild, capsule parity, branch/dirty state, two live
+  sessions, fresh/rerun/upgrade install, missing/wrong-platform failures,
+  AGENTS/command/payload parity and 30-sample startup latency. Two normal
+  qualification tasks close the `4/4` lane mix; the parent task was actually
+  blocked and resumed, and exact terminal trace markers close the remaining H5
+  scenarios.
+- Decision/approval reference: `TASK-000012` records the explicit user
+  high-risk direction approval. Platform scope remains Linux `x86_64`; no
+  architecture, schema, destructive recovery or validation weakening occurred.
+- Validation and rollback impact: 74 unit tests, source and packaged Phase 4
+  matrices, workspace Clippy/format, installer and release shell suites,
+  source/packaged workflow parity, memory validation and strict doctor pass.
+  Terminal audit reports H5 `achieved`, expanded gates `9/9` and no unknown
+  coverage while retaining unrelated historical `AUDIT_DEBT`. Rollback
+  code/docs/packaged binary together and preserve all operational evidence; no
+  migration rollback is required.
+
 ## 29. Immediate next action
 
-Start CL-70 release/upgrade qualification. Its evidence must close or retain as
-explicit gaps the remaining H5 dogfood observation requirements; do not claim
-H5 from command availability or from the CL-61 implementation tests alone.
+Preserve CL-70 release evidence and use the observed compatibility window
+before any N+2 removal. Reconcile or explicitly accept the historical audit and
+backlog `#4` debt separately; do not fabricate missing canonical records.
+Future platform additions or earlier compatibility breaks require a new
+approved story.

@@ -39,7 +39,9 @@ without misreporting them as validation success.
 Scenario evidence uses exact values in `trace.actions_taken`; summaries and
 notes are never heuristically classified.
 
-## CL-61 Observation Snapshot
+## Observation History
+
+### CL-61 pre-closure snapshot
 
 The pre-closure `TASK-000011` snapshot reports:
 
@@ -57,11 +59,33 @@ The pre-closure `TASK-000011` snapshot reports:
 
 Current H5 status is therefore `not_achieved`.
 
+### CL-70 terminal snapshot
+
+| Evidence | Observed | Required | Result |
+| --- | ---: | ---: | --- |
+| Evidence-backed terminal tasks | 13 | 10 | met |
+| Tiny tasks | 4 | 3 | met |
+| Normal tasks | 4 | 4 | met |
+| High-risk tasks | 5 | 2 | met |
+| Blocked/resumed | 1 | 1 | met |
+| Fresh clone/rebuild | 2 | 1 | met |
+| Installer upgrade | 3 | 1 | met |
+| Expanded tasks meeting gates | 9 | 9 | met |
+| Measured improvements | 2 | 2 | met |
+
+Current H5 status is `achieved`. The outcome follows terminal task gates,
+normal-lane qualification tasks and exact trace markers; it is not inferred
+from installed commands or test fixtures.
+
 ## Coverage Boundary
 
 Audit names every check it executes and separately reports unknown coverage.
-The current unknown set includes deeper Markdown/DB field parity, path-scoped
-proof freshness across later commits, generated/installed parity, capsule
-fresh-rebuild parity, and latency/over-read/manual-correction telemetry. Zero
-findings means no debt in checked coverage only; it never means perfect
-maturity.
+Before CL-70 the unknown set included deeper Markdown/DB field parity,
+path-scoped proof freshness, generated/installed parity, capsule fresh-rebuild
+parity, and latency/over-read/manual-correction telemetry. Audit promotes those
+items to checked coverage only after a completed CL-70 task has a passing
+`release` proof and all required exact trace markers.
+
+CL-70 terminal audit has no unknown coverage, but still reports unrelated
+historical debt: legacy planned stories, abandoned `TASK-000006` without a
+trace, and unrooted trace `#2`. H5 and audit-debt status remain separate claims.

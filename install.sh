@@ -258,6 +258,12 @@ tar -xzf "$TMP_DIR/source.tar.gz" -C "$TMP_DIR"
 SRC_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [ -n "$SRC_DIR" ] || fail "Không tìm thấy thư mục source sau khi giải nén"
 
+# Fail before mutating the target when the selected release archive cannot
+# supply the only supported CLI payload for this platform. A partial Harness
+# install without its command-first entrypoint is not a usable installation.
+[ -x "$SRC_DIR/_harness/bin/harness-cli" ] \
+  || fail "Thiếu executable _harness/bin/harness-cli trong source archive"
+
 log "Cài khung mẫu vào workspace: $TARGET_DIR"
 
 MISSING_ITEMS=()

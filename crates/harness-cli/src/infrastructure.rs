@@ -4017,6 +4017,30 @@ impl HarnessRepository for SqliteHarnessRepository {
 
     fn audit(&self) -> Result<AuditResult> {
         let connection = self.open_existing()?;
+        let release_qualification_observed =
+            release_qualification_observed(&connection, &self.repo_root)?;
+        let release_coverage = vec![
+            "Markdown/DB field parity beyond canonical artifact validation".to_owned(),
+            "path-scoped proof freshness across later commits".to_owned(),
+            "generated matrix, CLI manifest, and installed payload parity".to_owned(),
+            "portable capsule to fresh-rebuild parity".to_owned(),
+            "startup latency, over-read, and manual-correction telemetry".to_owned(),
+        ];
+        let mut coverage = vec![
+            "stories/traces".to_owned(),
+            "terminal task/final trace linkage".to_owned(),
+            "completed normal/high-risk closure gates".to_owned(),
+            "verification commands".to_owned(),
+            "backlog outcomes".to_owned(),
+            "friction outcomes".to_owned(),
+            "registered tools".to_owned(),
+        ];
+        let unknown_coverage = if release_qualification_observed {
+            coverage.extend(release_coverage);
+            Vec::new()
+        } else {
+            release_coverage
+        };
         let mut result = AuditResult {
             health_scope: "not_checked; run doctor for repository and database health".to_owned(),
             orphaned_stories: audit_findings(
@@ -4116,22 +4140,8 @@ impl HarnessRepository for SqliteHarnessRepository {
                    AND status NOT IN ('validated', 'ineffective', 'reverted')
                  ORDER BY id;",
             )?,
-            coverage: vec![
-                "stories/traces".to_owned(),
-                "terminal task/final trace linkage".to_owned(),
-                "completed normal/high-risk closure gates".to_owned(),
-                "verification commands".to_owned(),
-                "backlog outcomes".to_owned(),
-                "friction outcomes".to_owned(),
-                "registered tools".to_owned(),
-            ],
-            unknown_coverage: vec![
-                "Markdown/DB field parity beyond canonical artifact validation".to_owned(),
-                "path-scoped proof freshness across later commits".to_owned(),
-                "generated matrix, CLI manifest, and installed payload parity".to_owned(),
-                "portable capsule to fresh-rebuild parity".to_owned(),
-                "startup latency, over-read, and manual-correction telemetry".to_owned(),
-            ],
+            coverage,
+            unknown_coverage,
             maturity: maturity_report(&connection)?,
         };
 
@@ -5170,6 +5180,43 @@ fn maturity_report(connection: &Connection) -> Result<MaturityReport> {
         report.h5_status = "achieved".to_owned();
     }
     Ok(report)
+}
+
+fn release_qualification_observed(connection: &Connection, repo_root: &Path) -> Result<bool> {
+    let proof: Option<(Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT proof_run.artifact_path, proof_run.artifact_hash
+           FROM task
+           JOIN task_story ON task_story.task_id=task.id
+             AND task_story.role='primary' AND task_story.story_id='CL-70'
+           JOIN proof_run ON proof_run.task_id=task.id
+             AND proof_run.layer='release' AND proof_run.state='pass'
+           WHERE task.status='completed'
+             AND task.capsule_path IS NOT NULL
+             AND (
+               SELECT COUNT(DISTINCT marker.value)
+               FROM trace
+               JOIN json_each(COALESCE(trace.actions_taken, '[]')) AS marker
+               WHERE trace.intake_id=task.intake_id
+                 AND marker.value IN (
+                   'release-environment-matrix',
+                   'path-proof-freshness',
+                   'payload-manifest-parity',
+                   'docs-db-roundtrip',
+                   'fresh-clone-rebuild',
+                   'startup-latency',
+                   'over-read-measured',
+                   'manual-corrections-measured'
+                 )
+             )=8
+           ORDER BY proof_run.id DESC
+           LIMIT 1;",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(proof
+        .is_some_and(|(path, hash)| proof_file_fresh(repo_root, path.as_deref(), hash.as_deref())))
 }
 
 fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
@@ -8045,6 +8092,92 @@ mod tests {
             .query_backlog(BacklogFilter::Open)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn audit_promotes_release_coverage_only_from_terminal_cl70_evidence() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+
+        assert_eq!(repository.audit().unwrap().unknown_coverage.len(), 5);
+
+        connection
+            .execute(
+                "INSERT INTO story(id,title,risk_lane,status)
+                 VALUES ('CL-70','Release qualification','high_risk','implemented');",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO intake(id,input_type,summary,risk_lane)
+                 VALUES (70,'harness_improvement','CL-70','high_risk');",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task(
+                   id,intake_id,status,outcome,risk_lane,behavior_bearing,summary,
+                   worktree,context_manifest_json,context_manifest_checksum,
+                   capsule_required,capsule_path,closed_at
+                 ) VALUES (
+                   'TASK-CL70',70,'completed','completed','high_risk',1,'CL-70',
+                   '/tmp/cl70','{\"must_read\":[]}','fixture',1,
+                   'docs/tasks/TASK-CL70.md',datetime('now')
+                 );",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO task_story(task_id,story_id,role)
+                 VALUES ('TASK-CL70','CL-70','primary');",
+                [],
+            )
+            .unwrap();
+        let artifact_path = format!(
+            ".harness-evidence/audit-release-fixture-{}.md",
+            std::process::id()
+        );
+        let artifact = repository.repo_root.join(&artifact_path);
+        fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        fs::write(&artifact, "qualified release\n").unwrap();
+        let artifact_hash = sha256_file(&artifact).unwrap();
+        connection
+            .execute(
+                "INSERT INTO proof_run(task_id,layer,state,artifact_path,artifact_hash)
+                 VALUES ('TASK-CL70','release','pass',?1,?2);",
+                params![artifact_path, artifact_hash],
+            )
+            .unwrap();
+
+        assert_eq!(repository.audit().unwrap().unknown_coverage.len(), 5);
+
+        connection
+            .execute(
+                "INSERT INTO trace(intake_id,task_summary,actions_taken,outcome)
+                 VALUES (70,'CL-70',
+                   '[\"release-environment-matrix\",\"path-proof-freshness\",\
+                     \"payload-manifest-parity\",\"docs-db-roundtrip\",\
+                     \"fresh-clone-rebuild\",\"startup-latency\",\
+                     \"over-read-measured\",\"manual-corrections-measured\"]',
+                   'completed');",
+                [],
+            )
+            .unwrap();
+
+        let audit = repository.audit().unwrap();
+        assert!(audit.unknown_coverage.is_empty());
+        assert!(audit
+            .coverage
+            .iter()
+            .any(|item| item == "portable capsule to fresh-rebuild parity"));
+
+        fs::write(&artifact, "changed after release proof\n").unwrap();
+        assert_eq!(repository.audit().unwrap().unknown_coverage.len(), 5);
+        fs::remove_file(artifact).unwrap();
     }
 
     #[test]

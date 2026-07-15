@@ -26,9 +26,10 @@ use crate::domain::{
     compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
     score_trace, task_transition_allowed, validate_tool_description, AuditFinding, AuditResult,
     BacklogFilter, BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord,
-    FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord, RiskLane,
-    StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus,
-    StructuredErrorResult, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
+    FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord,
+    MaturityReport, ObservationCount, RiskLane, StoryMatrixRecord, StoryVerifyAllItem,
+    StoryVerifyAllResult, StoryVerifyStatus, StructuredErrorResult, ToolArgSpec, ToolEntry,
+    TraceRecord, TraceScoreResult, TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -4017,6 +4018,7 @@ impl HarnessRepository for SqliteHarnessRepository {
     fn audit(&self) -> Result<AuditResult> {
         let connection = self.open_existing()?;
         let mut result = AuditResult {
+            health_scope: "not_checked; run doctor for repository and database health".to_owned(),
             orphaned_stories: audit_findings(
                 &connection,
                 "SELECT story.id, story.title
@@ -4024,6 +4026,53 @@ impl HarnessRepository for SqliteHarnessRepository {
                  LEFT JOIN trace ON trace.story_id = story.id
                  WHERE story.status IN ('planned','in_progress') AND trace.id IS NULL
                  ORDER BY story.id;",
+            )?,
+            terminal_tasks_without_traces: audit_findings(
+                &connection,
+                "SELECT task.id, task.summary
+                 FROM task
+                 LEFT JOIN trace ON trace.intake_id=task.intake_id
+                 WHERE task.status IN ('completed','abandoned','failed')
+                 GROUP BY task.id, task.summary
+                 HAVING COUNT(trace.id)=0
+                 ORDER BY task.id;",
+            )?,
+            unrooted_traces: audit_findings(
+                &connection,
+                "SELECT CAST(trace.id AS TEXT), trace.task_summary
+                 FROM trace
+                 LEFT JOIN task ON task.intake_id=trace.intake_id
+                 WHERE task.id IS NULL
+                 ORDER BY trace.id;",
+            )?,
+            completed_tasks_below_gates: audit_findings(
+                &connection,
+                "SELECT task.id, task.summary
+                 FROM task
+                 WHERE task.status='completed'
+                   AND task.risk_lane IN ('normal','high_risk')
+                   AND (
+                     task.capsule_path IS NULL
+                     OR NOT EXISTS (
+                       SELECT 1 FROM proof_run
+                       WHERE proof_run.task_id=task.id AND proof_run.state='pass'
+                     )
+                     OR NOT EXISTS (
+                       SELECT 1 FROM trace WHERE trace.intake_id=task.intake_id
+                     )
+                     OR (
+                       task.risk_lane='high_risk'
+                       AND NOT EXISTS (
+                         SELECT 1 FROM task_approval
+                         WHERE task_approval.task_id=task.id
+                       )
+                     )
+                     OR (
+                       SELECT COUNT(*) FROM task_context_read
+                       WHERE task_context_read.task_id=task.id
+                     ) < json_array_length(json_extract(task.context_manifest_json, '$.must_read'))
+                   )
+                 ORDER BY task.id;",
             )?,
             unverified_stories: audit_findings(
                 &connection,
@@ -4069,11 +4118,21 @@ impl HarnessRepository for SqliteHarnessRepository {
             )?,
             coverage: vec![
                 "stories/traces".to_owned(),
+                "terminal task/final trace linkage".to_owned(),
+                "completed normal/high-risk closure gates".to_owned(),
                 "verification commands".to_owned(),
                 "backlog outcomes".to_owned(),
                 "friction outcomes".to_owned(),
                 "registered tools".to_owned(),
             ],
+            unknown_coverage: vec![
+                "Markdown/DB field parity beyond canonical artifact validation".to_owned(),
+                "path-scoped proof freshness across later commits".to_owned(),
+                "generated matrix, CLI manifest, and installed payload parity".to_owned(),
+                "portable capsule to fresh-rebuild parity".to_owned(),
+                "startup latency, over-read, and manual-correction telemetry".to_owned(),
+            ],
+            maturity: maturity_report(&connection)?,
         };
 
         let mut statement =
@@ -4954,6 +5013,163 @@ fn audit_findings(connection: &Connection, sql: &str) -> Result<Vec<AuditFinding
         })
     })?;
     collect_rows(rows)
+}
+
+fn maturity_report(connection: &Connection) -> Result<MaturityReport> {
+    let (terminal_tasks, tiny_tasks, normal_tasks, high_risk_tasks): (i64, i64, i64, i64) =
+        connection.query_row(
+            "SELECT
+               COUNT(*),
+               COALESCE(SUM(CASE WHEN task.risk_lane='tiny' THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN task.risk_lane='normal' THEN 1 ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN task.risk_lane='high_risk' THEN 1 ELSE 0 END), 0)
+             FROM task
+             WHERE task.status IN ('completed','abandoned','failed')
+               AND EXISTS (
+                 SELECT 1 FROM trace WHERE trace.intake_id=task.intake_id
+               );",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    let observation_marker_count = |marker: &str| -> Result<i64> {
+        connection
+            .query_row(
+                "SELECT COUNT(DISTINCT task.id)
+                 FROM task
+                 JOIN trace ON trace.intake_id=task.intake_id
+                 WHERE task.status IN ('completed','abandoned','failed')
+                   AND EXISTS (
+                     SELECT 1 FROM json_each(COALESCE(trace.actions_taken, '[]'))
+                     WHERE json_each.value=?1
+                   );",
+                params![marker],
+                |row| row.get(0),
+            )
+            .map_err(HarnessInfraError::from)
+    };
+    let completed_expanded_tasks: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM task
+         WHERE status='completed' AND risk_lane IN ('normal','high_risk');",
+        [],
+        |row| row.get(0),
+    )?;
+    let completed_expanded_tasks_meeting_gates: i64 = connection.query_row(
+        "SELECT COUNT(*)
+         FROM task
+         WHERE task.status='completed'
+           AND task.risk_lane IN ('normal','high_risk')
+           AND task.capsule_path IS NOT NULL
+           AND EXISTS (
+             SELECT 1 FROM proof_run
+             WHERE proof_run.task_id=task.id AND proof_run.state='pass'
+           )
+           AND EXISTS (
+             SELECT 1 FROM trace WHERE trace.intake_id=task.intake_id
+           )
+           AND (
+             task.risk_lane <> 'high_risk'
+             OR EXISTS (
+               SELECT 1 FROM task_approval WHERE task_approval.task_id=task.id
+             )
+           )
+           AND (
+             SELECT COUNT(*) FROM task_context_read
+             WHERE task_context_read.task_id=task.id
+           ) >= json_array_length(json_extract(task.context_manifest_json, '$.must_read'));",
+        [],
+        |row| row.get(0),
+    )?;
+    let measured_improvements: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM friction
+         WHERE status IN ('validated','ineffective','reverted')
+           AND baseline IS NOT NULL AND TRIM(baseline) <> ''
+           AND predicted_metric IS NOT NULL AND TRIM(predicted_metric) <> ''
+           AND observation_window IS NOT NULL AND TRIM(observation_window) <> ''
+           AND actual_outcome IS NOT NULL AND TRIM(actual_outcome) <> '';",
+        [],
+        |row| row.get(0),
+    )?;
+
+    let mut report = MaturityReport {
+        evidence_backed_terminal_tasks: ObservationCount {
+            observed: terminal_tasks,
+            required: 10,
+        },
+        tiny_tasks: ObservationCount {
+            observed: tiny_tasks,
+            required: 3,
+        },
+        normal_tasks: ObservationCount {
+            observed: normal_tasks,
+            required: 4,
+        },
+        high_risk_tasks: ObservationCount {
+            observed: high_risk_tasks,
+            required: 2,
+        },
+        blocked_resumed_tasks: ObservationCount {
+            observed: observation_marker_count("blocked-resumed")?,
+            required: 1,
+        },
+        fresh_clone_rebuild_tasks: ObservationCount {
+            observed: observation_marker_count("fresh-clone-rebuild")?,
+            required: 1,
+        },
+        installer_upgrade_tasks: ObservationCount {
+            observed: observation_marker_count("installer-upgrade")?,
+            required: 1,
+        },
+        completed_expanded_tasks,
+        completed_expanded_tasks_meeting_gates,
+        measured_improvements: ObservationCount {
+            observed: measured_improvements,
+            required: 2,
+        },
+        ..MaturityReport::default()
+    };
+    if !report.evidence_backed_terminal_tasks.met() {
+        report.gaps.push(format!(
+            "evidence-backed terminal tasks: {}/{}",
+            report.evidence_backed_terminal_tasks.observed,
+            report.evidence_backed_terminal_tasks.required
+        ));
+    }
+    for (label, count) in [
+        ("tiny tasks", &report.tiny_tasks),
+        ("normal tasks", &report.normal_tasks),
+        ("high-risk tasks", &report.high_risk_tasks),
+        ("blocked/resumed tasks", &report.blocked_resumed_tasks),
+        (
+            "fresh-clone/rebuild tasks",
+            &report.fresh_clone_rebuild_tasks,
+        ),
+        ("installer-upgrade tasks", &report.installer_upgrade_tasks),
+    ] {
+        if !count.met() {
+            report
+                .gaps
+                .push(format!("{label}: {}/{}", count.observed, count.required));
+        }
+    }
+    if !report.expanded_gates_met() {
+        report.gaps.push(format!(
+            "completed normal/high-risk tasks meeting closure gates: {}/{}",
+            report.completed_expanded_tasks_meeting_gates, report.completed_expanded_tasks
+        ));
+    }
+    if !report.measured_improvements.met() {
+        report.gaps.push(format!(
+            "measured improvements: {}/{}",
+            report.measured_improvements.observed, report.measured_improvements.required
+        ));
+    }
+    if report.observation_window_met()
+        && report.expanded_gates_met()
+        && report.measured_improvements.met()
+    {
+        report.h5_status = "achieved".to_owned();
+    }
+    Ok(report)
 }
 
 fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
@@ -7812,6 +8028,10 @@ mod tests {
         assert_eq!(audit.unverified_stories.len(), 1);
         assert_eq!(audit.backlog_without_outcomes.len(), 1);
         assert_eq!(audit.broken_tools.len(), 1);
+        assert!(!audit.unknown_coverage.is_empty());
+        assert_eq!(audit.maturity.measured_improvements.observed, 0);
+        assert_eq!(audit.maturity.h5_status, "not_achieved");
+        assert!(!audit.strict_passes());
         assert!(audit.entropy_score() > 0);
 
         let proposals = repository.propose(true).unwrap();
@@ -7825,6 +8045,106 @@ mod tests {
             .query_backlog(BacklogFilter::Open)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn maturity_requires_multiple_measured_improvements_and_observed_task_mix() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let mut connection = repository.open_existing().unwrap();
+        let transaction = connection.transaction().unwrap();
+        let lanes = [
+            "tiny",
+            "tiny",
+            "tiny",
+            "normal",
+            "normal",
+            "normal",
+            "normal",
+            "high_risk",
+            "high_risk",
+            "high_risk",
+        ];
+        for (index, lane) in lanes.iter().enumerate() {
+            let intake_id = index as i64 + 1;
+            let task_id = format!("TASK-MATURITY-{intake_id:02}");
+            transaction
+                .execute(
+                    "INSERT INTO intake(id,input_type,summary,risk_lane)
+                     VALUES (?1,'harness_improvement',?2,?3);",
+                    params![intake_id, task_id, lane],
+                )
+                .unwrap();
+            transaction
+                .execute(
+                    "INSERT INTO task(
+                       id,intake_id,status,outcome,risk_lane,behavior_bearing,summary,
+                       worktree,context_manifest_json,context_manifest_checksum,
+                       capsule_required,capsule_path,closed_at
+                     ) VALUES (
+                       ?1,?2,'completed','completed',?3,0,?1,
+                       '/tmp/maturity','{\"must_read\":[]}','fixture',
+                       ?4,?5,datetime('now')
+                     );",
+                    params![
+                        task_id,
+                        intake_id,
+                        lane,
+                        i64::from(*lane != "tiny"),
+                        (*lane != "tiny").then(|| format!("docs/tasks/{task_id}.md")),
+                    ],
+                )
+                .unwrap();
+            let marker = match index {
+                0 => "[\"blocked-resumed\"]",
+                1 => "[\"fresh-clone-rebuild\"]",
+                2 => "[\"installer-upgrade\"]",
+                _ => "[]",
+            };
+            transaction
+                .execute(
+                    "INSERT INTO trace(intake_id,task_summary,actions_taken,outcome)
+                     VALUES (?1,?2,?3,'completed');",
+                    params![intake_id, task_id, marker],
+                )
+                .unwrap();
+            if *lane != "tiny" {
+                transaction
+                    .execute(
+                        "INSERT INTO proof_run(task_id,layer,state) VALUES (?1,'integration','pass');",
+                        params![task_id],
+                    )
+                    .unwrap();
+            }
+            if *lane == "high_risk" {
+                transaction
+                    .execute(
+                        "INSERT INTO task_approval(task_id,gate,source,evidence)
+                         VALUES (?1,'fixture','test','observed');",
+                        params![task_id],
+                    )
+                    .unwrap();
+            }
+        }
+        for id in 1..=2 {
+            transaction
+                .execute(
+                    "INSERT INTO friction(
+                       fingerprint,category,severity,summary,disposition,status,
+                       baseline,predicted_metric,observation_window,actual_outcome
+                     ) VALUES (?1,'workflow','medium',?1,'fixed-now','validated',
+                       'one recurrence','zero recurrence','next five tasks','zero recurrence observed');",
+                    params![format!("measured-{id}")],
+                )
+                .unwrap();
+            let report = maturity_report(&transaction).unwrap();
+            assert_eq!(report.measured_improvements.observed, id);
+            assert_eq!(
+                report.h5_status,
+                if id == 2 { "achieved" } else { "not_achieved" }
+            );
+        }
+        transaction.rollback().unwrap();
     }
 
     #[test]

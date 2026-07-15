@@ -1,37 +1,67 @@
-# Harness Maturity Ladder
+# Harness Maturity Evidence
 
-This ladder tracks how `harness-engineering` moves from static instructions to
-measurable self-improvement. A level is achieved only when repository files,
-durable records, or validation output prove it.
+This source-only report defines maturity as an observed outcome claim. Command,
+file or schema existence is capability evidence only.
 
-## Levels
+## Runtime Authority
 
-| Level | Name | Criteria | Current Status |
-| --- | --- | --- | --- |
-| H0 | Bare environment | No `AGENTS.md`, intake policy, story, decision, validation, or trace artifact. | Passed. This repo is beyond H0. |
-| H1 | Scaffolding and policy | `AGENTS.md`; `_harness/HARNESS.md`; `_harness/FEATURE_INTAKE.md`; `_harness/ARCHITECTURE.md`; templates; fallback matrix. | Achieved. |
-| H2 | Durable state and observability | `_harness/bin/harness-cli`; schema for intake/story/decision/backlog/trace; `_harness/TRACE_SPEC.md`; `_harness/CONTEXT_RULES.md`. | Achieved. |
-| H3 | Active observability and evolution | `score-trace`; friction queries; backlog predicted/actual outcomes; `audit`; `propose`; component attribution. | Partial: benchmark attribution is not automated. |
-| H4 | Automated verification | Story `verify_command`; `story verify`; `story verify-all`; trace warnings for unverified linked stories. | Achieved. |
-| H5 | Self-improving harness | Repeated friction becomes proposed change with predicted impact, risk, validation plan, review posture, and actual outcome comparison. | Partial: repeated outcome proof is still sparse. |
+Run:
 
-## Activated Responsibilities
+```bash
+_harness/bin/harness-cli audit --json
+```
 
-| Level | Responsibilities |
+The runtime report is derived from task closure gates, task-linked traces and
+terminal structured-friction outcomes. `doctor` remains the separate authority
+for repository and database health.
+
+## H5 Gate
+
+H5 is achieved only when all current runtime conditions pass:
+
+| Evidence | Threshold |
 | --- | --- |
-| H1 | Task specification, permissions, project memory, verification |
-| H2 | Task state, observability, failure attribution, context selection, entropy auditing |
-| H3 | Observability, failure attribution, entropy auditing, intervention recording |
-| H4 | Verification, task state, permissions, intervention recording |
-| H5 | Entropy auditing, failure attribution, intervention recording, permissions |
+| Evidence-backed terminal tasks | 10 |
+| Tiny tasks | 3 |
+| Normal tasks | 4 |
+| High-risk tasks | 2 |
+| `blocked-resumed` trace action | 1 |
+| `fresh-clone-rebuild` trace action | 1 |
+| `installer-upgrade` trace action | 1 |
+| Completed normal/high-risk tasks meeting closure gates | 100% |
+| Measured improvements | 2 |
 
-## Current Assessment
+A measured improvement must have a terminal status (`validated`, `ineffective`
+or `reverted`) and non-empty baseline, predicted metric, observation window and
+actual outcome. This keeps ineffective/reverted outcomes visible as learning
+without misreporting them as validation success.
 
-| Level | Status | Evidence |
-| --- | --- | --- |
-| H0 | Passed | Harness docs, templates, and durable records exist. |
-| H1 | Achieved | `AGENTS.md`, `_harness/HARNESS.md`, `_harness/FEATURE_INTAKE.md`, `_harness/ARCHITECTURE.md`, `_harness/templates/*`, `_harness/TEST_MATRIX.md`. |
-| H2 | Achieved | `_harness/bin/harness-cli`, `_harness/scripts/schema/001-init.sql`, `_harness/TRACE_SPEC.md`, `_harness/CONTEXT_RULES.md`. |
-| H3 | Partial | `score-trace`, `query friction`, backlog outcome fields, `audit`, and `propose` exist; benchmark attribution remains open. |
-| H4 | Achieved | `story verify`, `story verify-all`, and trace-time verification warnings exist. |
-| H5 | Partial | `audit`, `score-context`, `intervention`, `propose`, and `_harness/IMPROVEMENT_PROTOCOL.md` exist; repeated outcome proof remains open. |
+Scenario evidence uses exact values in `trace.actions_taken`; summaries and
+notes are never heuristically classified.
+
+## CL-61 Observation Snapshot
+
+The pre-closure `TASK-000011` snapshot reports:
+
+| Evidence | Observed | Required | Result |
+| --- | ---: | ---: | --- |
+| Evidence-backed terminal tasks | 9 | 10 | gap |
+| Tiny tasks | 4 | 3 | met |
+| Normal tasks | 2 | 4 | gap |
+| High-risk tasks | 3 | 2 | met |
+| Blocked/resumed | 0 | 1 | gap |
+| Fresh clone/rebuild | 0 | 1 | gap |
+| Installer upgrade | 0 | 1 | gap |
+| Expanded tasks meeting gates | 5 | 5 | met |
+| Measured improvements | 2 | 2 | met |
+
+Current H5 status is therefore `not_achieved`.
+
+## Coverage Boundary
+
+Audit names every check it executes and separately reports unknown coverage.
+The current unknown set includes deeper Markdown/DB field parity, path-scoped
+proof freshness across later commits, generated/installed parity, capsule
+fresh-rebuild parity, and latency/over-read/manual-correction telemetry. Zero
+findings means no debt in checked coverage only; it never means perfect
+maturity.

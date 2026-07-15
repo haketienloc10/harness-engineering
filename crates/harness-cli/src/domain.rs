@@ -1025,15 +1025,110 @@ pub struct ContextScoreResult {
     pub over_read: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct AuditFinding {
     pub id: String,
     pub title: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct ObservationCount {
+    pub observed: i64,
+    pub required: i64,
+}
+
+impl ObservationCount {
+    pub fn met(&self) -> bool {
+        self.observed >= self.required
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct MaturityReport {
+    pub basis: String,
+    pub evidence_backed_terminal_tasks: ObservationCount,
+    pub tiny_tasks: ObservationCount,
+    pub normal_tasks: ObservationCount,
+    pub high_risk_tasks: ObservationCount,
+    pub blocked_resumed_tasks: ObservationCount,
+    pub fresh_clone_rebuild_tasks: ObservationCount,
+    pub installer_upgrade_tasks: ObservationCount,
+    pub completed_expanded_tasks: i64,
+    pub completed_expanded_tasks_meeting_gates: i64,
+    pub measured_improvements: ObservationCount,
+    pub h5_status: String,
+    pub gaps: Vec<String>,
+}
+
+impl Default for MaturityReport {
+    fn default() -> Self {
+        Self {
+            basis: "observed task gates and measured improvement outcomes; command existence is excluded"
+                .to_owned(),
+            evidence_backed_terminal_tasks: ObservationCount {
+                observed: 0,
+                required: 10,
+            },
+            tiny_tasks: ObservationCount {
+                observed: 0,
+                required: 3,
+            },
+            normal_tasks: ObservationCount {
+                observed: 0,
+                required: 4,
+            },
+            high_risk_tasks: ObservationCount {
+                observed: 0,
+                required: 2,
+            },
+            blocked_resumed_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            fresh_clone_rebuild_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            installer_upgrade_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            completed_expanded_tasks: 0,
+            completed_expanded_tasks_meeting_gates: 0,
+            measured_improvements: ObservationCount {
+                observed: 0,
+                required: 2,
+            },
+            h5_status: "not_achieved".to_owned(),
+            gaps: Vec::new(),
+        }
+    }
+}
+
+impl MaturityReport {
+    pub fn observation_window_met(&self) -> bool {
+        self.evidence_backed_terminal_tasks.met()
+            && self.tiny_tasks.met()
+            && self.normal_tasks.met()
+            && self.high_risk_tasks.met()
+            && self.blocked_resumed_tasks.met()
+            && self.fresh_clone_rebuild_tasks.met()
+            && self.installer_upgrade_tasks.met()
+    }
+
+    pub fn expanded_gates_met(&self) -> bool {
+        self.completed_expanded_tasks > 0
+            && self.completed_expanded_tasks == self.completed_expanded_tasks_meeting_gates
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Default, Serialize)]
 pub struct AuditResult {
+    pub health_scope: String,
     pub orphaned_stories: Vec<AuditFinding>,
+    pub terminal_tasks_without_traces: Vec<AuditFinding>,
+    pub unrooted_traces: Vec<AuditFinding>,
+    pub completed_tasks_below_gates: Vec<AuditFinding>,
     pub unverified_stories: Vec<AuditFinding>,
     pub unverified_decisions: Vec<AuditFinding>,
     pub backlog_without_outcomes: Vec<AuditFinding>,
@@ -1041,11 +1136,16 @@ pub struct AuditResult {
     pub broken_tools: Vec<AuditFinding>,
     pub friction_without_outcomes: Vec<AuditFinding>,
     pub coverage: Vec<String>,
+    pub unknown_coverage: Vec<String>,
+    pub maturity: MaturityReport,
 }
 
 impl AuditResult {
     pub fn entropy_score(&self) -> i64 {
         let raw = (self.orphaned_stories.len() as i64 * 10)
+            + (self.terminal_tasks_without_traces.len() as i64 * 10)
+            + (self.unrooted_traces.len() as i64 * 5)
+            + (self.completed_tasks_below_gates.len() as i64 * 10)
             + (self.unverified_stories.len() as i64 * 5)
             + (self.unverified_decisions.len() as i64 * 5)
             + (self.backlog_without_outcomes.len() as i64 * 2)
@@ -1053,6 +1153,23 @@ impl AuditResult {
             + (self.broken_tools.len() as i64 * 8)
             + (self.friction_without_outcomes.len() as i64 * 4);
         raw.min(100)
+    }
+
+    pub fn finding_count(&self) -> usize {
+        self.orphaned_stories.len()
+            + self.terminal_tasks_without_traces.len()
+            + self.unrooted_traces.len()
+            + self.completed_tasks_below_gates.len()
+            + self.unverified_stories.len()
+            + self.unverified_decisions.len()
+            + self.backlog_without_outcomes.len()
+            + self.stale_stories.len()
+            + self.broken_tools.len()
+            + self.friction_without_outcomes.len()
+    }
+
+    pub fn strict_passes(&self) -> bool {
+        self.finding_count() == 0 && self.unknown_coverage.is_empty()
     }
 }
 

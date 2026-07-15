@@ -2,9 +2,9 @@
 
 Date: 2026-07-14
 
-Status: In implementation. The 2026-07-15 maintenance reconciliation records
-20 of 22 work items completed, 1 in progress, with CL-70 blocked. Release
-qualification has not started.
+Status: In implementation. The 2026-07-15 CL-61 reconciliation records 21 of
+22 work items completed, with CL-70 not started. Release qualification has not
+started.
 
 Plan ID: `CLP-001`
 
@@ -32,8 +32,8 @@ Plan ID: `CLP-001`
 | CL-51 | completed | Progressive story template owns the supported authoring surface. |
 | CL-52 | completed | Runtime workflow no longer depends on source-only policy docs. |
 | CL-60 | completed | Format, 66 workspace tests, Clippy, packaged/source command parity and installer state-safety proof pass at HEAD `0df8291`. |
-| CL-61 | in_progress | CL-60 is restored; outcome-derived maturity report and observation evidence remain. |
-| CL-70 | blocked | All prior work, release environments and observation evidence are not yet complete. |
+| CL-61 | completed | Outcome-derived human/JSON audit report, strict debt semantics, explicit unknown coverage, multiple measured improvements and dogfood observation gaps are proven by `TASK-000011` and `docs/stories/CL-61-evidence-based-maturity/validation.md`. |
+| CL-70 | not_started | All prerequisite implementation stories are complete; release environments and the remaining H5 observation-window evidence are not yet qualified. |
 
 Original approved baseline (historical, not current runtime state):
 
@@ -1660,8 +1660,8 @@ Agents update this table only after evidence exists.
 | CL-51 Templates | completed | CL-43 | Progressive story template owns high-risk expansion, validation and rollback; compatibility templates are deprecated; policy/parity and installer checks pass | CL-52 may begin |
 | CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
 | CL-60 Structured friction | completed | CL-43 | Format, 66 workspace tests, Clippy, packaged/source `WORKFLOW_PARITY_OK`, installer state-safety and healthy `001..009` doctor proof pass at HEAD `0df8291` | Continue CL-61 observation evidence |
-| CL-61 Maturity | in_progress | CL-60 | Audit exposes unobserved material friction and explicit coverage scope; CL-60 parity is restored, while the measured multi-improvement maturity threshold remains | Add outcome-derived maturity report and observation evidence |
-| CL-70 Release proof | blocked | all prior | — | — |
+| CL-61 Maturity | completed | CL-60 | `TASK-000011`; 73 unit tests plus source failure-matrix test; source/packaged audit and workflow parity; installer state-safety; two measured improvements; explicit H5 observation gaps | Preserve fail-closed H5 status until CL-70 supplies the missing observation/release evidence |
+| CL-70 Release proof | not_started | all prior | — | Run release/upgrade qualification and complete the remaining H5 observation window |
 
 ## 27. Definition of done cho plan
 
@@ -1864,7 +1864,33 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   binary; preserve the operational database and task capsules, and do not
   manually rewrite terminal task state.
 
+### 2026-07-15 — Complete CL-61 evidence-based audit and maturity
+
+- Author/agent: Codex task `TASK-000011`, requested by the current CL-61
+  implementation instruction.
+- Affected work items: CL-61 and CL-70.
+- Closed gaps: `audit` now keeps doctor health separate, exposes checked and
+  unknown coverage, audits terminal task/trace and expanded closure-gate debt,
+  and renders the same result in human and JSON modes. `--strict` exits `6` on
+  findings or unknown coverage. H5 is derived from task-linked trace/gate
+  evidence, exact scenario markers and fully measured improvement outcomes;
+  command existence is excluded.
+- Observation outcome: two improvements now have baseline, predicted metric,
+  observation window and actual outcome, satisfying the multi-improvement
+  threshold. H5 remains correctly `not_achieved`: the pre-closure snapshot has
+  9/10 evidence-backed terminal tasks, 2/4 normal tasks and no recorded
+  blocked/resumed, fresh-clone/rebuild or installer-upgrade marker.
+- Validation: 73 unit tests plus the source Phase 4 black-box test, workspace
+  Clippy, format/diff/shell checks, source/packaged audit output, strict exit
+  semantics, source/packaged workflow parity and installer state-safety pass.
+  Detailed evidence is retained in
+  `docs/stories/CL-61-evidence-based-maturity/validation.md`.
+- Rollback: revert the CL-61 Rust/report/plan changes and restore the prior
+  packaged binary together. No schema rollback is required; preserve
+  operational task, trace, proof and friction evidence.
+
 ## 29. Immediate next action
 
-Complete the CL-61 outcome-derived maturity report and observation evidence.
-Start CL-70 release qualification only after CL-61 is completed.
+Start CL-70 release/upgrade qualification. Its evidence must close or retain as
+explicit gaps the remaining H5 dogfood observation requirements; do not claim
+H5 from command availability or from the CL-61 implementation tests alone.

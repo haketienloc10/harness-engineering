@@ -75,7 +75,7 @@ enum Command {
     /// Score trace context reads against CONTEXT_RULES.md.
     ScoreContext { trace_id: String },
     /// Run drift audit and entropy score.
-    Audit,
+    Audit(AuditArgs),
     /// Generate improvement proposals from observed patterns.
     Propose(ProposeArgs),
     /// Query harness data.
@@ -89,6 +89,15 @@ struct DoctorArgs {
     /// Treat pending or missing durable state as a failure.
     #[arg(long)]
     strict: bool,
+}
+
+#[derive(Args, Debug)]
+struct AuditArgs {
+    /// Exit with consistency-failure status when audit debt or unknown coverage remains.
+    #[arg(long)]
+    strict: bool,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -947,12 +956,13 @@ pub enum InterfaceError {
 
 impl Cli {
     pub fn requests_json(&self) -> bool {
-        matches!(
-            &self.command,
-            Command::Task(TaskArgs {
+        matches!(&self.command, Command::Audit(args) if args.json)
+            || matches!(
+                &self.command,
+                Command::Task(TaskArgs {
                 action: TaskAction::Finish(args),
-            }) if args.json
-        )
+                }) if args.json
+            )
     }
 }
 
@@ -1914,7 +1924,35 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 .expect("value provided");
             print_context_score(&service.score_context(id)?);
         }
-        Command::Audit => print_audit(&service.audit()?),
+        Command::Audit(args) => {
+            let result = service.audit()?;
+            if args.json {
+                let code = if result.strict_passes() {
+                    "AUDIT_CLEAR"
+                } else {
+                    "AUDIT_DEBT"
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": result.strict_passes(),
+                        "code": code,
+                        "message": if result.strict_passes() {
+                            "All implemented audit checks passed with no unknown coverage."
+                        } else {
+                            "Audit debt or unknown coverage remains."
+                        },
+                        "audit": result,
+                    }))
+                    .expect("audit result serializes")
+                );
+            } else {
+                print_audit(&result);
+            }
+            if args.strict && !result.strict_passes() {
+                std::process::exit(6);
+            }
+        }
         Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
         Command::Query(args) => match args.view {
             QueryView::Matrix(args) => print_matrix(&service.query_matrix()?, args.numeric),
@@ -2120,9 +2158,19 @@ fn print_context_score(result: &ContextScoreResult) {
 
 fn print_audit(result: &crate::domain::AuditResult) {
     println!("=== Harness Drift Audit ===");
+    println!("Doctor health: {}", result.health_scope);
     print_audit_category(
         "Orphaned stories (planned/in-progress, no traces)",
         &result.orphaned_stories,
+    );
+    print_audit_category(
+        "Terminal tasks without final traces",
+        &result.terminal_tasks_without_traces,
+    );
+    print_audit_category("Traces without task roots", &result.unrooted_traces);
+    print_audit_category(
+        "Completed normal/high-risk tasks below closure gates",
+        &result.completed_tasks_below_gates,
     );
     print_audit_category("Unverified stories", &result.unverified_stories);
     print_audit_category("Unverified decisions", &result.unverified_decisions);
@@ -2136,14 +2184,59 @@ fn print_audit(result: &crate::domain::AuditResult) {
         "Material friction without observed outcome",
         &result.friction_without_outcomes,
     );
+    println!("Coverage checked: {}.", result.coverage.join(", "));
     println!(
-        "Coverage checked: {}. Zero findings means no debt in these checks only.",
-        result.coverage.join(", ")
+        "Coverage unknown: {}. Zero findings means no debt in checked coverage only.",
+        if result.unknown_coverage.is_empty() {
+            "none".to_owned()
+        } else {
+            result.unknown_coverage.join(", ")
+        }
     );
     println!(
         "Entropy score: {}/100 (lower is better)",
         result.entropy_score()
     );
+    print_maturity_report(&result.maturity);
+}
+
+fn print_maturity_report(report: &crate::domain::MaturityReport) {
+    println!();
+    println!("=== Outcome-derived Maturity Report ===");
+    println!("Basis: {}", report.basis);
+    println!(
+        "H5 status: {} (measured improvements {}/{})",
+        report.h5_status,
+        report.measured_improvements.observed,
+        report.measured_improvements.required
+    );
+    println!(
+        "Observed terminal tasks: {}/{} (tiny {}/{}, normal {}/{}, high-risk {}/{})",
+        report.evidence_backed_terminal_tasks.observed,
+        report.evidence_backed_terminal_tasks.required,
+        report.tiny_tasks.observed,
+        report.tiny_tasks.required,
+        report.normal_tasks.observed,
+        report.normal_tasks.required,
+        report.high_risk_tasks.observed,
+        report.high_risk_tasks.required,
+    );
+    println!(
+        "Required scenarios: blocked/resumed {}/{}, fresh-clone/rebuild {}/{}, installer-upgrade {}/{}",
+        report.blocked_resumed_tasks.observed,
+        report.blocked_resumed_tasks.required,
+        report.fresh_clone_rebuild_tasks.observed,
+        report.fresh_clone_rebuild_tasks.required,
+        report.installer_upgrade_tasks.observed,
+        report.installer_upgrade_tasks.required,
+    );
+    println!(
+        "Completed normal/high-risk tasks meeting closure gates: {}/{}",
+        report.completed_expanded_tasks_meeting_gates, report.completed_expanded_tasks
+    );
+    for gap in &report.gaps {
+        println!("  gap: {gap}");
+    }
 }
 
 fn print_audit_category(label: &str, findings: &[crate::domain::AuditFinding]) {
@@ -3546,6 +3639,20 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(matrix_help.contains("--numeric"));
+
+        let audit_help = command
+            .find_subcommand_mut("audit")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(audit_help.contains("--strict"));
+        assert!(audit_help.contains("--json"));
+    }
+
+    #[test]
+    fn audit_json_mode_is_detected_for_structured_errors() {
+        let cli = Cli::try_parse_from(["harness-cli", "audit", "--strict", "--json"]).unwrap();
+        assert!(cli.requests_json());
     }
 
     #[test]

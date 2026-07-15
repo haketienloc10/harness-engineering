@@ -1970,7 +1970,7 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
 - Final lifecycle evidence: `TASK-000018` and `TASK-000019` are completed;
   high-risk `TASK-000020` completed with context `4/4`, two approvals, detailed
   trace `#27`, fresh proof and committed capsule. `TASK-000021` owns context
-  `5/5`, scoped approval, terminal structured proofs, detailed trace `#28` and
+  `5/5`, scoped approval, terminal structured proofs, detailed trace `#29` and
   capsule
   `docs/tasks/2026/07/TASK-000021-fully-closed-clp-001-with-clean.md`.
 - Backlog: recovered legacy `#4` maps to canonical successor `#2`, now

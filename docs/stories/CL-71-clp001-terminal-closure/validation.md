@@ -138,7 +138,7 @@ trace before status/evidence changes.
   `implemented` from current story-linked evidence.
 - CLI-rendered capsule:
   `docs/tasks/2026/07/TASK-000021-fully-closed-clp-001-with-clean.md`.
-- Detailed terminal trace: `#28`, rooted in `TASK-000021` intake and selected
+- Detailed terminal trace: `#29`, rooted in `TASK-000021` intake and selected
   by `task finish`.
 - Rollback: restore
   `harness.db.backups/harness.db.1784104246235156032.v11.main.a5af5ab9060c.bak`

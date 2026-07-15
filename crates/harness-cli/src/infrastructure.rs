@@ -27,8 +27,8 @@ use crate::domain::{
     score_trace, task_transition_allowed, validate_tool_description, AuditFinding, AuditResult,
     BacklogFilter, BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord,
     FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord, RiskLane,
-    StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus, ToolArgSpec,
-    ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
+    StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus,
+    StructuredErrorResult, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -99,8 +99,8 @@ pub enum HarnessInfraError {
     TaskHandoffSameSession,
     #[error("task story link: role must be primary or secondary")]
     InvalidTaskStoryRole,
-    #[error("task finish gate failed: {0}")]
-    TaskFinishGate(String),
+    #[error("{0}")]
+    TaskFinishGate(StructuredErrorResult),
     #[error("task context: path '{0}' is not in the task's stored context manifest")]
     TaskContextPathNotRequired(String),
     #[error("task context: task '{0}' has an invalid stored context manifest")]
@@ -142,6 +142,17 @@ pub enum HarnessInfraError {
     Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+fn task_finish_gate(
+    code: &str,
+    message: impl Into<String>,
+    remediation: &[&str],
+) -> HarnessInfraError {
+    HarnessInfraError::TaskFinishGate(
+        StructuredErrorResult::new(code, message, remediation.iter().copied())
+            .with_detail("gate", code),
+    )
 }
 
 /// Outcome of one `tool check` scan. The CLI reports these facts; the agent
@@ -704,8 +715,10 @@ fn validate_task_capsule(
             .any(|component| matches!(component, std::path::Component::ParentDir))
         || !relative_path.starts_with("docs/tasks/")
     {
-        return Err(HarnessInfraError::TaskFinishGate(
-            "capsule path must be a safe docs/tasks repository-relative path".to_owned(),
+        return Err(task_finish_gate(
+            "TASK_CAPSULE_PATH_INVALID",
+            "capsule path must be a safe docs/tasks repository-relative path",
+            &["Render a capsule under docs/tasks/ and retry task finish with that relative path."],
         ));
     }
     let content = fs::read_to_string(repo_root.join(path))?;
@@ -713,7 +726,11 @@ fn validate_task_capsule(
         .strip_prefix("---\n")
         .and_then(|rest| rest.split_once("\n---\n"))
         .ok_or_else(|| {
-            HarnessInfraError::TaskFinishGate("capsule frontmatter is invalid".to_owned())
+            task_finish_gate(
+                "TASK_CAPSULE_INVALID",
+                "capsule frontmatter is invalid",
+                &["Re-render the capsule with memory capsule render, then retry task finish."],
+            )
         })?;
     let fields = frontmatter
         .lines()
@@ -724,15 +741,21 @@ fn validate_task_capsule(
         .get("content_checksum")
         .and_then(|value| value.strip_prefix("sha256:"))
         .ok_or_else(|| {
-            HarnessInfraError::TaskFinishGate("capsule checksum is missing".to_owned())
+            task_finish_gate(
+                "TASK_CAPSULE_INVALID",
+                "capsule checksum is missing",
+                &["Re-render the capsule so content_checksum is populated, then retry task finish."],
+            )
         })?;
     let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
     if fields.get("schema") != Some(&"harness/task-capsule/v1")
         || fields.get("task_id") != Some(&task_id)
         || checksum != actual
     {
-        return Err(HarnessInfraError::TaskFinishGate(
-            "capsule schema, task id, or checksum is invalid".to_owned(),
+        return Err(task_finish_gate(
+            "TASK_CAPSULE_INVALID",
+            "capsule schema, task id, or checksum is invalid",
+            &["Re-render the capsule for this task and retry task finish."],
         ));
     }
     Ok(ValidatedCapsule {
@@ -760,7 +783,11 @@ fn stage_task_capsule(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
-            HarnessInfraError::TaskFinishGate("capsule path has no valid file name".to_owned())
+            task_finish_gate(
+                "TASK_CAPSULE_PATH_INVALID",
+                "capsule path has no valid file name",
+                &["Choose a valid docs/tasks/<year>/<month>/<file>.md capsule path."],
+            )
         })?;
     let staged_path =
         final_path.with_file_name(format!(".{file_name}.closing-{task_id}-{nonce}.tmp"));
@@ -770,7 +797,11 @@ fn stage_task_capsule(
     let staged_relative = staged_path
         .strip_prefix(repo_root)
         .map_err(|_| {
-            HarnessInfraError::TaskFinishGate("staged capsule escaped repository".to_owned())
+            task_finish_gate(
+                "TASK_CAPSULE_STAGE_INVALID",
+                "staged capsule escaped repository",
+                &["Keep the task capsule and staging path inside the repository."],
+            )
         })?
         .to_string_lossy()
         .into_owned();
@@ -1615,7 +1646,11 @@ impl HarnessRepository for SqliteHarnessRepository {
                     match capsule_path
                         .as_deref()
                         .ok_or_else(|| {
-                            HarnessInfraError::TaskFinishGate("missing capsule path".to_owned())
+                            task_finish_gate(
+                                "TASK_CAPSULE_MISSING",
+                                "missing capsule path",
+                                &["Recover or re-render the required capsule before continuing."],
+                            )
                         })
                         .and_then(|path| validate_task_capsule(&self.repo_root, path, &task_id))
                     {
@@ -2452,8 +2487,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Err(HarnessInfraError::UnsafeDurableState(report.code));
         }
         if input.friction != "none" {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "unresolved friction requires a structured disposition".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_FRICTION_UNRESOLVED",
+                "unresolved friction requires a structured disposition",
+                &["Record or resolve the friction, then retry task finish with --friction none."],
             ));
         }
         let friction_connection = self.open_existing()?;
@@ -2465,8 +2502,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             |row| row.get(0),
         )?;
         if unresolved_friction > 0 {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "linked material friction requires a terminal observation outcome".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_FRICTION_UNRESOLVED",
+                "linked material friction requires a terminal observation outcome",
+                &["Run friction resolve with a terminal status and actual outcome, then retry task finish."],
             ));
         }
         let refresh = self.refresh_task(TaskRefreshInput {
@@ -2474,8 +2513,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             accept: false,
         })?;
         if refresh.changed {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "context manifest changed; run task refresh --accept first".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_CONTEXT_STALE",
+                "context manifest changed",
+                &["Run task refresh --id <task> --accept, acknowledge the refreshed context, and rerun proof."],
             ));
         }
         let connection = self.open_existing()?;
@@ -2510,8 +2551,10 @@ impl HarnessRepository for SqliteHarnessRepository {
         )?;
         if status == "completed" {
             if stored_capsule_path.as_deref() != input.capsule_path.as_deref() {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "completed task capsule does not match the requested finish".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_CLOSURE_MISMATCH",
+                    "completed task capsule does not match the requested finish",
+                    &["Retry with the capsule path stored on the completed task, or inspect task status before recovery."],
                 ));
             }
             let nonce = match input.capsule_path.as_deref() {
@@ -2522,8 +2565,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 None => closure_nonce(&input.id, None),
             };
             if stored_closure_nonce.as_deref() != Some(&nonce) {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "completed task closure nonce does not match the requested finish".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_CLOSURE_MISMATCH",
+                    "completed task closure nonce does not match the requested finish",
+                    &["Inspect the completed task and capsule checksum; do not overwrite terminal closure metadata."],
                 ));
             }
             return Ok(TaskFinishRecord {
@@ -2547,28 +2592,36 @@ impl HarnessRepository for SqliteHarnessRepository {
                 |row| row.get(0),
             )?;
             if approvals == 0 {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "high-risk task requires an approval record".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_APPROVAL_REQUIRED",
+                    "high-risk task requires an approval record",
+                    &["Run task approve with the required human/reviewer evidence, then retry task finish."],
                 ));
             }
         }
         let capsule = match (capsule_required, input.capsule_path.as_deref()) {
             (0, None) => None,
             (0, Some(_)) => {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "non-material tiny task must not attach a capsule".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_CAPSULE_NOT_ALLOWED",
+                    "non-material tiny task must not attach a capsule",
+                    &["Remove --capsule and retry task finish for this non-material tiny task."],
                 ))
             }
             (_, Some(path)) => Some(validate_task_capsule(&self.repo_root, path, &input.id)?),
             (_, None) => {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "capsule is required for this task".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_CAPSULE_REQUIRED",
+                    "capsule is required for this task",
+                    &["Run memory capsule render for this task and retry task finish with --capsule <path>."],
                 ))
             }
         };
         if lane != "tiny" && capsule.is_none() {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "capsule is required for this task".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_CAPSULE_REQUIRED",
+                "capsule is required for this task",
+                &["Run memory capsule render for this task and retry task finish with --capsule <path>."],
             ));
         }
         if behavior_bearing != 0 {
@@ -2578,8 +2631,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 |row| row.get(0),
             )?;
             if stories == 0 {
-                return Err(HarnessInfraError::TaskFinishGate(
-                    "behavior-bearing task has no story link".to_owned(),
+                return Err(task_finish_gate(
+                    "TASK_STORY_REQUIRED",
+                    "behavior-bearing task has no story link",
+                    &["Run task link-story for the canonical story, then rerun proof and task finish."],
                 ));
             }
         }
@@ -2591,8 +2646,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             |row| row.get(0),
         )?;
         if acknowledged < manifest.must_read.len() as i64 {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "required context paths are not all acknowledged".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_CONTEXT_UNMET",
+                "required context paths are not all acknowledged",
+                &["Read each must-read path and run task context acknowledge for every required entry."],
             ));
         }
         let latest: Option<LatestProofSource> = connection
@@ -2631,13 +2688,20 @@ impl HarnessRepository for SqliteHarnessRepository {
             artifact_path,
             artifact_hash,
             proof_summary,
-        ) = latest
-            .ok_or_else(|| HarnessInfraError::TaskFinishGate("no proof run recorded".to_owned()))?;
+        ) = latest.ok_or_else(|| {
+            task_finish_gate(
+                "TASK_PROOF_MISSING",
+                "no proof run recorded",
+                &["Run proof run for the required layer, then retry task finish."],
+            )
+        })?;
         if proof_state != "pass"
             || proof_head.as_deref() != self.git_output(&["rev-parse", "HEAD"]).ok().as_deref()
         {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "latest proof is failing or stale at HEAD".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_PROOF_STALE",
+                "latest proof is failing or stale at HEAD",
+                &["Run the required proof again at the current HEAD and retry task finish."],
             ));
         }
         if proof_branch.as_deref()
@@ -2646,8 +2710,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 .ok()
                 .as_deref()
         {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "latest proof is missing branch provenance or is stale on this branch".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_PROOF_STALE",
+                "latest proof is missing branch provenance or is stale on this branch",
+                &["Run the required proof again on the current branch and retry task finish."],
             ));
         }
         let proof_dirty = proof_dirty.or_else(|| {
@@ -2657,8 +2723,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 .map(|summary| summary.dirty_fingerprint)
         });
         if proof_dirty.as_deref() != Some(self.dirty_worktree_fingerprint()?.as_str()) {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "latest proof has a stale dirty-worktree fingerprint".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_PROOF_STALE",
+                "latest proof has a stale dirty-worktree fingerprint",
+                &["Run the required proof again after the final worktree changes."],
             ));
         }
         if !proof_file_fresh(
@@ -2670,8 +2738,10 @@ impl HarnessRepository for SqliteHarnessRepository {
             stderr_path.as_deref(),
             stderr_hash.as_deref(),
         ) {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "latest proof output provenance is missing or stale".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_PROOF_OUTPUT_STALE",
+                "latest proof output provenance is missing or stale",
+                &["Rerun proof run to regenerate verified stdout/stderr evidence."],
             ));
         }
         if artifact_path.is_some()
@@ -2681,8 +2751,10 @@ impl HarnessRepository for SqliteHarnessRepository {
                 artifact_hash.as_deref(),
             )
         {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "latest proof artifact is missing or stale".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_PROOF_ARTIFACT_STALE",
+                "latest proof artifact is missing or stale",
+                &["Restore the proof artifact or rerun proof run with the current artifact."],
             ));
         }
         let trace_intake: Option<i64> = connection
@@ -2693,13 +2765,17 @@ impl HarnessRepository for SqliteHarnessRepository {
             )
             .optional()?;
         if trace_intake != Some(intake_id) {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "final trace is missing or belongs to another intake".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_TRACE_MISSING",
+                "final trace is missing or belongs to another intake",
+                &["Record a final trace for this task intake and retry with its numeric trace id."],
             ));
         }
         if !self.score_trace(Some(input.trace_id))?.meets_requirement {
-            return Err(HarnessInfraError::TaskFinishGate(
-                "final trace does not meet the task lane tier".to_owned(),
+            return Err(task_finish_gate(
+                "TASK_TRACE_INSUFFICIENT",
+                "final trace does not meet the task lane tier",
+                &["Complete the trace fields required by this lane, then retry task finish."],
             ));
         }
         let nonce = closure_nonce(
@@ -5064,6 +5140,540 @@ mod tests {
         (temp_dir, repository)
     }
 
+    fn acknowledge_all_context(repository: &SqliteHarnessRepository, id: &str) {
+        let manifest_json: String = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT context_manifest_json FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let manifest: WorkflowContextManifest = serde_json::from_str(&manifest_json).unwrap();
+        for entry in manifest.must_read {
+            repository
+                .acknowledge_task_context(TaskContextAcknowledgeInput {
+                    id: id.to_owned(),
+                    path: entry.path,
+                    actor: Some("phase4-matrix".to_owned()),
+                })
+                .unwrap();
+        }
+    }
+
+    fn record_finish_trace(
+        repository: &SqliteHarnessRepository,
+        id: &str,
+        story_id: Option<&str>,
+        detailed: bool,
+    ) -> i64 {
+        let intake_id: i64 = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT intake_id FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        repository
+            .record_trace(TraceInput {
+                task_summary: format!("Phase 4 matrix {id}"),
+                intake_id: Some(intake_id),
+                story_id: story_id.map(str::to_owned),
+                agent: detailed.then(|| "codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: detailed.then_some(1),
+                token_estimate: detailed.then_some(1),
+                friction: Some("none".to_owned()),
+                notes: detailed.then(|| "phase 4 matrix trace".to_owned()),
+                actions: CsvList::from_optional(detailed.then(|| "verified".to_owned())),
+                files_read: CsvList::from_optional(detailed.then(|| "docs/stories/".to_owned())),
+                files_changed: CsvList::from_optional(
+                    detailed.then(|| "docs/tasks/phase4.md".to_owned()),
+                ),
+                decisions: CsvList::from_optional(detailed.then(|| "none".to_owned())),
+                errors: CsvList::from_optional(detailed.then(|| "none".to_owned())),
+            })
+            .unwrap()
+    }
+
+    fn start_tiny_finish_fixture(
+        repository: &SqliteHarnessRepository,
+        acknowledge: bool,
+        proof: Option<&str>,
+    ) -> TaskFinishInput {
+        repository.init().unwrap();
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Phase 4 tiny failure fixture".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("phase4-tiny".to_owned()),
+                lease_seconds: None,
+                story_id: None,
+                behavior_bearing: false,
+                risk_flags: Vec::new(),
+            })
+            .unwrap();
+        if acknowledge {
+            acknowledge_all_context(repository, &id);
+        }
+        if let Some(proof) = proof {
+            let (executable, argv) = if proof == "fail" {
+                ("sh", vec!["-c".to_owned(), "exit 9".to_owned()])
+            } else {
+                ("git", vec!["--version".to_owned()])
+            };
+            repository
+                .run_proof(ProofRunInput {
+                    task_id: id.clone(),
+                    story_id: None,
+                    layer: "quick".to_owned(),
+                    executable: executable.to_owned(),
+                    argv,
+                    artifact_path: None,
+                })
+                .unwrap();
+        }
+        let trace_id = record_finish_trace(repository, &id, None, false);
+        TaskFinishInput {
+            id,
+            owner: Some("codex".to_owned()),
+            session_id: Some("phase4-tiny".to_owned()),
+            trace_id,
+            friction: "none".to_owned(),
+            capsule_path: None,
+        }
+    }
+
+    fn write_finish_capsule(repository: &SqliteHarnessRepository, id: &str) -> String {
+        let path = format!("docs/tasks/2099/01/{id}-phase4.md");
+        let full_path = repository.repo_root.join(&path);
+        fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+        let body = "# Outcome\n\nPhase 4 matrix fixture.\n";
+        let checksum = format!("{:x}", Sha256::digest(body.as_bytes()));
+        fs::write(
+            full_path,
+            format!(
+                "---\nschema: harness/task-capsule/v1\ntask_id: {id}\ndate: 2099-01-01\nlane: normal\noutcome: completed\ncontent_checksum: sha256:{checksum}\n---\n{body}"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    fn start_normal_finish_fixture(
+        repository: &SqliteHarnessRepository,
+        complete_trace: bool,
+    ) -> TaskFinishInput {
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-PHASE4".to_owned(),
+                title: "Phase 4 matrix fixture".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Phase 4 normal failure fixture".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("phase4-normal".to_owned()),
+                lease_seconds: None,
+                story_id: Some("CL-PHASE4".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+            })
+            .unwrap();
+        acknowledge_all_context(repository, &id);
+        let capsule_path = write_finish_capsule(repository, &id);
+        repository
+            .run_proof(ProofRunInput {
+                task_id: id.clone(),
+                story_id: Some("CL-PHASE4".to_owned()),
+                layer: "integration".to_owned(),
+                executable: "git".to_owned(),
+                argv: vec!["--version".to_owned()],
+                artifact_path: None,
+            })
+            .unwrap();
+        let trace_id = record_finish_trace(repository, &id, Some("CL-PHASE4"), complete_trace);
+        TaskFinishInput {
+            id,
+            owner: Some("codex".to_owned()),
+            session_id: Some("phase4-normal".to_owned()),
+            trace_id,
+            friction: "none".to_owned(),
+            capsule_path: Some(capsule_path),
+        }
+    }
+
+    fn task_closure_snapshot(repository: &SqliteHarnessRepository, id: &str) -> Option<String> {
+        repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT printf('%s|%s|%s|%s|%s|%s|%s|%s', status,
+                    coalesce(outcome,''), coalesce(closed_at,''), updated_at,
+                    coalesce(capsule_path,''), coalesce(capsule_checksum,''),
+                    coalesce(capsule_omission_reason,''), coalesce(closure_nonce,''))
+                 FROM task WHERE id=?1;",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap()
+    }
+
+    fn task_capsule_snapshot(repository: &SqliteHarnessRepository) -> Vec<(String, String)> {
+        fn visit(root: &Path, current: &Path, files: &mut Vec<(String, String)>) {
+            let Ok(entries) = fs::read_dir(current) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    visit(root, &path, files);
+                } else if path.is_file() {
+                    files.push((
+                        path.strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                        sha256_file(&path).unwrap(),
+                    ));
+                }
+            }
+        }
+        let root = repository.repo_root.join("docs/tasks");
+        let mut files = Vec::new();
+        visit(&root, &root, &mut files);
+        files.sort();
+        files
+    }
+
+    fn phase4_missing_task(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        repository.init().unwrap();
+        TaskFinishInput {
+            id: "TASK-999999".to_owned(),
+            owner: Some("codex".to_owned()),
+            session_id: Some("phase4-missing".to_owned()),
+            trace_id: 999_999,
+            friction: "none".to_owned(),
+            capsule_path: None,
+        }
+    }
+
+    fn phase4_friction_argument(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let mut input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        input.friction = "backlog".to_owned();
+        input
+    }
+
+    fn phase4_linked_friction(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "INSERT INTO friction (task_id, fingerprint, category, severity, summary, disposition, status)
+                 VALUES (?1, 'phase4-open-friction', 'workflow', 'high', 'open fixture', 'backlog', 'proposed');",
+                params![input.id],
+            )
+            .unwrap();
+        input
+    }
+
+    fn phase4_unmet_context(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        start_tiny_finish_fixture(repository, false, None)
+    }
+
+    fn phase4_missing_proof(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        start_tiny_finish_fixture(repository, true, None)
+    }
+
+    fn phase4_failing_proof(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        start_tiny_finish_fixture(repository, true, Some("fail"))
+    }
+
+    fn phase4_stale_proof(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE proof_run SET head_commit='stale-head' WHERE task_id=?1;",
+                params![input.id],
+            )
+            .unwrap();
+        input
+    }
+
+    fn phase4_stale_output(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        let stdout_path: String = repository
+            .open_existing()
+            .unwrap()
+            .query_row(
+                "SELECT stdout_path FROM proof_run WHERE task_id=?1 ORDER BY id DESC LIMIT 1;",
+                params![input.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        fs::remove_file(repository.repo_root.join(stdout_path)).unwrap();
+        input
+    }
+
+    fn phase4_missing_trace(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let mut input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        input.trace_id = 999_999;
+        input
+    }
+
+    fn phase4_capsule_required(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let mut input = start_normal_finish_fixture(repository, true);
+        input.capsule_path = None;
+        input
+    }
+
+    fn phase4_missing_story(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let input = start_normal_finish_fixture(repository, true);
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "DELETE FROM task_story WHERE task_id=?1;",
+                params![input.id],
+            )
+            .unwrap();
+        input
+    }
+
+    fn phase4_insufficient_trace(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        start_normal_finish_fixture(repository, false)
+    }
+
+    fn phase4_missing_approval(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-PHASE4-HIGH".to_owned(),
+                title: "Phase 4 high risk fixture".to_owned(),
+                risk_lane: RiskLane::HighRisk,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Phase 4 approval fixture".to_owned(),
+                risk_lane: None,
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("phase4-high".to_owned()),
+                lease_seconds: None,
+                story_id: Some("CL-PHASE4-HIGH".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["auth".to_owned()],
+            })
+            .unwrap();
+        TaskFinishInput {
+            id,
+            owner: Some("codex".to_owned()),
+            session_id: Some("phase4-high".to_owned()),
+            trace_id: 999_999,
+            friction: "none".to_owned(),
+            capsule_path: None,
+        }
+    }
+
+    fn phase4_docs_db_mismatch(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        let staged = repository
+            .repo_root
+            .join("docs/tasks/2099/01/.TASK-phase4.closing-TASK-phase4-orphan.tmp");
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(staged, "orphaned closure fixture").unwrap();
+        input
+    }
+
+    fn phase4_owner_conflict(repository: &SqliteHarnessRepository) -> TaskFinishInput {
+        let mut input = start_tiny_finish_fixture(repository, true, Some("pass"));
+        input.owner = Some("reviewer".to_owned());
+        input
+    }
+
+    fn phase4_error_code(error: &HarnessInfraError) -> String {
+        match error {
+            HarnessInfraError::TaskFinishGate(result) => result.code.clone(),
+            HarnessInfraError::TaskNotFound(_) => "TASK_NOT_FOUND".to_owned(),
+            HarnessInfraError::TaskOwnerMismatch { .. } => "TASK_OWNERSHIP_CONFLICT".to_owned(),
+            HarnessInfraError::UnsafeDurableState(code) => code.clone(),
+            other => panic!("unexpected Phase 4 error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn phase4_failure_matrix_is_structured_and_preflight_is_non_mutating() {
+        struct Case {
+            name: &'static str,
+            setup: fn(&SqliteHarnessRepository) -> TaskFinishInput,
+            expected_code: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "missing task root",
+                setup: phase4_missing_task,
+                expected_code: "TASK_NOT_FOUND",
+            },
+            Case {
+                name: "explicit unresolved friction",
+                setup: phase4_friction_argument,
+                expected_code: "TASK_FRICTION_UNRESOLVED",
+            },
+            Case {
+                name: "linked unresolved friction",
+                setup: phase4_linked_friction,
+                expected_code: "TASK_FRICTION_UNRESOLVED",
+            },
+            Case {
+                name: "missing approval",
+                setup: phase4_missing_approval,
+                expected_code: "TASK_APPROVAL_REQUIRED",
+            },
+            Case {
+                name: "missing capsule",
+                setup: phase4_capsule_required,
+                expected_code: "TASK_CAPSULE_REQUIRED",
+            },
+            Case {
+                name: "missing story",
+                setup: phase4_missing_story,
+                expected_code: "TASK_STORY_REQUIRED",
+            },
+            Case {
+                name: "unmet context",
+                setup: phase4_unmet_context,
+                expected_code: "TASK_CONTEXT_UNMET",
+            },
+            Case {
+                name: "missing proof",
+                setup: phase4_missing_proof,
+                expected_code: "TASK_PROOF_MISSING",
+            },
+            Case {
+                name: "failing proof",
+                setup: phase4_failing_proof,
+                expected_code: "TASK_PROOF_STALE",
+            },
+            Case {
+                name: "stale proof",
+                setup: phase4_stale_proof,
+                expected_code: "TASK_PROOF_STALE",
+            },
+            Case {
+                name: "stale proof output",
+                setup: phase4_stale_output,
+                expected_code: "TASK_PROOF_OUTPUT_STALE",
+            },
+            Case {
+                name: "missing trace",
+                setup: phase4_missing_trace,
+                expected_code: "TASK_TRACE_MISSING",
+            },
+            Case {
+                name: "insufficient trace tier",
+                setup: phase4_insufficient_trace,
+                expected_code: "TASK_TRACE_INSUFFICIENT",
+            },
+            Case {
+                name: "docs DB recovery mismatch",
+                setup: phase4_docs_db_mismatch,
+                expected_code: "DB_UNHEALTHY",
+            },
+            Case {
+                name: "owner conflict",
+                setup: phase4_owner_conflict,
+                expected_code: "TASK_OWNERSHIP_CONFLICT",
+            },
+        ];
+
+        for case in cases {
+            let (_temp_dir, repository) = doctor_repository();
+            let input = (case.setup)(&repository);
+            let task_id = input.id.clone();
+            let before_task = task_closure_snapshot(&repository, &input.id);
+            let before_capsules = task_capsule_snapshot(&repository);
+
+            let error = repository.finish_task(input).unwrap_err();
+
+            assert_eq!(
+                phase4_error_code(&error),
+                case.expected_code,
+                "{}",
+                case.name
+            );
+            if let HarnessInfraError::TaskFinishGate(result) = &error {
+                assert!(!result.remediation.is_empty(), "{}", case.name);
+                assert_eq!(
+                    result.details.get("gate"),
+                    Some(&result.code),
+                    "{}",
+                    case.name
+                );
+            }
+            assert_eq!(
+                task_closure_snapshot(&repository, &task_id),
+                before_task,
+                "{} changed task closure state",
+                case.name
+            );
+            assert_eq!(
+                task_capsule_snapshot(&repository),
+                before_capsules,
+                "{} changed capsule files",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn phase4_capsule_stage_failure_does_not_mutate_task_or_capsule() {
+        let (_temp_dir, repository) = doctor_repository();
+        let input = start_normal_finish_fixture(&repository, true);
+        let task_id = input.id.clone();
+        let capsule_path = input.capsule_path.as_deref().unwrap();
+        let capsule =
+            validate_task_capsule(&repository.repo_root, capsule_path, &input.id).unwrap();
+        let nonce = closure_nonce(&input.id, Some(&capsule.checksum));
+        let final_path = repository.repo_root.join(capsule_path);
+        let file_name = final_path.file_name().unwrap().to_str().unwrap();
+        let staged_path =
+            final_path.with_file_name(format!(".{file_name}.closing-{}-{nonce}.tmp", input.id));
+        fs::create_dir(&staged_path).unwrap();
+        let before_task = task_closure_snapshot(&repository, &input.id);
+        let before_capsules = task_capsule_snapshot(&repository);
+
+        let error = repository.finish_task(input).unwrap_err();
+
+        assert!(matches!(error, HarnessInfraError::Io(_)));
+        assert_eq!(task_closure_snapshot(&repository, &task_id), before_task);
+        assert_eq!(task_capsule_snapshot(&repository), before_capsules);
+        assert!(staged_path.is_dir());
+    }
+
     fn table_columns(connection: &Connection, table: &str) -> Vec<String> {
         let mut statement = connection
             .prepare(&format!("PRAGMA table_info({table});"))
@@ -5883,6 +6493,8 @@ mod tests {
                 errors: CsvList::from_optional(None),
             })
             .unwrap();
+        let before_failed_finish_task = task_closure_snapshot(&repository, &id);
+        let before_failed_finish_capsules = task_capsule_snapshot(&repository);
         repository
             .open_existing()
             .unwrap()
@@ -5903,6 +6515,14 @@ mod tests {
         });
         assert!(failed_finish.is_err());
         assert_eq!(repository.task_status(&id).unwrap().status, "in_progress");
+        assert_eq!(
+            task_closure_snapshot(&repository, &id),
+            before_failed_finish_task
+        );
+        assert_eq!(
+            task_capsule_snapshot(&repository),
+            before_failed_finish_capsules
+        );
         assert!(capsule_full_path.exists());
         repository
             .open_existing()

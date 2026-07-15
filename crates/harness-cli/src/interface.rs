@@ -21,7 +21,8 @@ use crate::domain::{
     validate_responsibility, validate_tool_kind, BacklogFilter, BacklogRecord, BoolFlag,
     ContextScoreResult, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
     InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
-    ToolEntry, TraceQualityTier, TraceRecord, TraceScoreResult, RISK_LANE_HELP,
+    StructuredErrorResult, ToolEntry, TraceQualityTier, TraceRecord, TraceScoreResult,
+    RISK_LANE_HELP,
 };
 use crate::infrastructure::ToolCheckResult;
 
@@ -942,6 +943,117 @@ pub enum InterfaceError {
     EmptySql,
     #[error("workflow parity: {0}")]
     WorkflowParity(String),
+}
+
+impl Cli {
+    pub fn requests_json(&self) -> bool {
+        matches!(
+            &self.command,
+            Command::Task(TaskArgs {
+                action: TaskAction::Finish(args),
+            }) if args.json
+        )
+    }
+}
+
+impl InterfaceError {
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::UnsafeDurableState(
+                _,
+            )) => 3,
+            Self::Infrastructure(
+                crate::infrastructure::HarnessInfraError::BackupFailed(_)
+                | crate::infrastructure::HarnessInfraError::Sqlite(_),
+            ) => 4,
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskFinishGate(_)) => 5,
+            Self::Infrastructure(
+                crate::infrastructure::HarnessInfraError::TaskIdentityPairRequired
+                | crate::infrastructure::HarnessInfraError::InvalidTaskLeaseDuration,
+            ) => 2,
+            Self::Infrastructure(
+                crate::infrastructure::HarnessInfraError::TaskOwnerConflict { .. }
+                | crate::infrastructure::HarnessInfraError::TaskOwnerMismatch { .. }
+                | crate::infrastructure::HarnessInfraError::TaskOwnerRequired(_)
+                | crate::infrastructure::HarnessInfraError::TaskSessionRequired(_)
+                | crate::infrastructure::HarnessInfraError::TaskSessionMismatch { .. }
+                | crate::infrastructure::HarnessInfraError::TaskLeaseExpired
+                | crate::infrastructure::HarnessInfraError::TaskLeaseConflict { .. }
+                | crate::infrastructure::HarnessInfraError::TaskHandoffSameOwner
+                | crate::infrastructure::HarnessInfraError::TaskHandoffSameSession,
+            ) => 8,
+            _ => 1,
+        }
+    }
+
+    pub fn structured_result(&self) -> StructuredErrorResult {
+        match self {
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskFinishGate(
+                result,
+            )) => result.clone(),
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskNotFound(id)) => {
+                StructuredErrorResult::new(
+                    "TASK_NOT_FOUND",
+                    self.to_string(),
+                    ["Use task status with the canonical task id before retrying."],
+                )
+                .with_detail("task_id", id)
+            }
+            Self::Infrastructure(
+                crate::infrastructure::HarnessInfraError::TaskOwnerConflict { .. }
+                | crate::infrastructure::HarnessInfraError::TaskOwnerMismatch { .. }
+                | crate::infrastructure::HarnessInfraError::TaskOwnerRequired(_)
+                | crate::infrastructure::HarnessInfraError::TaskSessionRequired(_)
+                | crate::infrastructure::HarnessInfraError::TaskSessionMismatch { .. }
+                | crate::infrastructure::HarnessInfraError::TaskLeaseExpired
+                | crate::infrastructure::HarnessInfraError::TaskLeaseConflict { .. },
+            ) => StructuredErrorResult::new(
+                "TASK_OWNERSHIP_CONFLICT",
+                self.to_string(),
+                ["Use the matching owner/session, or record an explicit task handoff before retrying."],
+            ),
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::UnsafeDurableState(
+                code,
+            )) => StructuredErrorResult::new(
+                code,
+                self.to_string(),
+                ["Run doctor --json and follow its remediation before retrying the lifecycle command."],
+            ),
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::Sqlite(_)) => {
+                StructuredErrorResult::new(
+                    "DATABASE_OPERATION_FAILED",
+                    self.to_string(),
+                    ["Preserve the database and capsule, run doctor --json, then retry only after the durable state is healthy."],
+                )
+            }
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::Io(_)) => {
+                StructuredErrorResult::new(
+                    "FILESYSTEM_OPERATION_FAILED",
+                    self.to_string(),
+                    ["Preserve the task capsule, correct the filesystem path or permissions, and retry task finish."],
+                )
+            }
+            _ => StructuredErrorResult::new("CLI_ERROR", self.to_string(), Vec::<String>::new()),
+        }
+    }
+}
+
+pub fn render_error(result: &StructuredErrorResult, json: bool) {
+    if json {
+        eprintln!(
+            "{}",
+            serde_json::to_string(result).expect("structured error result serializes")
+        );
+        return;
+    }
+    eprintln!("error: {}", result.code);
+    eprintln!("{}", result.message);
+    for (key, value) in &result.details {
+        eprintln!("{key}: {value}");
+    }
+    for remediation in &result.remediation {
+        eprintln!("remediation: {remediation}");
+    }
 }
 
 pub fn run(cli: Cli) -> Result<(), InterfaceError> {
@@ -3314,6 +3426,28 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn task_finish_gate_has_shared_structured_result_and_exit_five() {
+        let expected = StructuredErrorResult::new(
+            "TASK_PROOF_MISSING",
+            "no proof run recorded",
+            ["Run proof run before retrying task finish."],
+        )
+        .with_detail("gate", "TASK_PROOF_MISSING");
+        let error = InterfaceError::Infrastructure(
+            crate::infrastructure::HarnessInfraError::TaskFinishGate(expected.clone()),
+        );
+
+        assert_eq!(error.exit_code(), 5);
+        assert_eq!(error.structured_result(), expected);
+        let json = serde_json::to_value(error.structured_result()).unwrap();
+        assert_eq!(json["ok"], false);
+        assert_eq!(json["code"], "TASK_PROOF_MISSING");
+        assert!(json["remediation"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
     }
 
     #[test]

@@ -1,7 +1,49 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Serialize;
 use thiserror::Error;
+
+/// Stable error payload rendered by every CLI presentation mode.
+///
+/// Keeping this result below the interface layer prevents human and JSON
+/// output from growing separate gate/remediation rules.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StructuredErrorResult {
+    pub ok: bool,
+    pub code: String,
+    pub message: String,
+    pub details: BTreeMap<String, String>,
+    pub remediation: Vec<String>,
+}
+
+impl StructuredErrorResult {
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        remediation: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            ok: false,
+            code: code.into(),
+            message: message.into(),
+            details: BTreeMap::new(),
+            remediation: remediation.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn with_detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.details.insert(key.into(), value.into());
+        self
+    }
+}
+
+impl fmt::Display for StructuredErrorResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseHarnessValueError {

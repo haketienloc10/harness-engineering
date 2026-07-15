@@ -19,6 +19,12 @@ High-risk tasks require a recorded approval before preflight proceeds. A
 completed task returns success only when the requested capsule disposition
 matches its stored terminal record; mismatches fail closed.
 
+Every completion gate returns one `StructuredErrorResult` containing stable
+`ok`, `code`, `message`, `details` and `remediation` fields. Human and JSON
+presentations render that same result. `TaskFinishGate` exits with code `5`;
+ownership, durable-state and database failures retain their distinct exit-code
+classes.
+
 `doctor` reads terminal task records: a required capsule with missing, unsafe
 or invalid file/checksum, a non-capsule terminal task without an omission
 reason, or a leftover staged closure file makes durable state unhealthy.

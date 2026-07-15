@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use rusqlite::{params, Connection};
@@ -18,7 +19,7 @@ use crate::application::{
     ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
-    normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
+    normalize_capability, normalize_token, parse_optional_integer, parse_tool_args, proof_display,
     validate_responsibility, validate_tool_kind, AuditDispositionRecord, BacklogFilter,
     BacklogRecord, BoolFlag, ContextScoreResult, CsvList, DecisionRecord, FrictionRecord,
     HarnessStats, ImprovementProposal, InputType, IntakeRecord, InterventionRecord, RiskLane,
@@ -425,7 +426,7 @@ struct TaskStartArgs {
     story: Option<String>,
     #[arg(long)]
     flags: Option<String>,
-    #[arg(long, value_name = "yes|no")]
+    #[arg(long, value_name = "auto|yes|no", default_value = "auto")]
     behavior_bearing: String,
     #[arg(long)]
     json: bool,
@@ -540,7 +541,7 @@ struct TaskFinishArgs {
     #[arg(long)]
     session: Option<String>,
     #[arg(long)]
-    trace: String,
+    trace: Option<String>,
     #[arg(long)]
     outcome: String,
     #[arg(long)]
@@ -1011,6 +1012,8 @@ pub enum InterfaceError {
     EmptySql,
     #[error("workflow parity: {0}")]
     WorkflowParity(String),
+    #[error("{0}")]
+    Usage(String),
 }
 
 impl Cli {
@@ -1047,10 +1050,24 @@ impl InterfaceError {
                 crate::infrastructure::HarnessInfraError::BackupFailed(_)
                 | crate::infrastructure::HarnessInfraError::Sqlite(_),
             ) => 4,
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskFinishGate(
+                result,
+            )) if result.code == "TASK_APPROVAL_REQUIRED" => 9,
             Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskFinishGate(_)) => 5,
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskNotFound(_)) => 5,
             Self::Infrastructure(
                 crate::infrastructure::HarnessInfraError::TaskIdentityPairRequired
                 | crate::infrastructure::HarnessInfraError::InvalidTaskLeaseDuration,
+            ) => 2,
+            Self::ParseHarnessValue(_)
+            | Self::ToolValidation(_)
+            | Self::Usage(_)
+            | Self::EmptySql
+            | Self::Infrastructure(
+                crate::infrastructure::HarnessInfraError::WorkflowInvalid(_)
+                | crate::infrastructure::HarnessInfraError::UnknownApprovalGate(_)
+                | crate::infrastructure::HarnessInfraError::TaskLaneOverrideReasonRequired
+                | crate::infrastructure::HarnessInfraError::TaskLaneOverrideCannotLower { .. },
             ) => 2,
             Self::Infrastructure(
                 crate::infrastructure::HarnessInfraError::TaskOwnerConflict { .. }
@@ -1063,7 +1080,8 @@ impl InterfaceError {
                 | crate::infrastructure::HarnessInfraError::TaskHandoffSameOwner
                 | crate::infrastructure::HarnessInfraError::TaskHandoffSameSession,
             ) => 8,
-            _ => 1,
+            Self::WorkflowParity(_) => 6,
+            _ => 10,
         }
     }
 
@@ -1114,9 +1132,27 @@ impl InterfaceError {
                     ["Preserve the task capsule, correct the filesystem path or permissions, and retry task finish."],
                 )
             }
-            _ => StructuredErrorResult::new("CLI_ERROR", self.to_string(), Vec::<String>::new()),
+            Self::ParseHarnessValue(_) | Self::Usage(_) => StructuredErrorResult::new(
+                "CLI_USAGE_ERROR",
+                self.to_string(),
+                ["Correct the documented argument value and retry the same command."],
+            ),
+            _ => StructuredErrorResult::new(
+                "CLI_ERROR",
+                self.to_string(),
+                ["Inspect the command context and retry after correcting the reported failure."],
+            ),
         }
     }
+}
+
+pub fn usage_error_result(error: &clap::Error) -> StructuredErrorResult {
+    StructuredErrorResult::new(
+        "CLI_USAGE_ERROR",
+        error.to_string().trim().to_owned(),
+        ["Run the same command with --help, correct the arguments, and retry."],
+    )
+    .with_detail("kind", format!("{:?}", error.kind()))
 }
 
 pub fn render_error(result: &StructuredErrorResult, json: bool) {
@@ -1350,76 +1386,79 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
         }
         Command::Task(args) => match args.action {
             TaskAction::Start(args) => {
+                let input_type = InputType::from_str(&args.input_type)?;
+                let risk_flags = args
+                    .flags
+                    .as_deref()
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|item| !item.is_empty())
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let behavior = classify_behavior_bearing(
+                    &args.behavior_bearing,
+                    &input_type,
+                    &risk_flags,
+                    args.story.as_deref(),
+                )?;
+                let (owner, session, ownership_reason) =
+                    resolve_start_identity(args.owner, args.session)?;
+                let policy = service.workflow_policy()?;
+                let (recommended_lane, policy_gates) = policy.classify(&risk_flags);
+                let mut lane_reasons = if risk_flags.is_empty() {
+                    vec!["policy-default:no-risk-flags".to_owned()]
+                } else {
+                    risk_flags
+                        .iter()
+                        .map(|flag| format!("explicit-flag:{}", normalize_token(flag)))
+                        .collect::<Vec<_>>()
+                };
+                if let Some(requested) = args.lane.as_deref() {
+                    if normalize_token(requested) != normalize_token(&recommended_lane) {
+                        lane_reasons.push(format!(
+                            "approved-override:{}",
+                            args.lane_reason.as_deref().unwrap_or("<missing>")
+                        ));
+                    }
+                }
                 let id = service.start_task(TaskStartInput {
-                    input_type: InputType::from_str(&args.input_type)?,
+                    input_type,
                     summary: args.summary,
                     risk_lane: args.lane.as_deref().map(RiskLane::from_str).transpose()?,
                     lane_override_reason: args.lane_reason,
-                    owner: args.owner,
-                    session_id: args.session,
+                    owner: Some(owner.clone()),
+                    session_id: Some(session.clone()),
                     lease_seconds: args.lease_seconds,
-                    story_id: args.story,
-                    behavior_bearing: parse_behavior_bearing(&args.behavior_bearing)?,
-                    risk_flags: args
-                        .flags
-                        .as_deref()
-                        .map(|value| {
-                            value
-                                .split(',')
-                                .map(|item| item.trim().to_owned())
-                                .filter(|item| !item.is_empty())
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                    story_id: args.story.clone(),
+                    behavior_bearing: behavior.value,
+                    risk_flags: risk_flags.clone(),
                 })?;
                 let task = service.task_status(&id)?;
+                let contract = task_start_contract_json(
+                    &task,
+                    &policy,
+                    &behavior,
+                    &lane_reasons,
+                    &policy_gates,
+                    &ownership_reason,
+                );
                 if args.json {
-                    println!(
-                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\",\"owner\":{},\"session_id\":{},\"lease_expires_at\":{},\"lease_state\":\"{}\"}}",
-                        json_escape(&id),
-                        json_escape(&task.status),
-                        json_optional(task.owner.as_deref()),
-                        json_optional(task.session_id.as_deref()),
-                        json_optional(task.lease_expires_at.as_deref()),
-                        json_escape(&task.lease_state),
-                    );
+                    println!("{}", serde_json::to_string(&contract).expect("task start contract serializes"));
                 } else {
-                    println!(
-                        "Task {id} started ({}); session={}, lease={}.",
-                        task.status,
-                        task.session_id.as_deref().unwrap_or("<none>"),
-                        task.lease_expires_at.as_deref().unwrap_or("<none>")
-                    );
+                    print_task_start_contract_human(&task, &contract);
                 }
             }
             TaskAction::Status { id, json } => {
                 let task = service.task_status(&id)?;
+                let contract = task_status_contract_json(&service, &task)?;
                 if json {
-                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"session_id\":{},\"worktree\":\"{}\",\"lease_expires_at\":{},\"lease_state\":\"{}\",\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"branch_fresh\":{},\"dirty_fresh\":{},\"output_fresh\":{},\"artifact_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.session_id.as_deref()), json_escape(&task.worktree), json_optional(task.lease_expires_at.as_deref()), json_escape(&task.lease_state), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_branch_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_output_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_artifact_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
+                    println!("{}", serde_json::to_string(&contract).expect("task status contract serializes"));
                 } else {
-                    println!(
-                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nsession: {}\nworktree: {}\nlease: {} ({})\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, branch-fresh={}, dirty-fresh={}, output-fresh={}, artifact-fresh={}",
-                        task.id,
-                        task.status,
-                        task.risk_lane,
-                        task.owner.as_deref().unwrap_or("<none>"),
-                        task.session_id.as_deref().unwrap_or("<none>"),
-                        task.worktree,
-                        task.lease_expires_at.as_deref().unwrap_or("<none>"),
-                        task.lease_state,
-                        task.story_id.as_deref().unwrap_or("<none>"),
-                        task.allowed_next.join(", "),
-                        task.context_acknowledged,
-                        task.context_required,
-                        task.approvals,
-                        task.proof_runs,
-                        task.latest_proof_state.as_deref().unwrap_or("<none>"),
-                        task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
-                        task.latest_proof_branch_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
-                        task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
-                        task.latest_proof_output_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<unknown>".to_owned()),
-                        task.latest_proof_artifact_fresh.map(|value| value.to_string()).unwrap_or_else(|| "<not-scoped>".to_owned()),
-                    );
+                    print_task_status_contract_human(&contract);
                 }
             }
             TaskAction::Block(args) => {
@@ -1493,11 +1532,11 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         "task finish currently accepts only --outcome completed".to_owned(),
                     ));
                 }
-                let trace_id = args.trace.parse::<i64>().map_err(|_| {
-                    InterfaceError::WorkflowParity(
+                let trace_id = args.trace.map(|value| value.parse::<i64>().map_err(|_| {
+                    InterfaceError::Usage(
                         "task finish: --trace must be a numeric trace id".to_owned(),
                     )
-                })?;
+                })).transpose()?;
                 let finished = service.finish_task(TaskFinishInput {
                     id: args.id,
                     owner: args.owner,
@@ -1508,9 +1547,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 })?;
                 if args.json {
                     println!(
-                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\"}}",
+                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\",\"trace_id\":{}}}",
                         json_escape(&finished.id),
-                        json_escape(&finished.status)
+                        json_escape(&finished.status),
+                        finished.trace_id,
                     );
                 } else {
                     println!("Task {} completed.", finished.id);
@@ -1660,7 +1700,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         "memory rebuild --apply cannot be combined with --output".to_owned(),
                     ));
                 }
-                if apply {
+                let active_code = if apply {
                     let active_report = service.doctor()?;
                     if !rebuild_apply_state_allowed(&active_report.code, recover_foreign) {
                         return Err(InterfaceError::WorkflowParity(format!(
@@ -1668,7 +1708,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                             active_report.code
                         )));
                     }
-                }
+                    Some(active_report.code)
+                } else {
+                    None
+                };
                 let artifacts = artifact_check(&repo_root, None, None);
                 if !artifacts.errors.is_empty() {
                     print_artifact_check(artifacts, json);
@@ -1698,45 +1741,66 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 }
                 let temporary =
                     active_db_path.with_extension(format!("rebuild-{}.db", std::process::id()));
+                let _ = fs::remove_file(&temporary);
+                let preserve_operational = apply
+                    && active_db_path.exists()
+                    && active_code.as_deref() == Some("HEALTHY");
+                let backup_path = if apply && active_db_path.exists() {
+                    checkpoint_rebuild_database(&active_db_path)?;
+                    let backup_dir = active_db_path
+                        .parent()
+                        .unwrap_or(&repo_root)
+                        .join("harness.db.backups");
+                    fs::create_dir_all(&backup_dir).map_err(|error| {
+                        InterfaceError::WorkflowParity(format!(
+                            "cannot create rebuild backup directory: {error}"
+                        ))
+                    })?;
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos();
+                    let backup = backup_dir.join(format!("rebuild-{timestamp}.db"));
+                    fs::copy(&active_db_path, &backup).map_err(|error| {
+                        InterfaceError::WorkflowParity(format!("cannot back up active DB: {error}"))
+                    })?;
+                    if preserve_operational {
+                        fs::copy(&active_db_path, &temporary).map_err(|error| {
+                            InterfaceError::WorkflowParity(format!(
+                                "cannot create retained-state rebuild candidate: {error}"
+                            ))
+                        })?;
+                    }
+                    Some(backup)
+                } else {
+                    None
+                };
                 let rebuild = HarnessService::new(HarnessContext {
                     repo_root: repo_root.clone(),
                     db_path: temporary.clone(),
                     schema_dir: resolve_schema_dir(&repo_root),
                 });
-                let init = rebuild.init()?;
-                let projected_records =
-                    project_artifact_index(&temporary, &repo_root, &artifacts.checked)?;
+                rebuild.init()?;
+                let projected_records = project_artifact_index(
+                    &temporary,
+                    &artifacts.artifacts,
+                    preserve_operational,
+                )?;
                 let logical_digest = rebuild_logical_digest(&temporary)?;
+                let parity = rebuild_parity_report(&temporary, &artifacts.artifacts)?;
                 let report = rebuild.doctor()?;
-                if !report.ok {
+                let candidate_audit = rebuild.audit()?;
+                if !report.ok || parity["state"] != "pass" {
                     let _ = fs::remove_file(&temporary);
                     let _ = fs::remove_file(format!("{}-wal", temporary.display()));
                     let _ = fs::remove_file(format!("{}-shm", temporary.display()));
                     return Err(InterfaceError::WorkflowParity(format!(
-                        "memory rebuild candidate failed doctor with {}; active DB was not replaced",
-                        report.code
+                        "memory rebuild candidate failed validation: doctor={}, parity={}; active DB was not replaced",
+                        report.code, parity["state"]
                     )));
                 }
                 checkpoint_rebuild_database(&temporary)?;
                 let output_path = if apply {
-                    if active_db_path.exists() {
-                        checkpoint_rebuild_database(&active_db_path)?;
-                        let backup_dir = active_db_path
-                            .parent()
-                            .unwrap_or(&repo_root)
-                            .join("harness.db.backups");
-                        fs::create_dir_all(&backup_dir).map_err(|error| {
-                            InterfaceError::WorkflowParity(format!(
-                                "cannot create rebuild backup directory: {error}"
-                            ))
-                        })?;
-                        let backup = backup_dir.join(format!("rebuild-{}.db", std::process::id()));
-                        fs::copy(&active_db_path, &backup).map_err(|error| {
-                            InterfaceError::WorkflowParity(format!(
-                                "cannot back up active DB: {error}"
-                            ))
-                        })?;
-                    }
                     fs::rename(&temporary, &active_db_path).map_err(|error| {
                         InterfaceError::WorkflowParity(format!(
                             "cannot atomically replace active DB: {error}"
@@ -1761,9 +1825,29 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 let _ = fs::remove_file(format!("{}-wal", temporary.display()));
                 let _ = fs::remove_file(format!("{}-shm", temporary.display()));
                 if json {
-                    println!("{{\"ok\":{},\"mode\":\"{}\",\"artifacts_checked\":{},\"temp_schema_version\":{},\"doctor\":\"{}\",\"projected_records\":{},\"logical_digest\":\"{}\",\"output\":\"{}\"}}", report.ok, if apply { "apply" } else { "dry_run" }, artifacts.checked.len(), match init { InitResult::Created { .. } => 7, InitResult::Existing { version, .. } => version, InitResult::MigratedExisting { .. } => 7 }, json_escape(&report.code), projected_records, logical_digest, json_escape(&output_path));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "ok": true,
+                            "mode": if apply { "apply" } else { "dry_run" },
+                            "artifacts_checked": artifacts.checked.len(),
+                            "temp_schema_version": parity["schema_version"],
+                            "doctor": report.code,
+                            "candidate_audit": {
+                                "strict": candidate_audit.strict_passes(),
+                                "finding_count": candidate_audit.finding_count(),
+                                "unknown_coverage": candidate_audit.unknown_coverage,
+                            },
+                            "projected_records": projected_records,
+                            "logical_digest": logical_digest,
+                            "parity": parity,
+                            "preserved_operational_state": preserve_operational,
+                            "backup": backup_path.as_ref().map(|path| path.strip_prefix(&repo_root).unwrap_or(path).to_string_lossy().into_owned()),
+                            "output": output_path,
+                        })
+                    );
                 } else {
-                    println!("rebuild dry-run: {} artifacts validated; temporary database doctor={}; projected records={projected_records}; logical digest={logical_digest}", artifacts.checked.len(), report.code);
+                    println!("rebuild {}: {} artifacts validated; temporary database doctor={}; semantic parity=pass; projected records={projected_records}; logical digest={logical_digest}", if apply { "apply" } else { "dry-run" }, artifacts.checked.len(), report.code);
                 }
             }
             MemoryAction::Capsule(args) => match args.action {
@@ -1775,7 +1859,15 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     summary,
                     json,
                 } => {
-                    let path = render_capsule(&repo_root, &id, &date, &lane, &outcome, &summary)?;
+                    let path = render_capsule(
+                        &repo_root,
+                        &active_db_path,
+                        &id,
+                        &date,
+                        &lane,
+                        &outcome,
+                        &summary,
+                    )?;
                     if json {
                         println!("{{\"ok\":true,\"path\":\"{}\"}}", json_escape(&path));
                     } else {
@@ -2328,6 +2420,26 @@ fn print_audit(result: &crate::domain::AuditResult) {
         &result.friction_without_outcomes,
     );
     println!("Coverage checked: {}.", result.coverage.join(", "));
+    println!("Named coverage checks: {}", result.coverage_checks.len());
+    for check in &result.coverage_checks {
+        println!(
+            "  - {}@{}: {} (proof {:?}, freshness head={:?} branch={:?} dirty={:?} output={:?})",
+            check.check_id,
+            check.version,
+            check.state,
+            check.proof_run_id,
+            check.freshness.head,
+            check.freshness.branch,
+            check.freshness.dirty,
+            check.freshness.output,
+        );
+        if !check.measured_counts.is_empty() {
+            println!("    counts: {:?}", check.measured_counts);
+        }
+        for remediation in &check.remediation {
+            println!("    remediation: {remediation}");
+        }
+    }
     println!(
         "Coverage unknown: {}. Zero findings means no debt in checked coverage only.",
         if result.unknown_coverage.is_empty() {
@@ -2506,14 +2618,692 @@ fn parse_optional_bool(
         .map_err(InterfaceError::from)
 }
 
-fn parse_behavior_bearing(value: &str) -> Result<bool, InterfaceError> {
-    match value {
-        "yes" => Ok(true),
-        "no" => Ok(false),
-        _ => Err(InterfaceError::WorkflowParity(
-            "task start: --behavior-bearing must be yes or no; the CLI does not infer code impact from a summary"
+#[derive(Debug)]
+struct BehaviorBearingSelection {
+    mode: String,
+    value: bool,
+    reasons: Vec<String>,
+}
+
+fn classify_behavior_bearing(
+    value: &str,
+    input_type: &InputType,
+    risk_flags: &[String],
+    story_id: Option<&str>,
+) -> Result<BehaviorBearingSelection, InterfaceError> {
+    match normalize_token(value).as_str() {
+        "yes" => Ok(BehaviorBearingSelection {
+            mode: "explicit".to_owned(),
+            value: true,
+            reasons: vec!["explicit:yes".to_owned()],
+        }),
+        "no" => Ok(BehaviorBearingSelection {
+            mode: "explicit".to_owned(),
+            value: false,
+            reasons: vec!["explicit:no".to_owned()],
+        }),
+        "auto" => {
+            let normalized_flags = risk_flags
+                .iter()
+                .map(|flag| normalize_token(flag))
+                .collect::<Vec<_>>();
+            let explicitly_non_behavioral = normalized_flags.iter().any(|flag| {
+                matches!(
+                    flag.as_str(),
+                    "non_behavioral" | "read_only" | "docs_only" | "documentation_only"
+                )
+            });
+            let (behavior_bearing, mut reasons) = if story_id.is_some() {
+                (true, vec!["linked-story".to_owned()])
+            } else if explicitly_non_behavioral {
+                (
+                    false,
+                    normalized_flags
+                        .iter()
+                        .filter(|flag| {
+                            matches!(
+                                flag.as_str(),
+                                "non_behavioral"
+                                    | "read_only"
+                                    | "docs_only"
+                                    | "documentation_only"
+                            )
+                        })
+                        .map(|flag| format!("explicit-flag:{flag}"))
+                        .collect(),
+                )
+            } else {
+                let typed_behavior = !matches!(input_type, InputType::Maintenance);
+                (
+                    typed_behavior || !normalized_flags.is_empty(),
+                    vec![format!("typed-input:{}", input_type.as_db_value())],
+                )
+            };
+            if !normalized_flags.is_empty() && !explicitly_non_behavioral {
+                reasons.extend(
+                    normalized_flags
+                        .iter()
+                        .map(|flag| format!("explicit-flag:{flag}")),
+                );
+            }
+            Ok(BehaviorBearingSelection {
+                mode: "auto".to_owned(),
+                value: behavior_bearing,
+                reasons,
+            })
+        }
+        _ => Err(InterfaceError::Usage(
+            "task start: --behavior-bearing must be auto, yes, or no; auto uses typed intake, explicit flags, and linked story only"
                 .to_owned(),
         )),
+    }
+}
+
+fn resolve_start_identity(
+    owner: Option<String>,
+    session: Option<String>,
+) -> Result<(String, String, String), InterfaceError> {
+    match (owner, session) {
+        (Some(owner), Some(session)) => {
+            Ok((owner, session, "explicit-owner-session".to_owned()))
+        }
+        (None, None) => {
+            let key = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            Ok((
+                "harness-cli".to_owned(),
+                format!("auto-{key}-{}", std::process::id()),
+                "auto-assigned:harness-cli-ephemeral-session".to_owned(),
+            ))
+        }
+        _ => Err(InterfaceError::Usage(
+            "task start: --owner and --session must be supplied together, or both omitted for an explicit harness-cli auto-assignment"
+                .to_owned(),
+        )),
+    }
+}
+
+fn task_start_contract_json(
+    task: &crate::application::TaskStatusRecord,
+    policy: &crate::infrastructure::WorkflowPolicy,
+    behavior: &BehaviorBearingSelection,
+    lane_reasons: &[String],
+    policy_gates: &[String],
+    ownership_reason: &str,
+) -> serde_json::Value {
+    let lane_policy = match task.risk_lane.as_str() {
+        "high_risk" => &policy.lanes.high_risk,
+        "normal" => &policy.lanes.normal,
+        _ => &policy.lanes.tiny,
+    };
+    let story_required = lane_policy.story == "required"
+        || (lane_policy.story == "when_behavior_bearing" && behavior.value);
+    let normalized_flags = task
+        .risk_flags
+        .iter()
+        .map(|flag| normalize_token(flag))
+        .collect::<Vec<_>>();
+    let approval_gates = policy
+        .approvals
+        .required_for
+        .iter()
+        .filter(|gate| normalized_flags.contains(&normalize_token(gate)))
+        .cloned()
+        .collect::<Vec<_>>();
+    let decision_required = normalized_flags
+        .iter()
+        .any(|flag| matches!(flag.as_str(), "architecture_direction" | "source_hierarchy"));
+    let owner = task.owner.as_deref().unwrap_or("<missing>");
+    let session = task.session_id.as_deref().unwrap_or("<missing>");
+    let first_context = task
+        .context_manifest
+        .get("must_read")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|entries| entries.first())
+        .and_then(|entry| entry.get("path"))
+        .and_then(serde_json::Value::as_str);
+    let next_command = if story_required && task.story_id.is_none() {
+        format!(
+            "_harness/bin/harness-cli task link-story --id {} --story <STORY> --role primary --owner {} --session {} --json",
+            task.id, owner, session
+        )
+    } else if let Some(path) = first_context {
+        format!(
+            "_harness/bin/harness-cli task context acknowledge --id {} --read '{}' --actor {} --json",
+            task.id,
+            path.replace('\'', "'\\''"),
+            owner
+        )
+    } else {
+        format!(
+            "_harness/bin/harness-cli proof run --task {} --layer {} -- <COMMAND>",
+            task.id,
+            lane_policy
+                .proof
+                .first()
+                .map(String::as_str)
+                .unwrap_or("required")
+        )
+    };
+    let completion_gates = [
+        ("story", story_required, task.story_id.is_some()),
+        (
+            "context",
+            task.context_required > 0,
+            task.context_acknowledged >= task.context_required,
+        ),
+        ("approval", !approval_gates.is_empty(), approval_gates.is_empty()),
+        ("proof", true, false),
+        ("trace", true, false),
+        ("capsule", task.capsule_required, !task.capsule_required),
+        ("friction", true, true),
+    ]
+    .into_iter()
+    .map(|(gate, required, satisfied)| {
+        serde_json::json!({
+            "gate": gate,
+            "required": required,
+            "state": if !required { "not_applicable" } else if satisfied { "satisfied" } else { "unmet" },
+        })
+    })
+    .collect::<Vec<_>>();
+    serde_json::json!({
+        "ok": true,
+        "task_id": task.id,
+        "status": task.status,
+        "lane": task.risk_lane,
+        "lane_reasons": lane_reasons,
+        "behavior": {
+            "mode": behavior.mode,
+            "bearing": behavior.value,
+            "reasons": behavior.reasons,
+            "summary_inspected": false,
+        },
+        "ownership": {
+            "owner": task.owner,
+            "session": task.session_id,
+            "reason": ownership_reason,
+        },
+        "lease": {
+            "expires_at": task.lease_expires_at,
+            "state": task.lease_state,
+        },
+        "requirements": {
+            "story": {"required": story_required, "id": task.story_id},
+            "decision": {"required": decision_required, "ids": []},
+            "approval": {"required": !approval_gates.is_empty(), "gates": approval_gates},
+        },
+        "context": task.context_manifest,
+        "proof_gates": lane_policy.proof,
+        "completion_gates": completion_gates,
+        "policy_gates": policy_gates,
+        "relevant_tools": [],
+        "stop_condition": task.context_manifest.get("stop_condition"),
+        "next_command": next_command,
+    })
+}
+
+fn print_task_start_contract_human(
+    task: &crate::application::TaskStatusRecord,
+    contract: &serde_json::Value,
+) {
+    println!("task: {}", task.id);
+    println!("status: {}", task.status);
+    println!("lane: {}", task.risk_lane);
+    println!("lane reasons: {}", contract["lane_reasons"]);
+    println!("behavior: {}", contract["behavior"]);
+    println!("ownership: {}", contract["ownership"]);
+    println!("requirements: {}", contract["requirements"]);
+    println!("context: {}", contract["context"]);
+    println!("proof gates: {}", contract["proof_gates"]);
+    println!("completion gates: {}", contract["completion_gates"]);
+    println!("relevant tools: {}", contract["relevant_tools"]);
+    println!("stop condition: {}", contract["stop_condition"]);
+    println!(
+        "next: {}",
+        contract["next_command"].as_str().unwrap_or("<none>")
+    );
+}
+
+fn task_status_contract_json(
+    service: &HarnessService,
+    task: &crate::application::TaskStatusRecord,
+) -> Result<serde_json::Value, InterfaceError> {
+    let policy = service.workflow_policy()?;
+    let lane_policy = match task.risk_lane.as_str() {
+        "high_risk" => &policy.lanes.high_risk,
+        "normal" => &policy.lanes.normal,
+        _ => &policy.lanes.tiny,
+    };
+    let escaped_id = task.id.replace('\'', "''");
+    let stories = query_table_objects(service.query_sql(&format!(
+        "SELECT task_story.story_id AS id, task_story.role, story.status, story.title \
+         FROM task_story JOIN story ON story.id=task_story.story_id \
+         WHERE task_story.task_id='{escaped_id}' ORDER BY task_story.role, task_story.story_id"
+    ))?);
+    let approvals = query_table_objects(service.query_sql(&format!(
+        "SELECT gate, source, evidence, COALESCE(scope,'') AS scope, created_at \
+         FROM task_approval WHERE task_id='{escaped_id}' ORDER BY gate, created_at"
+    ))?);
+    let friction = query_table_objects(service.query_sql(&format!(
+        "SELECT fingerprint, category, severity, disposition, status, summary, \
+                COALESCE(actual_outcome,'') AS actual_outcome \
+         FROM friction WHERE task_id='{escaped_id}' ORDER BY id"
+    ))?);
+    let traces = query_table_objects(service.query_sql(&format!(
+        "SELECT trace.id, trace.outcome, COALESCE(trace.agent,''), trace.created_at \
+         FROM trace JOIN task ON task.intake_id=trace.intake_id \
+         WHERE task.id='{escaped_id}' ORDER BY trace.id"
+    ))?);
+    let proofs = service.query_proofs(&task.id)?;
+    let proof_layers = proofs
+        .iter()
+        .map(|proof| {
+            serde_json::json!({
+                "story_id": proof.story_id, "layer": proof.layer, "state": proof.state,
+                "executable": proof.executable,
+                "argv": proof.argv_json.as_deref().and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok()),
+                "exit_code": proof.exit_code, "head_commit": proof.head_commit,
+                "branch": proof.branch, "dirty_fingerprint": proof.dirty_fingerprint,
+                "cli_version": proof.cli_version, "platform": proof.platform,
+                "command_digest": proof.command_digest,
+                "stdout": {"path": proof.stdout_path, "hash": proof.stdout_hash},
+                "stderr": {"path": proof.stderr_path, "hash": proof.stderr_hash},
+                "artifact": {"path": proof.artifact_path, "hash": proof.artifact_hash},
+            })
+        })
+        .collect::<Vec<_>>();
+    let approval_gate_names = approvals
+        .iter()
+        .filter_map(|approval| approval.get("gate").and_then(serde_json::Value::as_str))
+        .map(normalize_token)
+        .collect::<Vec<_>>();
+    let normalized_flags = task
+        .risk_flags
+        .iter()
+        .map(|flag| normalize_token(flag))
+        .collect::<Vec<_>>();
+    let mut required_approvals = policy
+        .approvals
+        .required_for
+        .iter()
+        .filter(|gate| normalized_flags.contains(&normalize_token(gate)))
+        .cloned()
+        .collect::<Vec<_>>();
+    if task.risk_lane == "high_risk" && required_approvals.is_empty() {
+        required_approvals.push("risk-policy".to_owned());
+    }
+    let story_required = lane_policy.story == "required"
+        || (lane_policy.story == "when_behavior_bearing" && task.behavior_bearing);
+    let story_satisfied = !stories.is_empty();
+    let context_satisfied = task.context_acknowledged >= task.context_required;
+    let proof_freshness = serde_json::json!({
+        "head": task.latest_proof_head_fresh, "branch": task.latest_proof_branch_fresh,
+        "dirty": task.latest_proof_dirty_fresh, "output": task.latest_proof_output_fresh,
+        "artifact": task.latest_proof_artifact_fresh,
+    });
+    let proof_satisfied = task.latest_proof_state.as_deref() == Some("pass")
+        && task.latest_proof_head_fresh == Some(true)
+        && task.latest_proof_branch_fresh == Some(true)
+        && task.latest_proof_dirty_fresh == Some(true)
+        && task.latest_proof_output_fresh == Some(true)
+        && task.latest_proof_artifact_fresh != Some(false);
+    let approvals_satisfied = required_approvals
+        .iter()
+        .all(|gate| approval_gate_names.contains(&normalize_token(gate)));
+    let unresolved_friction = friction
+        .iter()
+        .filter(|item| {
+            item.get("disposition").and_then(serde_json::Value::as_str) != Some("not-friction")
+                && !matches!(
+                    item.get("status").and_then(serde_json::Value::as_str),
+                    Some("validated" | "ineffective" | "reverted")
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let friction_satisfied = unresolved_friction.is_empty();
+    let staged_capsules = staged_capsules_for_task(&task.worktree, &task.id);
+    let capsule_candidates = capsule_candidates_for_task(&task.worktree, &task.id);
+    let capsule_exists = task
+        .capsule_path
+        .as_deref()
+        .is_some_and(|path| std::path::Path::new(&task.worktree).join(path).is_file());
+    let effective_capsule_path = task
+        .capsule_path
+        .clone()
+        .or_else(|| capsule_candidates.first().cloned());
+    let capsule_state = if task.status == "completed" && capsule_exists {
+        "final"
+    } else if !staged_capsules.is_empty() {
+        "staged"
+    } else if !capsule_candidates.is_empty() {
+        "orphaned"
+    } else if task.capsule_required {
+        "missing"
+    } else {
+        "not_required"
+    };
+    let capsule_satisfied =
+        !task.capsule_required || capsule_exists || capsule_candidates.len() == 1;
+    let qualifying_trace_ids = traces
+        .iter()
+        .filter_map(|trace| trace.get("id").and_then(serde_json::Value::as_str))
+        .filter_map(|id| id.parse::<i64>().ok())
+        .filter(|id| {
+            service
+                .score_trace(Some(*id))
+                .is_ok_and(|score| score.meets_requirement)
+        })
+        .collect::<Vec<_>>();
+    let trace_satisfied = qualifying_trace_ids.len() == 1;
+
+    let owner = task.owner.as_deref().unwrap_or("<OWNER>");
+    let session = task.session_id.as_deref().unwrap_or("<SESSION>");
+    let mut remediation = Vec::new();
+    let mut gates = Vec::new();
+    let mut add_gate = |name: &str, required: bool, satisfied: bool, commands: Vec<String>| {
+        if required && !satisfied {
+            remediation.extend(commands.iter().cloned());
+        }
+        gates.push(serde_json::json!({
+                "gate": name, "required": required,
+                "state": if !required { "not_applicable" } else if satisfied { "satisfied" } else { "unmet" },
+                "remediation": if required && !satisfied { commands } else { Vec::<String>::new() },
+            }));
+    };
+    add_gate(
+        "story",
+        story_required,
+        story_satisfied,
+        vec![format!(
+            "_harness/bin/harness-cli task link-story --id {} --story <STORY> --role primary --owner {} --session {} --json",
+            task.id, owner, session
+        )],
+    );
+    let context_commands = task
+        .context_manifest
+        .get("must_read")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("path").and_then(serde_json::Value::as_str))
+        .filter(|path| !task.context_acknowledged_paths.iter().any(|read| read == path))
+        .map(|path| format!(
+            "_harness/bin/harness-cli task context acknowledge --id {} --read '{}' --actor {} --json",
+            task.id, path.replace('\'', "'\\''"), owner
+        ))
+        .collect::<Vec<_>>();
+    add_gate(
+        "context",
+        task.context_required > 0,
+        context_satisfied,
+        context_commands,
+    );
+    let approval_commands = required_approvals
+        .iter()
+        .filter(|gate| !approval_gate_names.contains(&normalize_token(gate)))
+        .map(|gate| format!(
+            "_harness/bin/harness-cli task approve --id {} --gate {} --source <SOURCE> --evidence <EVIDENCE> --scope <SCOPE> --json",
+            task.id, gate
+        ))
+        .collect::<Vec<_>>();
+    add_gate(
+        "approval",
+        !required_approvals.is_empty(),
+        approvals_satisfied,
+        approval_commands,
+    );
+    add_gate(
+        "proof",
+        true,
+        proof_satisfied,
+        lane_policy
+            .proof
+            .iter()
+            .map(|layer| {
+                format!(
+                    "_harness/bin/harness-cli proof run --task {} --layer {} -- <COMMAND>",
+                    task.id, layer
+                )
+            })
+            .collect(),
+    );
+    add_gate(
+        "friction",
+        true,
+        friction_satisfied,
+        unresolved_friction
+            .iter()
+            .filter_map(|item| item.get("fingerprint").and_then(serde_json::Value::as_str))
+            .map(|fingerprint| format!(
+                "_harness/bin/harness-cli friction resolve --fingerprint {} --status validated --actual-outcome <OUTCOME> --json",
+                fingerprint
+            ))
+            .collect(),
+    );
+    let trace_commands = if qualifying_trace_ids.is_empty() {
+        vec![format!(
+            "_harness/bin/harness-cli trace --summary '<SUMMARY>' --intake <INTAKE_ID> --story {} --agent {} --outcome completed --actions '<ACTIONS>' --read '<FILES>' --changed '<FILES>' --decisions '<DECISIONS>' --errors '<ERRORS>' --notes '<NOTES>'",
+            task.story_id.as_deref().unwrap_or("<STORY>"), owner
+        )]
+    } else {
+        vec![format!(
+            "_harness/bin/harness-cli task finish --id {} --owner {} --session {} --trace <ONE_OF:{}> --outcome completed --friction none{} --json",
+            task.id,
+            owner,
+            session,
+            qualifying_trace_ids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            effective_capsule_path
+                .as_deref()
+                .map(|path| format!(" --capsule {path}"))
+                .unwrap_or_default()
+        )]
+    };
+    add_gate("trace", true, trace_satisfied, trace_commands);
+    add_gate(
+        "capsule",
+        task.capsule_required,
+        capsule_satisfied,
+        vec![format!(
+            "_harness/bin/harness-cli memory capsule render --id {} --date \"$(date +%F)\" --lane {} --outcome completed --summary '<SUMMARY>' --json",
+            task.id, task.risk_lane.replace('_', "-")
+        )],
+    );
+    if task.status == "in_progress" && remediation.is_empty() {
+        remediation.push(format!(
+            "_harness/bin/harness-cli task finish --id {} --owner {} --session {} --outcome completed --friction none{} --json",
+            task.id,
+            owner,
+            session,
+            effective_capsule_path
+                .as_deref()
+                .map(|path| format!(" --capsule {path}"))
+                .unwrap_or_default()
+        ));
+    }
+    let mut context = task.context_manifest.clone();
+    if let Some(object) = context.as_object_mut() {
+        object.insert(
+            "required".to_owned(),
+            serde_json::json!(task.context_required),
+        );
+        object.insert(
+            "acknowledged".to_owned(),
+            serde_json::json!(task.context_acknowledged),
+        );
+        object.insert(
+            "acknowledged_paths".to_owned(),
+            serde_json::json!(task.context_acknowledged_paths),
+        );
+    }
+    Ok(serde_json::json!({
+        "ok": true, "task_id": task.id, "status": task.status, "lane": task.risk_lane,
+        "summary": task.summary, "input_type": task.input_type,
+        "behavior_bearing": task.behavior_bearing,
+        "ownership": {"owner": task.owner, "state": if task.owner.is_some() { "assigned" } else { "unowned" }},
+        "session": {"id": task.session_id}, "worktree": task.worktree,
+        "lease": {"expires_at": task.lease_expires_at, "state": task.lease_state},
+        "transitions": task.allowed_next,
+        "links": {
+            "stories": stories, "decisions": [], "approvals": approvals,
+            "backlog_items": [], "traces": traces,
+        },
+        "friction": {"all": friction, "unresolved": unresolved_friction},
+        "gates": gates,
+        "proof": {
+            "runs": task.proof_runs, "required_layers": lane_policy.proof,
+            "latest_state": task.latest_proof_state, "layers": proof_layers,
+            "freshness": proof_freshness,
+        },
+        "context": context,
+        "capsule": {
+            "required": task.capsule_required, "state": capsule_state,
+            "path": effective_capsule_path, "checksum": task.capsule_checksum,
+            "omission_reason": task.capsule_omission_reason,
+            "staged": staged_capsules, "candidates": capsule_candidates,
+            "orphaned": (task.capsule_path.is_some() && !capsule_exists)
+                || (task.capsule_path.is_none() && effective_capsule_path.is_some()),
+        },
+        "remediation": remediation,
+        "next_command": remediation.first(),
+    }))
+}
+
+fn query_table_objects(table: crate::application::QueryTable) -> Vec<serde_json::Value> {
+    table
+        .rows
+        .into_iter()
+        .map(|row| {
+            serde_json::Value::Object(
+                table
+                    .headers
+                    .iter()
+                    .cloned()
+                    .zip(row)
+                    .map(|(key, value)| (key, serde_json::Value::String(value)))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn staged_capsules_for_task(worktree: &str, task_id: &str) -> Vec<String> {
+    fn visit(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        task_id: &str,
+        out: &mut Vec<String>,
+    ) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                visit(root, &path, task_id, out);
+            } else if file_type.is_file()
+                && path.extension().is_some_and(|extension| extension == "tmp")
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(task_id))
+            {
+                out.push(
+                    path.strip_prefix(root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    let root = std::path::Path::new(worktree).join("docs/tasks");
+    let mut paths = Vec::new();
+    visit(&root, &root, task_id, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn capsule_candidates_for_task(worktree: &str, task_id: &str) -> Vec<String> {
+    fn visit(
+        root: &std::path::Path,
+        current: &std::path::Path,
+        task_id: &str,
+        out: &mut Vec<String>,
+    ) {
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                visit(root, &path, task_id, out);
+            } else if file_type.is_file()
+                && path.extension().is_some_and(|extension| extension == "md")
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(task_id))
+            {
+                out.push(
+                    path.strip_prefix(worktree_root(root))
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    fn worktree_root(tasks_root: &std::path::Path) -> &std::path::Path {
+        tasks_root
+            .parent()
+            .and_then(std::path::Path::parent)
+            .unwrap_or(tasks_root)
+    }
+    let root = std::path::Path::new(worktree).join("docs/tasks");
+    let mut paths = Vec::new();
+    visit(&root, &root, task_id, &mut paths);
+    paths.sort();
+    paths
+}
+
+fn print_task_status_contract_human(contract: &serde_json::Value) {
+    for key in [
+        "task_id",
+        "status",
+        "lane",
+        "summary",
+        "input_type",
+        "behavior_bearing",
+        "ownership",
+        "session",
+        "worktree",
+        "lease",
+        "transitions",
+        "links",
+        "friction",
+        "gates",
+        "proof",
+        "context",
+        "capsule",
+        "remediation",
+        "next_command",
+    ] {
+        println!(
+            "{key}: {}",
+            contract.get(key).unwrap_or(&serde_json::Value::Null)
+        );
     }
 }
 
@@ -2708,115 +3498,71 @@ struct ArtifactCheckResult {
     checked: Vec<String>,
     legacy: Vec<String>,
     errors: Vec<String>,
+    artifacts: Vec<ArtifactRecord>,
+}
+
+#[derive(Clone, Debug)]
+struct ArtifactRecord {
+    kind: String,
+    id: String,
+    path: String,
+    checksum: String,
+    schema: String,
+    status: String,
+    title: String,
+    lane: Option<String>,
+    content: String,
+    components: Vec<String>,
+    capsule: Option<CapsuleProjection>,
+}
+
+#[derive(Clone, Debug)]
+struct CapsuleProjection {
+    date: String,
+    summary: String,
+    story_ids_json: String,
+    trace_ids_json: String,
+    proof_summaries_json: String,
+    unknown_fields_json: String,
+    content_checksum: String,
 }
 
 fn project_artifact_index(
     database: &std::path::Path,
-    repo_root: &std::path::Path,
-    paths: &[String],
+    artifacts: &[ArtifactRecord],
+    preserve_operational: bool,
 ) -> Result<usize, InterfaceError> {
     let mut connection =
         Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
     let transaction = connection
         .transaction()
         .map_err(crate::infrastructure::HarnessInfraError::from)?;
-    for path in paths {
-        let content = fs::read_to_string(repo_root.join(path))
-            .map_err(crate::infrastructure::HarnessInfraError::from)?;
-        let artifact_type = if path.starts_with("docs/stories/") {
-            "story"
-        } else if path.starts_with("docs/decisions/") {
-            "decision"
-        } else {
-            "capsule"
-        };
-        let frontmatter = content
-            .strip_prefix("---\n")
-            .and_then(|rest| rest.split_once("\n---\n").map(|(head, _)| head));
-        let fields = frontmatter.map(|head| {
-            head.lines()
-                .filter_map(|line| line.split_once(':'))
-                .map(|(key, value)| (key.trim(), value.trim().trim_matches('"')))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        });
-        let id = fields
-            .as_ref()
-            .and_then(|fields| {
-                fields
-                    .get(if artifact_type == "capsule" {
-                        "task_id"
-                    } else {
-                        "id"
-                    })
-                    .copied()
-            })
-            .map(str::to_owned)
-            .or_else(|| {
-                content
-                    .lines()
-                    .find(|line| line.starts_with("# "))
-                    .and_then(|line| line.trim_start_matches("# ").split_whitespace().next())
-                    .map(str::to_owned)
-            })
-            .ok_or_else(|| {
-                InterfaceError::WorkflowParity(format!(
-                    "{path}: artifact id missing during projection"
-                ))
-            })?;
-        let status = fields
-            .as_ref()
-            .and_then(|fields| {
-                fields
-                    .get(if artifact_type == "capsule" {
-                        "outcome"
-                    } else {
-                        "status"
-                    })
-                    .copied()
-            })
-            .map(str::to_owned)
-            .or_else(|| {
-                content
-                    .lines()
-                    .find(|line| line.starts_with("Status:"))
-                    .and_then(|line| line.split_once(':'))
-                    .map(|(_, value)| value.trim().to_owned())
-            })
-            .unwrap_or_else(|| "legacy".to_owned());
-        let schema = fields
-            .as_ref()
-            .and_then(|fields| fields.get("schema").copied())
-            .unwrap_or("legacy");
-        let checksum = format!("{:x}", Sha256::digest(content.as_bytes()));
-        transaction.execute("INSERT INTO artifact_index(artifact_type, artifact_id, path, checksum, schema_version, status) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![artifact_type, id, path, checksum, schema, status]).map_err(crate::infrastructure::HarnessInfraError::from)?;
-        let title = content
-            .lines()
-            .find_map(|line| line.strip_prefix("# "))
-            .unwrap_or(&id)
-            .trim();
-        let section_value = |section: &str| {
-            content
-                .split(&format!("## {section}\n\n"))
-                .nth(1)
-                .and_then(|rest| rest.lines().next())
-                .or_else(|| {
-                    content
-                        .lines()
-                        .find_map(|line| line.strip_prefix(&format!("{section}:")))
-                })
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        };
-        match artifact_type {
+    transaction
+        .execute("DELETE FROM artifact_index;", [])
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    transaction
+        .execute("DELETE FROM portable_task_summary;", [])
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    for artifact in artifacts {
+        transaction.execute(
+            "INSERT INTO artifact_index(artifact_type, artifact_id, path, checksum, schema_version, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                artifact.kind,
+                artifact.id,
+                artifact.path,
+                artifact.checksum,
+                artifact.schema,
+                artifact.status
+            ],
+        ).map_err(crate::infrastructure::HarnessInfraError::from)?;
+        match artifact.kind.as_str() {
             "story" => {
-                let lane = fields
-                    .as_ref()
-                    .and_then(|fields| fields.get("lane").copied())
-                    .or_else(|| section_value("Lane"))
-                    .map(|lane| lane.replace('-', "_"))
-                    .filter(|lane| matches!(lane.as_str(), "tiny" | "normal" | "high_risk"))
+                let lane = artifact
+                    .lane
+                    .clone()
                     .unwrap_or_else(|| "high_risk".to_owned());
-                let story_status = match status.as_str() {
+                let story_status = match artifact.status.as_str() {
                     "completed" => "implemented",
                     "ready" => "planned",
                     value
@@ -2829,15 +3575,30 @@ fn project_artifact_index(
                     }
                     _ => "planned",
                 };
-                let evidence = content
+                let evidence = artifact
+                    .content
                     .split("## Evidence")
                     .nth(1)
                     .map(|body| body.split("\n## ").next().unwrap_or(body).trim())
                     .filter(|body| !body.is_empty());
-                transaction.execute("INSERT INTO story(id, title, risk_lane, status, evidence, notes) VALUES (?1, ?2, ?3, ?4, ?5, 'Rebuilt from canonical artifact by memory rebuild dry-run.')", params![id, title, lane, story_status, evidence]).map_err(crate::infrastructure::HarnessInfraError::from)?;
+                let sql = if preserve_operational {
+                    "INSERT INTO story(id, title, risk_lane, status, evidence, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'Refreshed from canonical artifact by memory rebuild apply.')
+                     ON CONFLICT(id) DO UPDATE SET title=excluded.title, risk_lane=excluded.risk_lane,
+                       status=excluded.status, evidence=excluded.evidence"
+                } else {
+                    "INSERT INTO story(id, title, risk_lane, status, evidence, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 'Rebuilt from canonical artifact by memory rebuild dry-run.')"
+                };
+                transaction
+                    .execute(
+                        sql,
+                        params![artifact.id, artifact.title, lane, story_status, evidence],
+                    )
+                    .map_err(crate::infrastructure::HarnessInfraError::from)?;
             }
             "decision" => {
-                let decision_status = match status.as_str() {
+                let decision_status = match artifact.status.as_str() {
                     value
                         if matches!(value, "proposed" | "accepted" | "superseded" | "rejected") =>
                     {
@@ -2845,16 +3606,171 @@ fn project_artifact_index(
                     }
                     _ => "proposed",
                 };
-                transaction.execute("INSERT INTO decision(id, title, status, doc_path, notes) VALUES (?1, ?2, ?3, ?4, 'Rebuilt from canonical artifact by memory rebuild dry-run.')", params![id, title, decision_status, path]).map_err(crate::infrastructure::HarnessInfraError::from)?;
+                let sql = if preserve_operational {
+                    "INSERT INTO decision(id, title, status, doc_path, notes)
+                     VALUES (?1, ?2, ?3, ?4, 'Refreshed from canonical artifact by memory rebuild apply.')
+                     ON CONFLICT(id) DO UPDATE SET title=excluded.title, status=excluded.status,
+                       doc_path=excluded.doc_path"
+                } else {
+                    "INSERT INTO decision(id, title, status, doc_path, notes)
+                     VALUES (?1, ?2, ?3, ?4, 'Rebuilt from canonical artifact by memory rebuild dry-run.')"
+                };
+                transaction
+                    .execute(
+                        sql,
+                        params![artifact.id, artifact.title, decision_status, artifact.path],
+                    )
+                    .map_err(crate::infrastructure::HarnessInfraError::from)?;
+            }
+            "capsule" => {
+                let capsule = artifact.capsule.as_ref().ok_or_else(|| {
+                    InterfaceError::WorkflowParity(format!(
+                        "{}: validated capsule projection is missing",
+                        artifact.path
+                    ))
+                })?;
+                transaction
+                    .execute(
+                        "INSERT INTO portable_task_summary(
+                        task_id, capsule_path, capsule_schema, task_date, risk_lane,
+                        outcome, summary, story_ids_json, trace_ids_json,
+                        proof_summaries_json, unknown_fields_json, content_checksum
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                        params![
+                            artifact.id,
+                            artifact.path,
+                            artifact.schema,
+                            capsule.date,
+                            artifact.lane.as_deref().unwrap_or("high_risk"),
+                            artifact.status,
+                            capsule.summary,
+                            capsule.story_ids_json,
+                            capsule.trace_ids_json,
+                            capsule.proof_summaries_json,
+                            capsule.unknown_fields_json,
+                            capsule.content_checksum,
+                        ],
+                    )
+                    .map_err(crate::infrastructure::HarnessInfraError::from)?;
             }
             _ => {}
         }
     }
-    let count = paths.len();
+    let count = artifacts.len();
     transaction
         .commit()
         .map_err(crate::infrastructure::HarnessInfraError::from)?;
     Ok(count)
+}
+
+fn candidate_schema_version(database: &std::path::Path) -> Result<i64, InterfaceError> {
+    let connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(crate::infrastructure::HarnessInfraError::from)
+        .map_err(InterfaceError::from)
+}
+
+fn rebuild_parity_report(
+    database: &std::path::Path,
+    artifacts: &[ArtifactRecord],
+) -> Result<serde_json::Value, InterfaceError> {
+    let connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let mut projected = std::collections::BTreeMap::new();
+    let mut statement = connection
+        .prepare(
+            "SELECT artifact_type, artifact_id, path, checksum, schema_version, status
+             FROM artifact_index ORDER BY artifact_type, artifact_id",
+        )
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    for row in rows {
+        let (kind, id, path, checksum, schema, status) =
+            row.map_err(crate::infrastructure::HarnessInfraError::from)?;
+        projected.insert((kind, id), (path, checksum, schema, status));
+    }
+    let mut mismatches = Vec::new();
+    for artifact in artifacts {
+        let key = (artifact.kind.clone(), artifact.id.clone());
+        let expected = (
+            artifact.path.clone(),
+            artifact.checksum.clone(),
+            artifact.schema.clone(),
+            artifact.status.clone(),
+        );
+        match projected.remove(&key) {
+            Some(actual) if actual == expected => {}
+            Some(actual) => mismatches.push(serde_json::json!({
+                "kind": artifact.kind, "id": artifact.id,
+                "expected": expected, "actual": actual
+            })),
+            None => mismatches.push(serde_json::json!({
+                "kind": artifact.kind, "id": artifact.id, "error": "missing projection"
+            })),
+        }
+    }
+    for ((kind, id), actual) in projected {
+        mismatches.push(serde_json::json!({
+            "kind": kind, "id": id, "actual": actual, "error": "unexpected projection"
+        }));
+    }
+    let source_counts = ["story", "decision", "capsule"]
+        .into_iter()
+        .map(|kind| {
+            (
+                kind,
+                artifacts
+                    .iter()
+                    .filter(|artifact| artifact.kind == kind)
+                    .count(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let portable_capsules: i64 = connection
+        .query_row("SELECT COUNT(*) FROM portable_task_summary", [], |row| {
+            row.get(0)
+        })
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    Ok(serde_json::json!({
+        "check_id": "semantic-memory-parity",
+        "version": 1,
+        "state": if mismatches.is_empty() && portable_capsules as usize == source_counts["capsule"] { "pass" } else { "fail" },
+        "schema_version": candidate_schema_version(database)?,
+        "source_counts": source_counts,
+        "projected_count": artifacts.len(),
+        "portable_task_summaries": portable_capsules,
+        "artifacts": artifacts.iter().map(|artifact| serde_json::json!({
+            "kind": artifact.kind,
+            "id": artifact.id,
+            "path": artifact.path,
+            "status": artifact.status,
+            "checksum": artifact.checksum,
+            "schema": artifact.schema,
+            "components": artifact.components,
+            "story_ids": artifact.capsule.as_ref().and_then(|capsule| serde_json::from_str::<serde_json::Value>(&capsule.story_ids_json).ok()),
+            "trace_ids": artifact.capsule.as_ref().and_then(|capsule| serde_json::from_str::<serde_json::Value>(&capsule.trace_ids_json).ok()),
+            "proof_summaries": artifact.capsule.as_ref().and_then(|capsule| serde_json::from_str::<serde_json::Value>(&capsule.proof_summaries_json).ok()),
+            "unknown_fields": artifact.capsule.as_ref().and_then(|capsule| serde_json::from_str::<serde_json::Value>(&capsule.unknown_fields_json).ok()),
+        })).collect::<Vec<_>>(),
+        "mismatches": mismatches,
+    }))
 }
 
 fn rebuild_logical_digest(database: &std::path::Path) -> Result<String, InterfaceError> {
@@ -2892,6 +3808,7 @@ fn checkpoint_rebuild_database(database: &std::path::Path) -> Result<(), Interfa
 
 fn render_capsule(
     repo_root: &std::path::Path,
+    database: &std::path::Path,
     id: &str,
     date: &str,
     lane: &str,
@@ -2915,6 +3832,72 @@ fn render_capsule(
     let redacted = redact_capsule_text(summary);
     let body = format!("# Outcome\n\n{}\n", redacted);
     let checksum = format!("{:x}", Sha256::digest(body.as_bytes()));
+    let connection =
+        Connection::open(database).map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let task_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM task WHERE id=?1)",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    if !task_exists {
+        return Err(InterfaceError::WorkflowParity(format!(
+            "cannot render portable capsule for unknown task {id}"
+        )));
+    }
+    let collect_strings = |sql: &str| -> Result<Vec<String>, InterfaceError> {
+        let mut statement = connection
+            .prepare(sql)
+            .map_err(crate::infrastructure::HarnessInfraError::from)?;
+        let rows = statement
+            .query_map(params![id], |row| row.get::<_, String>(0))
+            .map_err(crate::infrastructure::HarnessInfraError::from)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(crate::infrastructure::HarnessInfraError::from)
+            .map_err(InterfaceError::from)
+    };
+    let story_ids =
+        collect_strings("SELECT story_id FROM task_story WHERE task_id=?1 ORDER BY story_id")?;
+    let trace_ids = collect_strings(
+        "SELECT CAST(trace.id AS TEXT) FROM trace
+         JOIN task ON task.intake_id=trace.intake_id
+         WHERE task.id=?1 ORDER BY trace.id",
+    )?
+    .into_iter()
+    .filter_map(|value| value.parse::<i64>().ok())
+    .collect::<Vec<_>>();
+    let mut proof_statement = connection
+        .prepare(
+            "SELECT layer, state, head_commit, branch, dirty_fingerprint,
+                    stdout_hash, stderr_hash, artifact_path, artifact_hash
+             FROM proof_run WHERE task_id=?1 ORDER BY id",
+        )
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let proof_rows = proof_statement
+        .query_map(params![id], |row| {
+            Ok(serde_json::json!({
+                "layer": row.get::<_, String>(0)?,
+                "state": row.get::<_, String>(1)?,
+                "head_commit": row.get::<_, Option<String>>(2)?,
+                "branch": row.get::<_, Option<String>>(3)?,
+                "dirty_fingerprint": row.get::<_, Option<String>>(4)?,
+                "stdout_hash": row.get::<_, Option<String>>(5)?,
+                "stderr_hash": row.get::<_, Option<String>>(6)?,
+                "artifact_path": row.get::<_, Option<String>>(7)?,
+                "artifact_hash": row.get::<_, Option<String>>(8)?,
+            }))
+        })
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let proof_summaries = proof_rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(crate::infrastructure::HarnessInfraError::from)?;
+    let story_ids_json = serde_json::to_string(&story_ids)
+        .map_err(|error| InterfaceError::WorkflowParity(error.to_string()))?;
+    let trace_ids_json = serde_json::to_string(&trace_ids)
+        .map_err(|error| InterfaceError::WorkflowParity(error.to_string()))?;
+    let proof_summaries_json = serde_json::to_string(&proof_summaries)
+        .map_err(|error| InterfaceError::WorkflowParity(error.to_string()))?;
     let month = date.get(0..7).ok_or_else(|| {
         InterfaceError::WorkflowParity("capsule date must be YYYY-MM-DD".to_owned())
     })?;
@@ -2950,7 +3933,10 @@ fn render_capsule(
         )));
     }
     fs::create_dir_all(&directory).map_err(crate::infrastructure::HarnessInfraError::from)?;
-    let content = format!("---\nschema: harness/task-capsule/v1\ntask_id: {id}\ndate: {date}\nlane: {}\noutcome: {outcome}\ncontent_checksum: sha256:{checksum}\n---\n{body}", lane.replace('-', "_"));
+    let content = format!(
+        "---\nschema: harness/task-capsule/v2\ntask_id: {id}\ndate: {date}\nlane: {}\noutcome: {outcome}\nstory_ids: {story_ids_json}\ntrace_ids: {trace_ids_json}\nproof_summaries: {proof_summaries_json}\nunknown_fields: []\ncontent_checksum: sha256:{checksum}\n---\n{body}",
+        lane.replace('-', "_")
+    );
     let temporary = directory.join(format!(".{}-{}.tmp", id, std::process::id()));
     fs::write(&temporary, content).map_err(crate::infrastructure::HarnessInfraError::from)?;
     fs::rename(&temporary, &path).map_err(crate::infrastructure::HarnessInfraError::from)?;
@@ -2983,67 +3969,344 @@ fn redact_capsule_text(value: &str) -> String {
 }
 
 fn capsule_check(repo_root: &std::path::Path) -> Result<Vec<String>, InterfaceError> {
-    let root = repo_root.join("docs/tasks");
-    if !root.is_dir() {
-        return Ok(Vec::new());
+    Ok(artifact_check(repo_root, Some("capsule"), None).errors)
+}
+
+fn artifact_frontmatter(
+    content: &str,
+) -> Option<(std::collections::BTreeMap<String, String>, &str)> {
+    let (head, body) = content.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let fields = head
+        .lines()
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| {
+            (
+                key.trim().to_owned(),
+                value.trim().trim_matches('"').to_owned(),
+            )
+        })
+        .collect();
+    Some((fields, body))
+}
+
+fn markdown_heading(content: &str) -> Option<&str> {
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(str::trim)
+}
+
+fn markdown_status(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix("Status:").map(str::trim))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            content
+                .split("## Status")
+                .nth(1)
+                .and_then(|rest| rest.lines().map(str::trim).find(|line| !line.is_empty()))
+                .map(str::to_owned)
+        })
+}
+
+fn markdown_lane(content: &str) -> Option<String> {
+    content
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .trim_start_matches("- ")
+                .strip_prefix("Lane:")
+                .map(str::trim)
+        })
+        .filter(|value| !value.is_empty())
+        .map(|value| value.replace('-', "_"))
+}
+
+fn aggregate_artifact_checksum(
+    repo_root: &std::path::Path,
+    components: &[String],
+) -> Result<String, String> {
+    let mut entries = Vec::new();
+    for component in components {
+        let bytes =
+            fs::read(repo_root.join(component)).map_err(|error| format!("{component}: {error}"))?;
+        entries.push(format!(
+            "{component}\0{:x}",
+            Sha256::digest(bytes.as_slice())
+        ));
     }
-    let mut orphans = Vec::new();
-    fn visit(
-        root: &std::path::Path,
-        current: &std::path::Path,
-        output: &mut Vec<String>,
-    ) -> std::io::Result<()> {
-        for entry in fs::read_dir(current)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                visit(root, &path, output)?;
-            } else if path.extension().is_some_and(|extension| extension == "tmp") {
-                output.push(
-                    path.strip_prefix(root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .into_owned(),
-                );
-            } else if path.extension().is_some_and(|extension| extension == "md") {
-                let relative = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .into_owned();
-                let content = fs::read_to_string(&path)?;
-                let Some((frontmatter, body)) = content
-                    .strip_prefix("---\n")
-                    .and_then(|rest| rest.split_once("\n---\n"))
-                else {
-                    output.push(format!("invalid capsule {relative}: missing frontmatter"));
-                    continue;
-                };
-                let fields = frontmatter
-                    .lines()
-                    .filter_map(|line| line.split_once(':'))
-                    .map(|(key, value)| (key.trim(), value.trim()))
-                    .collect::<std::collections::BTreeMap<_, _>>();
-                let expected = fields
-                    .get("content_checksum")
-                    .and_then(|value| value.strip_prefix("sha256:"));
-                let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
-                if fields.get("schema") != Some(&"harness/task-capsule/v1")
-                    || !fields.contains_key("task_id")
-                    || !fields.contains_key("date")
-                    || !fields.contains_key("lane")
-                    || !fields.contains_key("outcome")
-                    || expected != Some(actual.as_str())
-                {
-                    output.push(format!(
-                        "invalid capsule {relative}: schema, required field, or checksum mismatch"
-                    ));
-                }
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(entries.join("\n").as_bytes())
+    ))
+}
+
+fn parse_artifact_record(
+    repo_root: &std::path::Path,
+    kind: &str,
+    path: String,
+    components: Vec<String>,
+    packet: bool,
+) -> Result<(ArtifactRecord, bool), String> {
+    let content =
+        fs::read_to_string(repo_root.join(&path)).map_err(|error| format!("{path}: {error}"))?;
+    let parsed = artifact_frontmatter(&content);
+    let fields = parsed.as_ref().map(|(fields, _)| fields);
+    let body = parsed.as_ref().map(|(_, body)| *body).unwrap_or(&content);
+    let id_key = if kind == "capsule" { "task_id" } else { "id" };
+    let id = fields
+        .and_then(|fields| fields.get(id_key).cloned())
+        .or_else(|| {
+            markdown_heading(&content)
+                .and_then(|heading| heading.split_whitespace().next())
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| format!("{path}: artifact id is missing"))?;
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." {
+        return Err(format!("{path}: unsafe or empty {kind} id"));
+    }
+    let status = fields
+        .and_then(|fields| {
+            fields
+                .get(if kind == "capsule" {
+                    "outcome"
+                } else {
+                    "status"
+                })
+                .cloned()
+        })
+        .or_else(|| markdown_status(&content))
+        .ok_or_else(|| format!("{path}: {kind} status is missing"))?;
+    let lane = fields
+        .and_then(|fields| fields.get("lane").cloned())
+        .or_else(|| markdown_lane(&content))
+        .map(|lane| lane.replace('-', "_"));
+    if lane
+        .as_deref()
+        .is_some_and(|lane| !matches!(lane, "tiny" | "normal" | "high_risk"))
+    {
+        return Err(format!("{path}: invalid {kind} lane"));
+    }
+    let heading = markdown_heading(&content).unwrap_or(&id);
+    let mut title = fields
+        .and_then(|fields| fields.get("title").cloned())
+        .unwrap_or_else(|| {
+            heading
+                .strip_prefix(&id)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .unwrap_or(heading)
+                .to_owned()
+        });
+    if packet && title.eq_ignore_ascii_case("overview") {
+        if let Some(packet_name) = std::path::Path::new(&path)
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix(&format!("{id}-")))
+        {
+            title = packet_name
+                .split('-')
+                .filter(|part| !part.is_empty())
+                .map(|part| {
+                    let mut characters = part.chars();
+                    characters
+                        .next()
+                        .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    let (schema, legacy) = if packet {
+        ("harness/story-packet/v1".to_owned(), parsed.is_none())
+    } else if let Some(fields) = fields {
+        let schema = fields.get("schema").cloned().unwrap_or_default();
+        let valid_schema = match kind {
+            "story" => schema == "harness/story/v1",
+            "decision" => schema == "harness/decision/v1",
+            "capsule" => matches!(
+                schema.as_str(),
+                "harness/task-capsule/v1" | "harness/task-capsule/v2"
+            ),
+            _ => false,
+        };
+        if !valid_schema {
+            return Err(format!("{path}: invalid {kind} schema {schema}"));
+        }
+        (schema, false)
+    } else {
+        if kind == "capsule" || markdown_heading(&content).is_none() {
+            return Err(format!(
+                "{path}: legacy {kind} requires valid frontmatter or a title and Status section"
+            ));
+        }
+        ("legacy".to_owned(), true)
+    };
+    if kind == "story" {
+        if fields.is_some() && lane.is_none() {
+            return Err(format!("{path}: story lane is missing"));
+        }
+        if fields.is_some() {
+            let references = content
+                .strip_prefix("---\n")
+                .and_then(|rest| rest.split_once("\n---\n").map(|(head, _)| head))
+                .into_iter()
+                .flat_map(str::lines)
+                .skip_while(|line| !line.starts_with("product_docs:"))
+                .skip(1)
+                .take_while(|line| line.trim_start().starts_with('-'))
+                .filter_map(|line| line.trim().strip_prefix('-'))
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            if references.iter().any(|reference| {
+                std::path::Path::new(reference).is_absolute()
+                    || reference.split('/').any(|part| part == "..")
+                    || !repo_root.join(reference).is_file()
+            }) {
+                return Err(format!("{path}: invalid story product reference"));
             }
         }
-        Ok(())
     }
-    visit(&root, &root, &mut orphans).map_err(crate::infrastructure::HarnessInfraError::from)?;
-    Ok(orphans)
+    let capsule = if kind == "capsule" {
+        let fields = fields.expect("capsules require frontmatter");
+        for required in ["task_id", "date", "lane", "outcome", "content_checksum"] {
+            if !fields.contains_key(required) {
+                return Err(format!(
+                    "{path}: capsule required field {required} is missing"
+                ));
+            }
+        }
+        let expected = fields["content_checksum"]
+            .strip_prefix("sha256:")
+            .ok_or_else(|| format!("{path}: capsule checksum prefix is invalid"))?;
+        let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
+        if expected != actual {
+            return Err(format!(
+                "{path}: capsule content checksum mismatch for {id}"
+            ));
+        }
+        let summary = body
+            .strip_prefix("# Outcome\n\n")
+            .unwrap_or(body)
+            .trim()
+            .to_owned();
+        let v2 = schema == "harness/task-capsule/v2";
+        let json_field = |key: &str, fallback: &str| -> Result<String, String> {
+            let value = fields.get(key).map(String::as_str).unwrap_or(fallback);
+            let parsed = serde_json::from_str::<serde_json::Value>(value)
+                .map_err(|error| format!("{path}: capsule {key} is invalid JSON: {error}"))?;
+            if !parsed.is_array() {
+                return Err(format!("{path}: capsule {key} must be a JSON array"));
+            }
+            Ok(value.to_owned())
+        };
+        let unknown = if v2 {
+            json_field("unknown_fields", "[]")?
+        } else {
+            serde_json::to_string(&["story_ids", "trace_ids", "proof_summaries"])
+                .map_err(|error| error.to_string())?
+        };
+        Some(CapsuleProjection {
+            date: fields["date"].clone(),
+            summary,
+            story_ids_json: if v2 {
+                json_field("story_ids", "[]")?
+            } else {
+                "[]".to_owned()
+            },
+            trace_ids_json: if v2 {
+                json_field("trace_ids", "[]")?
+            } else {
+                "[]".to_owned()
+            },
+            proof_summaries_json: if v2 {
+                json_field("proof_summaries", "[]")?
+            } else {
+                "[]".to_owned()
+            },
+            unknown_fields_json: unknown,
+            content_checksum: expected.to_owned(),
+        })
+    } else {
+        None
+    };
+    let checksum = if packet {
+        aggregate_artifact_checksum(repo_root, &components)?
+    } else {
+        format!("{:x}", Sha256::digest(content.as_bytes()))
+    };
+    Ok((
+        ArtifactRecord {
+            kind: kind.to_owned(),
+            id,
+            path,
+            checksum,
+            schema,
+            status,
+            title,
+            lane,
+            content,
+            components,
+            capsule,
+        },
+        legacy,
+    ))
+}
+
+fn safe_recursive_files(
+    repo_root: &std::path::Path,
+    root: &std::path::Path,
+    errors: &mut Vec<String>,
+) -> Vec<std::path::PathBuf> {
+    fn visit(
+        repo_root: &std::path::Path,
+        current: &std::path::Path,
+        files: &mut Vec<std::path::PathBuf>,
+        errors: &mut Vec<String>,
+    ) {
+        let mut entries = match fs::read_dir(current) {
+            Ok(entries) => entries.filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(error) => {
+                errors.push(format!("{}: {error}", current.display()));
+                return;
+            }
+        };
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(repo_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    errors.push(format!("{relative}: {error}"));
+                    continue;
+                }
+            };
+            if file_type.is_symlink() {
+                errors.push(format!("unsafe symlink artifact path {relative}"));
+            } else if file_type.is_dir() {
+                visit(repo_root, &path, files, errors);
+            } else if file_type.is_file() {
+                files.push(path);
+            } else {
+                errors.push(format!("unsafe artifact file type {relative}"));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    if root.is_dir() {
+        visit(repo_root, root, &mut files, errors);
+    }
+    files.sort();
+    files
 }
 
 fn artifact_check(
@@ -3055,11 +4318,16 @@ fn artifact_check(
         checked: Vec::new(),
         legacy: Vec::new(),
         errors: Vec::new(),
+        artifacts: Vec::new(),
     };
     let mut seen_ids = std::collections::BTreeMap::<(String, String), String>::new();
+    let mut seen_folded_ids =
+        std::collections::BTreeMap::<(String, String), (String, String)>::new();
+    let mut seen_folded_paths = std::collections::BTreeMap::<String, String>::new();
     let kinds: Vec<(&str, &str)> = match only_kind {
         Some("story") => vec![("story", "docs/stories")],
         Some("decision") => vec![("decision", "docs/decisions")],
+        Some("capsule") => vec![("capsule", "docs/tasks")],
         _ => vec![
             ("story", "docs/stories"),
             ("decision", "docs/decisions"),
@@ -3067,130 +4335,180 @@ fn artifact_check(
         ],
     };
     for (kind, directory) in kinds {
-        let paths = if let Some(path) = requested_path.as_ref() {
+        let root = repo_root.join(directory);
+        let mut candidates = Vec::<(String, Vec<String>, bool)>::new();
+        if let Some(path) = requested_path.as_ref() {
             if std::path::Path::new(path).is_absolute() || path.split('/').any(|part| part == "..")
             {
                 result.errors.push(format!("unsafe artifact path {path}"));
                 continue;
             }
-            vec![repo_root.join(path)]
+            let requested = repo_root.join(path);
+            match fs::symlink_metadata(&requested) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    result
+                        .errors
+                        .push(format!("unsafe symlink artifact path {path}"));
+                    continue;
+                }
+                Ok(metadata) if metadata.is_dir() && kind == "story" => {
+                    let overview = requested.join("overview.md");
+                    let files = safe_recursive_files(repo_root, &requested, &mut result.errors);
+                    let components = files
+                        .iter()
+                        .filter(|file| file.extension().is_some_and(|ext| ext == "md"))
+                        .map(|file| {
+                            file.strip_prefix(repo_root)
+                                .unwrap_or(file)
+                                .to_string_lossy()
+                                .into_owned()
+                        })
+                        .collect::<Vec<_>>();
+                    candidates.push((
+                        overview
+                            .strip_prefix(repo_root)
+                            .unwrap_or(&overview)
+                            .to_string_lossy()
+                            .into_owned(),
+                        components,
+                        true,
+                    ));
+                }
+                Ok(metadata) if metadata.is_file() => {
+                    candidates.push((path.clone(), vec![path.clone()], false));
+                }
+                Ok(_) => result
+                    .errors
+                    .push(format!("unsafe artifact file type {path}")),
+                Err(error) => result.errors.push(format!("{path}: {error}")),
+            }
         } else {
-            let Ok(entries) = fs::read_dir(repo_root.join(directory)) else {
-                continue;
-            };
-            entries
-                .filter_map(Result::ok)
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
-                .filter(|path| path.file_name().is_some_and(|name| name != "README.md"))
-                .collect()
-        };
-        for path in paths {
-            let relative = path
-                .strip_prefix(repo_root)
-                .map(|path| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-            match fs::read_to_string(&path) {
-                Err(error) => result.errors.push(format!("{relative}: {error}")),
-                Ok(content) => {
-                    let frontmatter = content
-                        .strip_prefix("---\n")
-                        .and_then(|rest| rest.split_once("\n---\n").map(|(head, _)| head));
-                    let fields = frontmatter.map(|head| {
-                        head.lines()
-                            .filter_map(|line| line.split_once(':'))
-                            .map(|(key, value)| (key.trim(), value.trim().trim_matches('"')))
-                            .collect::<std::collections::BTreeMap<_, _>>()
-                    });
-                    if let Some(fields) = fields {
-                        let expected = format!("harness/{kind}/v1");
-                        let required = match kind {
-                            "story" => ["id", "title", "status", "lane"].as_slice(),
-                            "decision" => ["id", "title", "status", "date"].as_slice(),
-                            "capsule" => ["task_id", "date", "lane", "outcome"].as_slice(),
-                            _ => [].as_slice(),
-                        };
-                        let missing = required
-                            .iter()
-                            .filter(|key| !fields.contains_key(**key))
-                            .copied()
-                            .collect::<Vec<_>>();
-                        let id = fields
-                            .get(if kind == "capsule" { "task_id" } else { "id" })
-                            .copied()
-                            .unwrap_or_default();
-                        let lane_valid = fields.get("lane").is_none_or(|lane| {
-                            matches!(*lane, "tiny" | "normal" | "high_risk" | "high-risk")
-                        });
-                        let references = frontmatter
-                            .unwrap()
-                            .lines()
-                            .skip_while(|line| !line.starts_with("product_docs:"))
-                            .skip(1)
-                            .take_while(|line| line.trim_start().starts_with('-'))
-                            .filter_map(|line| line.trim().strip_prefix('-'))
-                            .map(str::trim)
-                            .collect::<Vec<_>>();
-                        let references_valid = references.iter().all(|reference| {
-                            !std::path::Path::new(reference).is_absolute()
-                                && !reference.split('/').any(|part| part == "..")
-                                && repo_root.join(reference).is_file()
-                        });
-                        let valid = fields.get("schema") == Some(&expected.as_str())
-                            && missing.is_empty()
-                            && !id.is_empty()
-                            && !id.contains('/')
-                            && lane_valid
-                            && (kind != "story" || references_valid);
-                        if valid {
-                            let id = id.to_owned();
-                            let key = (kind.to_owned(), id.clone());
-                            if let Some(existing) = seen_ids.insert(key, relative.clone()) {
-                                result.errors.push(format!(
-                                    "duplicate {kind} id {id}: {existing} and {relative}"
-                                ));
-                            }
-                            result.checked.push(relative);
-                        } else {
-                            result.errors.push(format!("{relative}: invalid {kind} v1 frontmatter (schema/required fields/lane/product references)"));
-                        }
-                    } else {
-                        let title = content
-                            .lines()
-                            .find(|line| line.starts_with("# "))
-                            .map(|line| line.trim_start_matches("# ").trim());
-                        let status = content.contains("## Status\n\n")
-                            || content.lines().any(|line| line.starts_with("Status:"));
-                        if let Some(title) = title.filter(|_| status) {
-                            let id = title
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or_default()
-                                .to_owned();
-                            if id.is_empty() {
-                                result.errors.push(format!(
-                                    "{relative}: legacy {kind} title has no artifact id"
-                                ));
+            let files = safe_recursive_files(repo_root, &root, &mut result.errors);
+            match kind {
+                "story" => {
+                    let mut packet_files = std::collections::BTreeMap::<String, Vec<String>>::new();
+                    for file in files {
+                        let relative = file
+                            .strip_prefix(repo_root)
+                            .unwrap_or(&file)
+                            .to_string_lossy()
+                            .into_owned();
+                        let within = file.strip_prefix(&root).unwrap_or(&file);
+                        if within.components().count() == 1 {
+                            if file.file_name().is_some_and(|name| name == "README.md") {
                                 continue;
                             }
-                            let key = (kind.to_owned(), id.clone());
-                            if let Some(existing) = seen_ids.insert(key, relative.clone()) {
+                            if file.extension().is_some_and(|ext| ext == "md") {
+                                candidates.push((relative.clone(), vec![relative], false));
+                            } else {
+                                result
+                                    .errors
+                                    .push(format!("unsafe story artifact file {relative}"));
+                            }
+                        } else {
+                            let packet = within
+                                .components()
+                                .next()
+                                .unwrap()
+                                .as_os_str()
+                                .to_string_lossy()
+                                .into_owned();
+                            packet_files.entry(packet).or_default().push(relative);
+                        }
+                    }
+                    for (_packet, mut components) in packet_files {
+                        components.sort();
+                        let allowed = ["overview.md", "design.md", "execplan.md", "validation.md"];
+                        for component in &components {
+                            let name = std::path::Path::new(component)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("");
+                            if !allowed.contains(&name) {
                                 result.errors.push(format!(
-                                    "duplicate {kind} id {id}: {existing} and {relative}"
+                                    "unsupported story packet component {component}"
                                 ));
                             }
-                            result.checked.push(relative.clone());
-                            result.legacy.push(relative);
+                        }
+                        let overview = components
+                            .iter()
+                            .find(|path| path.ends_with("/overview.md"))
+                            .cloned();
+                        match overview {
+                            Some(overview) => candidates.push((overview, components, true)),
+                            None => result.errors.push(format!(
+                                "story packet is missing canonical overview.md: {}",
+                                components.first().cloned().unwrap_or_default()
+                            )),
+                        }
+                    }
+                }
+                _ => {
+                    for file in files {
+                        let relative = file
+                            .strip_prefix(repo_root)
+                            .unwrap_or(&file)
+                            .to_string_lossy()
+                            .into_owned();
+                        if file.file_name().is_some_and(|name| name == "README.md") {
+                            continue;
+                        }
+                        if file.extension().is_some_and(|ext| ext == "md") {
+                            candidates.push((relative.clone(), vec![relative], false));
                         } else {
-                            result.errors.push(format!(
-                                "{relative}: legacy {kind} requires a title and Status section"
-                            ));
+                            result
+                                .errors
+                                .push(format!("unsafe {kind} artifact file {relative}"));
                         }
                     }
                 }
             }
         }
+        candidates.sort_by(|left, right| left.0.cmp(&right.0));
+        for (path, components, packet) in candidates {
+            let folded_path = path.to_ascii_lowercase();
+            if let Some(existing) = seen_folded_paths.insert(folded_path, path.clone()) {
+                if existing != path {
+                    result.errors.push(format!(
+                        "case-colliding artifact paths: {existing} and {path}"
+                    ));
+                }
+            }
+            match parse_artifact_record(repo_root, kind, path.clone(), components, packet) {
+                Err(error) => result.errors.push(error),
+                Ok((artifact, legacy)) => {
+                    let key = (kind.to_owned(), artifact.id.clone());
+                    if let Some(existing) = seen_ids.insert(key, path.clone()) {
+                        result.errors.push(format!(
+                            "duplicate {kind} id {}: {existing} and {path}",
+                            artifact.id
+                        ));
+                    }
+                    let folded_key = (kind.to_owned(), artifact.id.to_ascii_lowercase());
+                    if let Some((existing_id, existing_path)) =
+                        seen_folded_ids.insert(folded_key, (artifact.id.clone(), path.clone()))
+                    {
+                        if existing_id != artifact.id {
+                            result.errors.push(format!(
+                                "case-colliding {kind} ids {existing_id} and {}: {existing_path} and {path}",
+                                artifact.id
+                            ));
+                        }
+                    }
+                    result.checked.push(path.clone());
+                    if legacy {
+                        result.legacy.push(path);
+                    }
+                    result.artifacts.push(artifact);
+                }
+            }
+        }
     }
+    result.checked.sort();
+    result.legacy.sort();
+    result
+        .artifacts
+        .sort_by(|left, right| left.path.cmp(&right.path));
     result
 }
 
@@ -3904,7 +5222,7 @@ mod tests {
         assert!(result
             .errors
             .iter()
-            .any(|error| error.contains("invalid story v1 frontmatter")));
+            .any(|error| error.contains("invalid story lane")));
     }
 
     #[test]

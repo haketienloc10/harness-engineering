@@ -1171,7 +1171,36 @@ pub struct AuditResult {
     pub friction_without_outcomes: Vec<AuditFinding>,
     pub coverage: Vec<String>,
     pub unknown_coverage: Vec<String>,
+    pub coverage_checks: Vec<AuditCoverageCheck>,
     pub maturity: MaturityReport,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct AuditCoverageCheck {
+    pub check_id: String,
+    pub version: i64,
+    pub required: bool,
+    pub state: String,
+    pub task_id: Option<String>,
+    pub proof_run_id: Option<i64>,
+    pub command: Option<String>,
+    pub output_path: Option<String>,
+    pub output_hash: Option<String>,
+    pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub dirty_fingerprint: Option<String>,
+    pub freshness: AuditCoverageFreshness,
+    pub scope: Vec<String>,
+    pub measured_counts: BTreeMap<String, i64>,
+    pub remediation: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct AuditCoverageFreshness {
+    pub head: Option<bool>,
+    pub branch: Option<bool>,
+    pub dirty: Option<bool>,
+    pub output: Option<bool>,
 }
 
 impl AuditResult {

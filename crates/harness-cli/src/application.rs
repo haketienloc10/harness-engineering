@@ -85,6 +85,10 @@ pub struct TaskStatusRecord {
     pub id: String,
     pub status: String,
     pub risk_lane: String,
+    pub input_type: String,
+    pub summary: String,
+    pub risk_flags: Vec<String>,
+    pub behavior_bearing: bool,
     pub owner: Option<String>,
     pub session_id: Option<String>,
     pub worktree: String,
@@ -94,7 +98,13 @@ pub struct TaskStatusRecord {
     pub allowed_next: Vec<String>,
     pub context_required: usize,
     pub context_acknowledged: usize,
+    pub context_acknowledged_paths: Vec<String>,
+    pub context_manifest: serde_json::Value,
     pub approvals: usize,
+    pub capsule_required: bool,
+    pub capsule_path: Option<String>,
+    pub capsule_checksum: Option<String>,
+    pub capsule_omission_reason: Option<String>,
     pub proof_runs: usize,
     pub latest_proof_state: Option<String>,
     pub latest_proof_head_fresh: Option<bool>,
@@ -141,7 +151,7 @@ pub struct TaskFinishInput {
     pub id: String,
     pub owner: Option<String>,
     pub session_id: Option<String>,
-    pub trace_id: i64,
+    pub trace_id: Option<i64>,
     pub friction: String,
     pub capsule_path: Option<String>,
 }
@@ -150,6 +160,7 @@ pub struct TaskFinishInput {
 pub struct TaskFinishRecord {
     pub id: String,
     pub status: String,
+    pub trace_id: i64,
 }
 
 #[derive(Debug)]

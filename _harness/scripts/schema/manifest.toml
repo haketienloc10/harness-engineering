@@ -60,3 +60,8 @@ sha256 = "457efcd3c958d52d94bc85e90ae4402ccbfc4ccd90476f129cda1589078ca2bd"
 version = 12
 path = "012-audit-disposition.sql"
 sha256 = "a5af5ab9060c71301b711d5ce133cf2c92c3d839e08889a421e1d39894ef5ecb"
+
+[[migration]]
+version = 13
+path = "013-portable-memory-projection.sql"
+sha256 = "1973983375eced517eeb61840489541776cfa11ad684bc3e0dd75f9bcf25ff33"

@@ -26,11 +26,12 @@ use crate::application::{
 use crate::domain::{
     compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
     score_trace, task_transition_allowed, validate_tool_description, AcceptedAuditFinding,
-    AuditDispositionRecord, AuditFinding, AuditResult, BacklogFilter, BacklogRecord,
-    ContextScoreResult, ContextScoreSource, DecisionRecord, FrictionRecord, HarnessStats,
-    ImprovementProposal, IntakeRecord, InterventionRecord, MaturityReport, ObservationCount,
-    RiskLane, StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus,
-    StructuredErrorResult, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
+    AuditCoverageCheck, AuditCoverageFreshness, AuditDispositionRecord, AuditFinding, AuditResult,
+    BacklogFilter, BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord,
+    FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord,
+    MaturityReport, ObservationCount, RiskLane, StoryMatrixRecord, StoryVerifyAllItem,
+    StoryVerifyAllResult, StoryVerifyStatus, StructuredErrorResult, ToolArgSpec, ToolEntry,
+    TraceRecord, TraceScoreResult, TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -83,8 +84,6 @@ pub enum HarnessInfraError {
     TaskNotFound(String),
     #[error("task transition from '{current}' to '{next}' is not allowed")]
     InvalidTaskTransition { current: String, next: String },
-    #[error("task start: a primary story is required for this lane and behavior-bearing setting")]
-    TaskStoryRequired,
     #[error("task start: story '{story_id}' is already active under owner '{owner}'")]
     TaskOwnerConflict { story_id: String, owner: String },
     #[error("task identity requires --owner and --session together")]
@@ -690,6 +689,12 @@ pub trait HarnessRepository {
     fn add_audit_disposition(&self, input: AuditDispositionAddInput) -> Result<i64>;
     fn list_audit_dispositions(&self) -> Result<Vec<AuditDispositionRecord>>;
     fn revoke_audit_disposition(&self, input: AuditDispositionRevokeInput) -> Result<()>;
+    fn audit_coverage_check(
+        &self,
+        connection: &Connection,
+        check_id: &str,
+        scope: &[&str],
+    ) -> Result<AuditCoverageCheck>;
     fn audit(&self) -> Result<AuditResult>;
     fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
     fn query_sql(&self, sql: &str) -> Result<QueryTable>;
@@ -766,7 +771,25 @@ fn validate_task_capsule(
             )
         })?;
     let actual = format!("{:x}", Sha256::digest(body.as_bytes()));
-    if fields.get("schema") != Some(&"harness/task-capsule/v1")
+    let schema_valid = matches!(
+        fields.get("schema").copied(),
+        Some("harness/task-capsule/v1" | "harness/task-capsule/v2")
+    );
+    let v2_fields_valid = fields.get("schema") != Some(&"harness/task-capsule/v2")
+        || [
+            "story_ids",
+            "trace_ids",
+            "proof_summaries",
+            "unknown_fields",
+        ]
+        .iter()
+        .all(|key| {
+            fields
+                .get(key)
+                .is_some_and(|value| serde_json::from_str::<serde_json::Value>(value).is_ok())
+        });
+    if !schema_valid
+        || !v2_fields_valid
         || fields.get("task_id") != Some(&task_id)
         || checksum != actual
     {
@@ -1105,6 +1128,16 @@ impl SqliteHarnessRepository {
         let mut backups = fs::read_dir(backup_dir)?
             .filter_map(|entry| entry.ok())
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+            .filter(|entry| {
+                let backup = entry.path();
+                std::iter::once(backup.clone())
+                    .chain(
+                        ["-wal", "-shm"]
+                            .into_iter()
+                            .map(|suffix| PathBuf::from(format!("{}{}", backup.display(), suffix))),
+                    )
+                    .all(|path| !self.git_path_is_tracked(&path))
+            })
             .collect::<Vec<_>>();
         backups.sort_by_key(|entry| entry.file_name());
         let remove_count = backups.len().saturating_sub(retain);
@@ -1119,6 +1152,17 @@ impl SqliteHarnessRepository {
             }
         }
         Ok(())
+    }
+
+    fn git_path_is_tracked(&self, path: &Path) -> bool {
+        let Ok(relative) = path.strip_prefix(&self.repo_root) else {
+            return false;
+        };
+        let Some(relative) = relative.to_str() else {
+            return false;
+        };
+        self.git_output(&["ls-files", "--error-unmatch", "--", relative])
+            .is_ok()
     }
 
     fn source_migrations(&self) -> Result<(Vec<SourceMigration>, Vec<String>, String)> {
@@ -1977,11 +2021,6 @@ impl HarnessRepository for SqliteHarnessRepository {
             RiskLane::Normal => &policy.lanes.normal,
             RiskLane::HighRisk => &policy.lanes.high_risk,
         };
-        let story_required = lane_policy.story == "required"
-            || (lane_policy.story == "when_behavior_bearing" && behavior_bearing);
-        if story_required && story_id.is_none() {
-            return Err(HarnessInfraError::TaskStoryRequired);
-        }
         let linked_artifacts = story_id
             .as_ref()
             .map(|_| vec!["docs/stories/".to_owned()])
@@ -2138,7 +2177,9 @@ impl HarnessRepository for SqliteHarnessRepository {
             .query_row(
                 "SELECT task.id, task.status, task.risk_lane, task.owner, task.session_id,
                         task.worktree, task.lease_expires_at, task_story.story_id,
-                        task.context_manifest_json,
+                        task.context_manifest_json, task.behavior_bearing, task.summary,
+                        intake.input_type, intake.risk_flags, task.capsule_required,
+                        task.capsule_path, task.capsule_checksum, task.capsule_omission_reason,
                         CASE
                           WHEN task.owner IS NULL THEN 'unowned'
                           WHEN task.session_id IS NULL THEN 'legacy'
@@ -2146,7 +2187,9 @@ impl HarnessRepository for SqliteHarnessRepository {
                           WHEN task.lease_expires_at > datetime('now') THEN 'active'
                           ELSE 'expired'
                         END
-                 FROM task LEFT JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
+                 FROM task
+                 JOIN intake ON intake.id=task.intake_id
+                 LEFT JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
                  WHERE task.id=?1;",
                 params![id],
                 |row| {
@@ -2154,16 +2197,27 @@ impl HarnessRepository for SqliteHarnessRepository {
                         id: row.get(0)?,
                         status: row.get(1)?,
                         risk_lane: row.get(2)?,
+                        input_type: row.get(11)?,
+                        summary: row.get(10)?,
+                        risk_flags: serde_json::from_str::<Vec<String>>(&row.get::<_, String>(12)?)
+                            .unwrap_or_default(),
+                        behavior_bearing: row.get::<_, i64>(9)? != 0,
                         owner: row.get(3)?,
                         session_id: row.get(4)?,
                         worktree: row.get(5)?,
                         lease_expires_at: row.get(6)?,
                         story_id: row.get(7)?,
-                        lease_state: row.get(9)?,
+                        lease_state: row.get(17)?,
                         allowed_next: Vec::new(),
                         context_required: 0,
                         context_acknowledged: 0,
+                        context_acknowledged_paths: Vec::new(),
+                        context_manifest: serde_json::Value::Null,
                         approvals: 0,
+                        capsule_required: row.get::<_, i64>(13)? != 0,
+                        capsule_path: row.get(14)?,
+                        capsule_checksum: row.get(15)?,
+                        capsule_omission_reason: row.get(16)?,
                         proof_runs: 0,
                         latest_proof_state: None,
                         latest_proof_head_fresh: None,
@@ -2178,12 +2232,20 @@ impl HarnessRepository for SqliteHarnessRepository {
             .ok_or_else(|| HarnessInfraError::TaskNotFound(id.to_owned()))?;
         let manifest: WorkflowContextManifest = serde_json::from_str(&task.1)
             .map_err(|_| HarnessInfraError::InvalidTaskContextManifest(id.to_owned()))?;
+        task.0.context_manifest = serde_json::to_value(&manifest)
+            .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
         task.0.context_required = manifest.must_read.len();
         task.0.context_acknowledged = connection.query_row(
             "SELECT COUNT(*) FROM task_context_read WHERE task_id=?1;",
             params![id],
             |row| row.get::<_, i64>(0),
         )? as usize;
+        task.0.context_acknowledged_paths = {
+            let mut statement = connection
+                .prepare("SELECT path FROM task_context_read WHERE task_id=?1 ORDER BY path;")?;
+            let paths = collect_rows(statement.query_map(params![id], |row| row.get(0))?)?;
+            paths
+        };
         task.0.approvals = connection.query_row(
             "SELECT COUNT(*) FROM task_approval WHERE task_id=?1;",
             params![id],
@@ -2580,6 +2642,51 @@ impl HarnessRepository for SqliteHarnessRepository {
             input.owner.as_deref(),
             input.session_id.as_deref(),
         )?;
+        let trace_id = match input.trace_id {
+            Some(trace_id) => trace_id,
+            None => {
+                let trace_ids = {
+                    let mut statement = connection
+                        .prepare("SELECT id FROM trace WHERE intake_id=?1 ORDER BY id;")?;
+                    let ids =
+                        collect_rows(statement.query_map(params![intake_id], |row| row.get(0))?)?;
+                    ids
+                };
+                let mut qualifying = Vec::new();
+                for candidate in trace_ids {
+                    if self.score_trace(Some(candidate))?.meets_requirement {
+                        qualifying.push(candidate);
+                    }
+                }
+                match qualifying.as_slice() {
+                    [only] => *only,
+                    [] => {
+                        return Err(task_finish_gate(
+                            "TASK_TRACE_MISSING",
+                            "no qualifying final trace is rooted in this task intake",
+                            &["Record one sufficiently detailed trace for this task intake, then retry task finish without --trace or provide its id explicitly."],
+                        ))
+                    }
+                    _ => {
+                        return Err(HarnessInfraError::TaskFinishGate(
+                            StructuredErrorResult::new(
+                                "TASK_TRACE_AMBIGUOUS",
+                                "multiple qualifying final traces are rooted in this task intake",
+                                ["Retry task finish with --trace <TRACE_ID> to select one qualifying rooted trace deterministically."],
+                            )
+                            .with_detail(
+                                "qualifying_trace_ids",
+                                qualifying
+                                    .iter()
+                                    .map(i64::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(","),
+                            ),
+                        ))
+                    }
+                }
+            }
+        };
         if status == "completed" {
             if stored_capsule_path.as_deref() != input.capsule_path.as_deref() {
                 return Err(task_finish_gate(
@@ -2605,6 +2712,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             return Ok(TaskFinishRecord {
                 id: input.id,
                 status,
+                trace_id,
             });
         }
         if status != "in_progress" {
@@ -2791,7 +2899,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         let trace_intake: Option<i64> = connection
             .query_row(
                 "SELECT intake_id FROM trace WHERE id=?1;",
-                params![input.trace_id],
+                params![trace_id],
                 |row| row.get(0),
             )
             .optional()?;
@@ -2802,7 +2910,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                 &["Record a final trace for this task intake and retry with its numeric trace id."],
             ));
         }
-        if !self.score_trace(Some(input.trace_id))?.meets_requirement {
+        if !self.score_trace(Some(trace_id))?.meets_requirement {
             return Err(task_finish_gate(
                 "TASK_TRACE_INSUFFICIENT",
                 "final trace does not meet the task lane tier",
@@ -2863,6 +2971,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(TaskFinishRecord {
             id: input.id,
             status: "completed".to_owned(),
+            trace_id,
         })
     }
 
@@ -3143,7 +3252,7 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(ProofRunRecord {
             task_id: input.task_id,
             layer: input.layer,
-            state,
+            state: state.clone(),
             exit_code,
             head_commit,
             branch,
@@ -4222,17 +4331,278 @@ impl HarnessRepository for SqliteHarnessRepository {
         Ok(())
     }
 
+    fn audit_coverage_check(
+        &self,
+        connection: &Connection,
+        check_id: &str,
+        scope: &[&str],
+    ) -> Result<AuditCoverageCheck> {
+        type ProofRow = (
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let proof = connection
+            .query_row(
+                "SELECT id, task_id, state, executable, argv_json, head_commit, branch,
+                        dirty_fingerprint, stdout_path, stdout_hash, stderr_path, stderr_hash
+                 FROM proof_run WHERE layer=?1 ORDER BY id DESC LIMIT 1",
+                params![check_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let remediation = vec![format!(
+            "_harness/bin/harness-cli proof run --task <TASK_ID> --layer {check_id} -- <COMMAND>"
+        )];
+        let Some((
+            proof_run_id,
+            task_id,
+            proof_state,
+            executable,
+            argv_json,
+            head_commit,
+            branch,
+            dirty_fingerprint,
+            stdout_path,
+            stdout_hash,
+            stderr_path,
+            stderr_hash,
+        )): Option<ProofRow> = proof
+        else {
+            return Ok(AuditCoverageCheck {
+                check_id: check_id.to_owned(),
+                version: 1,
+                required: true,
+                state: "unknown".to_owned(),
+                task_id: None,
+                proof_run_id: None,
+                command: None,
+                output_path: None,
+                output_hash: None,
+                head_commit: None,
+                branch: None,
+                dirty_fingerprint: None,
+                freshness: AuditCoverageFreshness::default(),
+                scope: scope.iter().map(|value| (*value).to_owned()).collect(),
+                measured_counts: BTreeMap::new(),
+                remediation,
+            });
+        };
+        let current_head = self.git_output(&["rev-parse", "HEAD"]).ok();
+        let current_branch = self.git_output(&["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+        let current_dirty = self.dirty_worktree_fingerprint().ok();
+        let output_fresh = proof_file_fresh(
+            &self.repo_root,
+            stdout_path.as_deref(),
+            stdout_hash.as_deref(),
+        ) && proof_file_fresh(
+            &self.repo_root,
+            stderr_path.as_deref(),
+            stderr_hash.as_deref(),
+        );
+        let freshness = AuditCoverageFreshness {
+            head: Some(head_commit.is_some() && head_commit == current_head),
+            branch: Some(branch.is_some() && branch == current_branch),
+            dirty: Some(dirty_fingerprint.is_some() && dirty_fingerprint == current_dirty),
+            output: Some(output_fresh),
+        };
+        let fully_fresh = freshness.head == Some(true)
+            && freshness.branch == Some(true)
+            && freshness.dirty == Some(true)
+            && freshness.output == Some(true);
+        let mut measured_counts = BTreeMap::new();
+        let mut state = match proof_state.as_str() {
+            "fail" => "fail",
+            "not_applicable" => "not_applicable",
+            "pass" if !fully_fresh => "unknown",
+            "pass" => "pass",
+            _ => "unknown",
+        }
+        .to_owned();
+        if state == "pass" {
+            let output = stdout_path
+                .as_deref()
+                .and_then(|path| repo_file(&self.repo_root, path))
+                .and_then(|path| fs::read_to_string(path).ok())
+                .and_then(|output| serde_json::from_str::<serde_json::Value>(&output).ok());
+            if check_id == "semantic-memory-parity" {
+                let source_schema = self
+                    .source_migrations()?
+                    .0
+                    .last()
+                    .map(|migration| migration.version)
+                    .unwrap_or_default();
+                let mut indexed_artifacts = BTreeMap::new();
+                let mut statement = connection.prepare(
+                    "SELECT artifact_type, artifact_id, path, checksum, schema_version, status
+                     FROM artifact_index ORDER BY artifact_type, artifact_id",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (kind, id, path, checksum, schema, status) = row?;
+                    indexed_artifacts
+                        .insert(format!("{kind}\0{id}"), (path, checksum, schema, status));
+                }
+                let valid = output.as_ref().is_some_and(|output| {
+                    let parity = &output["parity"];
+                    let counts = &parity["source_counts"];
+                    let count_total = ["story", "decision", "capsule"]
+                        .into_iter()
+                        .filter_map(|kind| counts[kind].as_i64())
+                        .sum::<i64>();
+                    let output_artifacts = parity["artifacts"]
+                        .as_array()
+                        .map(|artifacts| {
+                            artifacts
+                                .iter()
+                                .filter_map(|artifact| {
+                                    Some((
+                                        format!(
+                                            "{}\0{}",
+                                            artifact["kind"].as_str()?,
+                                            artifact["id"].as_str()?
+                                        ),
+                                        (
+                                            artifact["path"].as_str()?.to_owned(),
+                                            artifact["checksum"].as_str()?.to_owned(),
+                                            artifact["schema"].as_str()?.to_owned(),
+                                            artifact["status"].as_str()?.to_owned(),
+                                        ),
+                                    ))
+                                })
+                                .collect::<BTreeMap<_, _>>()
+                        })
+                        .unwrap_or_default();
+                    output["ok"] == true
+                        && output["doctor"] == "HEALTHY"
+                        && output["temp_schema_version"].as_i64() == Some(source_schema)
+                        && output["artifacts_checked"].as_i64() == Some(count_total)
+                        && output["projected_records"].as_i64() == Some(count_total)
+                        && parity["check_id"] == "semantic-memory-parity"
+                        && parity["state"] == "pass"
+                        && parity["schema_version"].as_i64() == Some(source_schema)
+                        && parity["projected_count"].as_i64() == Some(count_total)
+                        && parity["portable_task_summaries"].as_i64() == counts["capsule"].as_i64()
+                        && parity["mismatches"].as_array().is_some_and(Vec::is_empty)
+                        && (indexed_artifacts.is_empty() || indexed_artifacts == output_artifacts)
+                        && parity["artifacts"].as_array().is_some_and(|artifacts| {
+                            artifacts.len() as i64 == count_total
+                                && artifacts.iter().all(|artifact| {
+                                    ["kind", "id", "path", "status", "checksum", "schema"]
+                                        .into_iter()
+                                        .all(|key| artifact[key].is_string())
+                                        && artifact["components"].is_array()
+                                        && (artifact["kind"] != "capsule"
+                                            || (artifact["story_ids"].is_array()
+                                                && artifact["trace_ids"].is_array()
+                                                && artifact["proof_summaries"].is_array()
+                                                && artifact["unknown_fields"].is_array()))
+                                })
+                        })
+                });
+                if valid {
+                    let counts = &output.as_ref().unwrap()["parity"]["source_counts"];
+                    for kind in ["story", "decision", "capsule"] {
+                        measured_counts.insert(kind.to_owned(), counts[kind].as_i64().unwrap());
+                    }
+                    measured_counts.insert(
+                        "projected".to_owned(),
+                        output.as_ref().unwrap()["projected_records"]
+                            .as_i64()
+                            .unwrap(),
+                    );
+                    measured_counts.insert("schema_version".to_owned(), source_schema);
+                } else {
+                    state = "fail".to_owned();
+                }
+            } else {
+                let counts = output
+                    .as_ref()
+                    .filter(|output| output["ok"] == true)
+                    .and_then(|output| output["counts"].as_object());
+                if let Some(counts) = counts.filter(|counts| !counts.is_empty()) {
+                    for (key, value) in counts {
+                        if let Some(value) = value.as_i64() {
+                            measured_counts.insert(key.clone(), value);
+                        }
+                    }
+                    if measured_counts.len() != counts.len() {
+                        state = "fail".to_owned();
+                    }
+                } else {
+                    state = "fail".to_owned();
+                }
+            }
+        }
+        Ok(AuditCoverageCheck {
+            check_id: check_id.to_owned(),
+            version: 1,
+            required: true,
+            state: state.clone(),
+            task_id: Some(task_id),
+            proof_run_id: Some(proof_run_id),
+            command: Some(format!(
+                "{} {}",
+                executable.unwrap_or_default(),
+                argv_json.unwrap_or_else(|| "[]".to_owned())
+            )),
+            output_path: stdout_path,
+            output_hash: stdout_hash,
+            head_commit,
+            branch,
+            dirty_fingerprint,
+            freshness,
+            scope: scope.iter().map(|value| (*value).to_owned()).collect(),
+            measured_counts,
+            remediation: if proof_state == "pass" && fully_fresh {
+                if state == "pass" {
+                    Vec::new()
+                } else {
+                    vec![format!(
+                        "Rerun {check_id} with a complete machine-readable count report."
+                    )]
+                }
+            } else {
+                remediation
+            },
+        })
+    }
+
     fn audit(&self) -> Result<AuditResult> {
         let connection = self.open_existing()?;
-        let release_qualification_observed =
-            release_qualification_observed(&connection, &self.repo_root)?;
-        let release_coverage = vec![
-            "Markdown/DB field parity beyond canonical artifact validation".to_owned(),
-            "path-scoped proof freshness across later commits".to_owned(),
-            "generated matrix, CLI manifest, and installed payload parity".to_owned(),
-            "portable capsule to fresh-rebuild parity".to_owned(),
-            "startup latency, over-read, and manual-correction telemetry".to_owned(),
-        ];
         let mut coverage = vec![
             "stories/traces".to_owned(),
             "terminal task/final trace linkage".to_owned(),
@@ -4242,12 +4612,49 @@ impl HarnessRepository for SqliteHarnessRepository {
             "friction outcomes".to_owned(),
             "registered tools".to_owned(),
         ];
-        let unknown_coverage = if release_qualification_observed {
-            coverage.extend(release_coverage);
-            Vec::new()
-        } else {
-            release_coverage
-        };
+        let coverage_specs = [
+            (
+                "markdown-db-field-parity",
+                ["artifact metadata", "canonical DB projection"].as_slice(),
+            ),
+            (
+                "path-scoped-proof-freshness",
+                ["proof HEAD", "branch", "dirty state", "retained outputs"].as_slice(),
+            ),
+            (
+                "generated-matrix-cli-payload-parity",
+                ["generated matrix", "CLI manifest", "installed payload"].as_slice(),
+            ),
+            (
+                "semantic-memory-parity",
+                [
+                    "recursive artifacts",
+                    "portable projection",
+                    "candidate schema",
+                    "counts and links",
+                ]
+                .as_slice(),
+            ),
+            (
+                "operational-telemetry",
+                ["startup latency", "over-read", "manual corrections"].as_slice(),
+            ),
+        ];
+        let coverage_checks = coverage_specs
+            .iter()
+            .map(|(check_id, scope)| self.audit_coverage_check(&connection, check_id, scope))
+            .collect::<Result<Vec<_>>>()?;
+        coverage.extend(
+            coverage_checks
+                .iter()
+                .filter(|check| check.state == "pass")
+                .map(|check| check.check_id.clone()),
+        );
+        let unknown_coverage = coverage_checks
+            .iter()
+            .filter(|check| check.required && check.state != "pass")
+            .map(|check| check.check_id.clone())
+            .collect::<Vec<_>>();
         let terminal_tasks_without_traces = audit_findings(
             &connection,
             "SELECT task.id, task.summary
@@ -4365,6 +4772,7 @@ impl HarnessRepository for SqliteHarnessRepository {
             )?,
             coverage,
             unknown_coverage,
+            coverage_checks,
             maturity: maturity_report(&connection)?,
         };
 
@@ -5448,43 +5856,6 @@ fn maturity_report(connection: &Connection) -> Result<MaturityReport> {
     Ok(report)
 }
 
-fn release_qualification_observed(connection: &Connection, repo_root: &Path) -> Result<bool> {
-    let proof: Option<(Option<String>, Option<String>)> = connection
-        .query_row(
-            "SELECT proof_run.artifact_path, proof_run.artifact_hash
-           FROM task
-           JOIN task_story ON task_story.task_id=task.id
-             AND task_story.role='primary' AND task_story.story_id='CL-70'
-           JOIN proof_run ON proof_run.task_id=task.id
-             AND proof_run.layer='release' AND proof_run.state='pass'
-           WHERE task.status='completed'
-             AND task.capsule_path IS NOT NULL
-             AND (
-               SELECT COUNT(DISTINCT marker.value)
-               FROM trace
-               JOIN json_each(COALESCE(trace.actions_taken, '[]')) AS marker
-               WHERE trace.intake_id=task.intake_id
-                 AND marker.value IN (
-                   'release-environment-matrix',
-                   'path-proof-freshness',
-                   'payload-manifest-parity',
-                   'docs-db-roundtrip',
-                   'fresh-clone-rebuild',
-                   'startup-latency',
-                   'over-read-measured',
-                   'manual-corrections-measured'
-                 )
-             )=8
-           ORDER BY proof_run.id DESC
-           LIMIT 1;",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    Ok(proof
-        .is_some_and(|(path, hash)| proof_file_fresh(repo_root, path.as_deref(), hash.as_deref())))
-}
-
 fn repeated_friction(connection: &Connection) -> Result<Vec<(String, usize)>> {
     let mut statement = connection.prepare(
         "SELECT harness_friction FROM trace
@@ -5773,7 +6144,7 @@ mod tests {
             id,
             owner: Some("codex".to_owned()),
             session_id: Some("phase4-tiny".to_owned()),
-            trace_id,
+            trace_id: Some(trace_id),
             friction: "none".to_owned(),
             capsule_path: None,
         }
@@ -5841,7 +6212,7 @@ mod tests {
             id,
             owner: Some("codex".to_owned()),
             session_id: Some("phase4-normal".to_owned()),
-            trace_id,
+            trace_id: Some(trace_id),
             friction: "none".to_owned(),
             capsule_path: Some(capsule_path),
         }
@@ -5897,7 +6268,7 @@ mod tests {
             id: "TASK-999999".to_owned(),
             owner: Some("codex".to_owned()),
             session_id: Some("phase4-missing".to_owned()),
-            trace_id: 999_999,
+            trace_id: Some(999_999),
             friction: "none".to_owned(),
             capsule_path: None,
         }
@@ -5965,7 +6336,7 @@ mod tests {
 
     fn phase4_missing_trace(repository: &SqliteHarnessRepository) -> TaskFinishInput {
         let mut input = start_tiny_finish_fixture(repository, true, Some("pass"));
-        input.trace_id = 999_999;
+        input.trace_id = Some(999_999);
         input
     }
 
@@ -6022,7 +6393,7 @@ mod tests {
             id,
             owner: Some("codex".to_owned()),
             session_id: Some("phase4-high".to_owned()),
-            trace_id: 999_999,
+            trace_id: Some(999_999),
             friction: "none".to_owned(),
             capsule_path: None,
         }
@@ -6223,7 +6594,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 12);
+        assert_eq!(schema_version, 13);
         let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -6662,8 +7033,8 @@ mod tests {
         assert!(failed_start.is_err());
         assert_eq!(repository.query_stats().unwrap().intakes, 1);
 
-        assert!(matches!(
-            repository.start_task(TaskStartInput {
+        let story_pending = repository
+            .start_task(TaskStartInput {
                 input_type: crate::domain::InputType::ChangeRequest,
                 summary: "Require behavior story".to_owned(),
                 risk_lane: Some(RiskLane::Normal),
@@ -6674,9 +7045,11 @@ mod tests {
                 story_id: None,
                 behavior_bearing: true,
                 risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
-            }),
-            Err(HarnessInfraError::TaskStoryRequired)
-        ));
+            })
+            .unwrap();
+        let story_pending = repository.task_status(&story_pending).unwrap();
+        assert!(story_pending.behavior_bearing);
+        assert!(story_pending.story_id.is_none());
         assert!(matches!(
             repository.start_task(TaskStartInput {
                 input_type: crate::domain::InputType::ChangeRequest,
@@ -6806,6 +7179,45 @@ mod tests {
     }
 
     #[test]
+    fn task_finish_auto_selects_exactly_one_qualifying_rooted_trace() {
+        let (_temp_dir, repository) = test_repository();
+        let mut input = start_tiny_finish_fixture(&repository, true, Some("pass"));
+        let expected_trace = input.trace_id.take().unwrap();
+        let result = repository.finish_task(input).unwrap();
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.trace_id, expected_trace);
+    }
+
+    #[test]
+    fn task_finish_without_trace_fails_closed_for_zero_or_multiple_qualifying_traces() {
+        let (_temp_dir, repository) = test_repository();
+        let mut missing = start_tiny_finish_fixture(&repository, true, Some("pass"));
+        repository
+            .open_existing()
+            .unwrap()
+            .execute("DELETE FROM trace", [])
+            .unwrap();
+        missing.trace_id = None;
+        let missing_error = repository.finish_task(missing).unwrap_err();
+        assert!(matches!(
+            missing_error,
+            HarnessInfraError::TaskFinishGate(ref result) if result.code == "TASK_TRACE_MISSING"
+        ));
+
+        let (_second_temp, second_repository) = test_repository();
+        let mut ambiguous = start_tiny_finish_fixture(&second_repository, true, Some("pass"));
+        record_finish_trace(&second_repository, &ambiguous.id, None, false);
+        ambiguous.trace_id = None;
+        let ambiguous_error = second_repository.finish_task(ambiguous).unwrap_err();
+        assert!(matches!(
+            ambiguous_error,
+            HarnessInfraError::TaskFinishGate(ref result)
+                if result.code == "TASK_TRACE_AMBIGUOUS"
+                    && result.details.contains_key("qualifying_trace_ids")
+        ));
+    }
+
+    #[test]
     fn task_finish_completes_only_a_gated_non_material_tiny_task() {
         let (_temp_dir, repository) = test_repository();
         repository.init().unwrap();
@@ -6882,7 +7294,7 @@ mod tests {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
                 session_id: Some("tiny-session".to_owned()),
-                trace_id,
+                trace_id: Some(trace_id),
                 friction: "none".to_owned(),
                 capsule_path: None,
             }),
@@ -6901,7 +7313,7 @@ mod tests {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
                 session_id: Some("tiny-session".to_owned()),
-                trace_id,
+                trace_id: Some(trace_id),
                 friction: "none".to_owned(),
                 capsule_path: None,
             })
@@ -6914,7 +7326,7 @@ mod tests {
                     id,
                     owner: Some("codex".to_owned()),
                     session_id: Some("tiny-session".to_owned()),
-                    trace_id,
+                    trace_id: Some(trace_id),
                     friction: "none".to_owned(),
                     capsule_path: None,
                 })
@@ -7038,7 +7450,7 @@ mod tests {
             id: id.clone(),
             owner: Some("codex".to_owned()),
             session_id: Some("normal-session".to_owned()),
-            trace_id,
+            trace_id: Some(trace_id),
             friction: "none".to_owned(),
             capsule_path: Some(capsule_path.to_owned()),
         });
@@ -7073,7 +7485,7 @@ mod tests {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
                 session_id: Some("normal-session".to_owned()),
-                trace_id,
+                trace_id: Some(trace_id),
                 friction: "none".to_owned(),
                 capsule_path: Some(capsule_path.to_owned()),
             })
@@ -7115,7 +7527,7 @@ mod tests {
         assert!(!db_path.exists());
         assert_eq!(
             report.source_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
     }
 
@@ -7144,7 +7556,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (13)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (14)", [])
             .unwrap();
         drop(connection);
         let db_path = repository.db_path.clone();
@@ -7158,7 +7570,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            13
+            14
         );
     }
 
@@ -7554,11 +7966,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            12
+            13
         );
         let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -7680,12 +8092,51 @@ mod tests {
     }
 
     #[test]
+    fn backup_retention_never_prunes_git_tracked_recovery_files() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let checksum = repository
+            .source_migrations()
+            .unwrap()
+            .0
+            .last()
+            .unwrap()
+            .checksum
+            .clone();
+        let protected = repository
+            .backup_existing_database(13, "main", &checksum)
+            .unwrap();
+        let relative = protected.strip_prefix(&repository.repo_root).unwrap();
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&repository.repo_root)
+            .arg("add")
+            .arg(relative)
+            .status()
+            .unwrap()
+            .success());
+        for _ in 0..7 {
+            repository
+                .backup_existing_database(13, "main", &checksum)
+                .unwrap();
+        }
+
+        assert!(protected.exists());
+        let backups = fs::read_dir(repository.repo_root.join("harness.db.backups"))
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(backups, 6);
+    }
+
+    #[test]
     fn ensure_refuses_an_ahead_database_without_writing_or_backing_it_up() {
         let (_temp_dir, repository) = doctor_repository();
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (13)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (14)", [])
             .unwrap();
         drop(connection);
         let before = sha256_file(&repository.db_path).unwrap();
@@ -7704,7 +8155,7 @@ mod tests {
 
         let result = repository.migrate().unwrap();
 
-        assert_eq!(result.current_version, 12);
+        assert_eq!(result.current_version, 13);
         assert!(result.applied.is_empty());
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
@@ -7827,7 +8278,7 @@ mod tests {
         // Upgrade: migration 005 must infer kind from the command prefix.
         assert_eq!(
             repository.migrate().unwrap().applied,
-            vec![5, 6, 7, 8, 9, 10, 11, 12]
+            vec![5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
@@ -8542,7 +8993,7 @@ mod tests {
     }
 
     #[test]
-    fn audit_promotes_release_coverage_only_from_terminal_cl70_evidence() {
+    fn audit_never_promotes_named_coverage_from_broad_release_observation() {
         let (_temp_dir, repository) = test_repository();
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
@@ -8616,11 +9067,12 @@ mod tests {
             .unwrap();
 
         let audit = repository.audit().unwrap();
-        assert!(audit.unknown_coverage.is_empty());
+        assert_eq!(audit.unknown_coverage.len(), 5);
+        assert_eq!(audit.coverage_checks.len(), 5);
         assert!(audit
-            .coverage
+            .coverage_checks
             .iter()
-            .any(|item| item == "portable capsule to fresh-rebuild parity"));
+            .all(|check| check.state == "unknown"));
 
         fs::write(&artifact, "changed after release proof\n").unwrap();
         assert_eq!(repository.audit().unwrap().unknown_coverage.len(), 5);

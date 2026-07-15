@@ -322,7 +322,7 @@ fn run_matrix(cli: &Path) {
         Case {
             name: "missing task root",
             prepare: missing_task,
-            exit: 1,
+            exit: 5,
             code: "TASK_NOT_FOUND",
         },
         Case {
@@ -364,7 +364,7 @@ fn run_matrix(cli: &Path) {
         Case {
             name: "missing approval",
             prepare: approval_required,
-            exit: 5,
+            exit: 9,
             code: "TASK_APPROVAL_REQUIRED",
         },
     ];

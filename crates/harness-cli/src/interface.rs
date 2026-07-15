@@ -9,20 +9,21 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
-    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput, FrictionAddInput,
-    FrictionResolveInput, HarnessContext, HarnessService, InitResult, IntakeInput,
-    InterventionAddInput, InterventionFilter, MigrateResult, ProofRecord, ProofRunInput,
-    QueryTable, StoryAddInput, StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput,
-    TaskFinishInput, TaskHandoffInput, TaskRefreshInput, TaskStartInput, TaskStoryLinkInput,
-    TaskTransitionInput, ToolRegisterInput, TraceInput,
+    AuditDispositionAddInput, AuditDispositionRevokeInput, BacklogAddInput, BacklogCloseInput,
+    BrownfieldImportResult, DecisionAddInput, FrictionAddInput, FrictionResolveInput,
+    HarnessContext, HarnessService, InitResult, IntakeInput, InterventionAddInput,
+    InterventionFilter, MigrateResult, ProofRecord, ProofRunInput, QueryTable, StoryAddInput,
+    StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput,
+    TaskHandoffInput, TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput,
+    ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, parse_optional_integer, parse_tool_args, proof_display,
-    validate_responsibility, validate_tool_kind, BacklogFilter, BacklogRecord, BoolFlag,
-    ContextScoreResult, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
-    InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
-    StructuredErrorResult, ToolEntry, TraceQualityTier, TraceRecord, TraceScoreResult,
-    RISK_LANE_HELP,
+    validate_responsibility, validate_tool_kind, AuditDispositionRecord, BacklogFilter,
+    BacklogRecord, BoolFlag, ContextScoreResult, CsvList, DecisionRecord, FrictionRecord,
+    HarnessStats, ImprovementProposal, InputType, IntakeRecord, InterventionRecord, RiskLane,
+    StoryMatrixRecord, StoryVerifyAllResult, StructuredErrorResult, ToolEntry, TraceQualityTier,
+    TraceRecord, TraceScoreResult, RISK_LANE_HELP,
 };
 use crate::infrastructure::ToolCheckResult;
 
@@ -93,9 +94,67 @@ struct DoctorArgs {
 
 #[derive(Args, Debug)]
 struct AuditArgs {
+    #[command(subcommand)]
+    action: Option<AuditAction>,
     /// Exit with consistency-failure status when audit debt or unknown coverage remains.
     #[arg(long)]
     strict: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum AuditAction {
+    /// Add, list, or revoke explicit historical audit dispositions.
+    Disposition(AuditDispositionArgs),
+}
+
+#[derive(Args, Debug)]
+struct AuditDispositionArgs {
+    #[command(subcommand)]
+    action: AuditDispositionAction,
+}
+
+#[derive(Subcommand, Debug)]
+enum AuditDispositionAction {
+    Add(AuditDispositionAddArgs),
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Revoke(AuditDispositionRevokeArgs),
+}
+
+#[derive(Args, Debug)]
+struct AuditDispositionAddArgs {
+    #[arg(long)]
+    finding_key: String,
+    #[arg(long)]
+    entity_id: String,
+    #[arg(long)]
+    rationale: String,
+    #[arg(long)]
+    provenance: String,
+    #[arg(long)]
+    approval_task: String,
+    #[arg(long)]
+    approval_source: String,
+    #[arg(long)]
+    actor: String,
+    #[arg(long)]
+    expires_at: Option<String>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct AuditDispositionRevokeArgs {
+    #[arg(long)]
+    id: String,
+    #[arg(long)]
+    actor: String,
+    #[arg(long)]
+    reason: String,
     #[arg(long)]
     json: bool,
 }
@@ -956,7 +1015,7 @@ pub enum InterfaceError {
 
 impl Cli {
     pub fn requests_json(&self) -> bool {
-        matches!(&self.command, Command::Audit(args) if args.json)
+        matches!(&self.command, Command::Audit(args) if audit_args_request_json(args))
             || matches!(
                 &self.command,
                 Command::Task(TaskArgs {
@@ -964,6 +1023,18 @@ impl Cli {
                 }) if args.json
             )
     }
+}
+
+fn audit_args_request_json(args: &AuditArgs) -> bool {
+    args.json
+        || matches!(
+            &args.action,
+            Some(AuditAction::Disposition(AuditDispositionArgs {
+                action: AuditDispositionAction::Add(AuditDispositionAddArgs { json: true, .. })
+                    | AuditDispositionAction::List { json: true }
+                    | AuditDispositionAction::Revoke(AuditDispositionRevokeArgs { json: true, .. })
+            }))
+        )
 }
 
 impl InterfaceError {
@@ -1924,35 +1995,88 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 .expect("value provided");
             print_context_score(&service.score_context(id)?);
         }
-        Command::Audit(args) => {
-            let result = service.audit()?;
-            if args.json {
-                let code = if result.strict_passes() {
-                    "AUDIT_CLEAR"
+        Command::Audit(args) => match args.action {
+            Some(AuditAction::Disposition(args)) => match args.action {
+                AuditDispositionAction::Add(args) => {
+                    let id = service.add_audit_disposition(AuditDispositionAddInput {
+                        finding_key: args.finding_key,
+                        entity_id: args.entity_id,
+                        rationale: args.rationale,
+                        provenance: args.provenance,
+                        approval_task_id: args.approval_task,
+                        approval_source: args.approval_source,
+                        actor: args.actor,
+                        expires_at: args.expires_at,
+                    })?;
+                    if args.json {
+                        println!("{{\"ok\":true,\"id\":{id},\"status\":\"accepted\"}}");
+                    } else {
+                        println!("Audit disposition #{id} accepted.");
+                    }
+                }
+                AuditDispositionAction::List { json } => {
+                    let dispositions = service.list_audit_dispositions()?;
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "ok": true,
+                                "dispositions": dispositions,
+                            }))
+                            .expect("audit dispositions serialize")
+                        );
+                    } else {
+                        print_audit_dispositions(&dispositions);
+                    }
+                }
+                AuditDispositionAction::Revoke(args) => {
+                    let id = parse_optional_integer(
+                        "audit disposition revoke: --id",
+                        Some(args.id),
+                    )?
+                    .expect("value provided");
+                    service.revoke_audit_disposition(AuditDispositionRevokeInput {
+                        id,
+                        actor: args.actor,
+                        reason: args.reason,
+                    })?;
+                    if args.json {
+                        println!("{{\"ok\":true,\"id\":{id},\"status\":\"revoked\"}}");
+                    } else {
+                        println!("Audit disposition #{id} revoked.");
+                    }
+                }
+            },
+            None => {
+                let result = service.audit()?;
+                if args.json {
+                    let code = if result.strict_passes() {
+                        "AUDIT_CLEAR"
+                    } else {
+                        "AUDIT_DEBT"
+                    };
+                    println!(
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "ok": result.strict_passes(),
+                            "code": code,
+                            "message": if result.strict_passes() {
+                                "All implemented audit checks passed with no unknown coverage."
+                            } else {
+                                "Audit debt or unknown coverage remains."
+                            },
+                            "audit": result,
+                        }))
+                        .expect("audit result serializes")
+                    );
                 } else {
-                    "AUDIT_DEBT"
-                };
-                println!(
-                    "{}",
-                    serde_json::to_string(&serde_json::json!({
-                        "ok": result.strict_passes(),
-                        "code": code,
-                        "message": if result.strict_passes() {
-                            "All implemented audit checks passed with no unknown coverage."
-                        } else {
-                            "Audit debt or unknown coverage remains."
-                        },
-                        "audit": result,
-                    }))
-                    .expect("audit result serializes")
-                );
-            } else {
-                print_audit(&result);
+                    print_audit(&result);
+                }
+                if args.strict && !result.strict_passes() {
+                    std::process::exit(6);
+                }
             }
-            if args.strict && !result.strict_passes() {
-                std::process::exit(6);
-            }
-        }
+        },
         Command::Propose(args) => print_proposals(&service.propose(args.commit)?),
         Command::Query(args) => match args.view {
             QueryView::Matrix(args) => print_matrix(&service.query_matrix()?, args.numeric),
@@ -2159,6 +2283,25 @@ fn print_context_score(result: &ContextScoreResult) {
 fn print_audit(result: &crate::domain::AuditResult) {
     println!("=== Harness Drift Audit ===");
     println!("Doctor health: {}", result.health_scope);
+    println!();
+    println!(
+        "Accepted historical findings: {}",
+        result.accepted_findings.len()
+    );
+    for finding in &result.accepted_findings {
+        println!(
+            "  - {}:{} via disposition #{} (approval task {}, actor {})",
+            finding.finding_key,
+            finding.entity_id,
+            finding.disposition_id,
+            finding.approval_task_id,
+            finding.actor
+        );
+        println!("    title: {}", finding.title);
+        println!("    rationale: {}", finding.rationale);
+        println!("    provenance: {}", finding.provenance);
+        println!("    approval: {}", finding.approval_source);
+    }
     print_audit_category(
         "Orphaned stories (planned/in-progress, no traces)",
         &result.orphaned_stories,
@@ -2244,6 +2387,29 @@ fn print_audit_category(label: &str, findings: &[crate::domain::AuditFinding]) {
     println!("{label}: {}", findings.len());
     for finding in findings {
         println!("  - {}: {}", finding.id, finding.title);
+    }
+}
+
+fn print_audit_dispositions(dispositions: &[AuditDispositionRecord]) {
+    println!("Audit dispositions: {}", dispositions.len());
+    for disposition in dispositions {
+        println!(
+            "  #{} {}:{} [{}] approval={} actor={}",
+            disposition.id,
+            disposition.finding_key,
+            disposition.entity_id,
+            disposition.status,
+            disposition.approval_task_id,
+            disposition.actor
+        );
+        println!("    rationale: {}", disposition.rationale);
+        println!("    provenance: {}", disposition.provenance);
+        if let Some(expires_at) = &disposition.expires_at {
+            println!("    expires_at: {expires_at}");
+        }
+        if let Some(reason) = &disposition.revocation_reason {
+            println!("    revocation: {reason}");
+        }
     }
 }
 
@@ -3647,11 +3813,28 @@ mod tests {
             .to_string();
         assert!(audit_help.contains("--strict"));
         assert!(audit_help.contains("--json"));
+        assert!(audit_help.contains("disposition"));
+
+        let disposition_add_help = command
+            .find_subcommand_mut("audit")
+            .unwrap()
+            .find_subcommand_mut("disposition")
+            .unwrap()
+            .find_subcommand_mut("add")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(disposition_add_help.contains("--finding-key"));
+        assert!(disposition_add_help.contains("--approval-task"));
+        assert!(disposition_add_help.contains("--provenance"));
     }
 
     #[test]
     fn audit_json_mode_is_detected_for_structured_errors() {
         let cli = Cli::try_parse_from(["harness-cli", "audit", "--strict", "--json"]).unwrap();
+        assert!(cli.requests_json());
+        let cli =
+            Cli::try_parse_from(["harness-cli", "audit", "disposition", "list", "--json"]).unwrap();
         assert!(cli.requests_json());
     }
 

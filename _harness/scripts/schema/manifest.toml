@@ -55,3 +55,8 @@ sha256 = "834026e7ba62d6c07ab6288ccf686c40d85853ef8d8749447f5d8a1246923a69"
 version = 11
 path = "011-proof-provenance.sql"
 sha256 = "457efcd3c958d52d94bc85e90ae4402ccbfc4ccd90476f129cda1589078ca2bd"
+
+[[migration]]
+version = 12
+path = "012-audit-disposition.sql"
+sha256 = "a5af5ab9060c71301b711d5ce133cf2c92c3d839e08889a421e1d39894ef5ecb"

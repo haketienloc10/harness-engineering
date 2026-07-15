@@ -14,9 +14,9 @@
 - Historical records and retained recovery databases are immutable evidence;
   canonical current records are created only through CLI write paths.
 
-These audit semantics are proposed by CLP-001 and remain implementation-blocked
-until the required `architecture-direction` and `risk-policy` human approvals
-are recorded.
+These audit semantics were approved by the user and recorded under
+`TASK-000020` as the required `architecture-direction` and `risk-policy`
+approvals before implementation or operational migration.
 
 ## Application and CLI Contract
 
@@ -32,8 +32,9 @@ are recorded.
 
 ## Data and Migration Ownership
 
-- A canonical source migration owns durable audit dispositions and its indexes
-  or constraints.
+- Canonical migration `012-audit-disposition.sql` owns durable audit
+  dispositions, the approval-task foreign key, allowed finding keys, accepted
+  uniqueness, revocation invariants and indexes.
 - The packaged CLI and operational database move through the existing backup,
   migration, doctor, rollback, and distribution qualification contracts.
 - No direct operational SQL write is permitted.
@@ -45,6 +46,8 @@ are recorded.
 - Audit output separates unresolved, accepted, expired, and revoked findings.
 - Task traces and capsules identify actual work performed and discovered
   friction.
+- `audit disposition list` shows accepted, expired and revoked durable rows;
+  `audit` separately shows only currently effective accepted findings.
 
 ## Alternatives Rejected
 
@@ -53,4 +56,3 @@ are recorded.
 2. Suppressing findings in audit queries: hides debt and weakens validation.
 3. Re-inserting legacy backlog id `4` through SQL: loses command provenance and
    violates the operational write boundary.
-

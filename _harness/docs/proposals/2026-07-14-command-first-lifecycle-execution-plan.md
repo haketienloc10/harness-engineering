@@ -2,10 +2,11 @@
 
 Date: 2026-07-14
 
-Status: Release-qualified. The 2026-07-15 CL-70 qualification records all 22
-work items completed on the approved Linux `x86_64` scope. Plan-level terminal
-audit still exposes historical debt, including the non-reproducible original
-backlog `#4` closure requirement after the canonical DB rebuild.
+Status: Terminal closure in progress. The 2026-07-15 CL-70 qualification keeps
+all original 22 work items completed on the approved Linux `x86_64` scope.
+CL-71 Tasks `TASK-000018..20` have made release qualification reproducible and
+reconciled the historical audit/backlog state; final clean-HEAD qualification
+remains pending.
 
 Plan ID: `CLP-001`
 
@@ -35,6 +36,7 @@ Plan ID: `CLP-001`
 | CL-60 | completed | Format, 66 workspace tests, Clippy, packaged/source command parity and installer state-safety proof pass at HEAD `0df8291`. |
 | CL-61 | completed | Outcome-derived human/JSON audit report, strict debt semantics, explicit unknown coverage, multiple measured improvements and dogfood observation gaps are proven by `TASK-000011` and `docs/stories/CL-61-evidence-based-maturity/validation.md`. |
 | CL-70 | completed | `TASK-000012..14`; repeatable state/distribution suite, source/packaged matrices, installer missing-CLI preflight, deterministic fresh-clone rebuild, parity/latency evidence and terminal H5 observation. |
+| CL-71 | in_progress | `TASK-000018` bootstrap and `TASK-000019` release reproducibility are completed. Approved `TASK-000020` owns migration 012, story/audit reconciliation and canonical backlog successor `#2`; terminal Task 3 remains. |
 
 Original approved baseline (historical, not current runtime state):
 
@@ -1918,10 +1920,45 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   code/docs/packaged binary together and preserve all operational evidence; no
   migration rollback is required.
 
+### 2026-07-15 — Reconcile CL-71 durable audit and backlog state
+
+- Author/agent: Codex task `TASK-000020`, after the user explicitly approved
+  architecture/risk policy, both historical dispositions, the differently
+  numbered backlog successor and backup-first operational migration.
+- Affected work items: CL-11, CL-71, US-001, US-002, US-003 and US-005; the 22
+  original work items remain completed.
+- Current evidence: story-linked proofs and detailed traces `#22..26` validate
+  the retained CL-11/US contracts. Canonical migration
+  `012-audit-disposition.sql` adds approval-bound, visible, revocable/expiring
+  historical dispositions. Operational migration `001..011` to `001..012`
+  created backup
+  `harness.db.backups/harness.db.1784104246235156032.v11.main.a5af5ab9060c.bak`
+  and strict doctor is `HEALTHY`.
+- Historical disposition: disposition `#1` retains `TASK-000006` without
+  fabricating a trace and cites replacement `TASK-000007`; disposition `#2`
+  retains unrooted trace `#2` and cites `TASK-000002` proof at `0df8291`.
+  Human and JSON audit output keep both visible while strict debt counts only
+  unresolved findings. Revocation/expiry re-opens debt; health failure,
+  unknown coverage, destructive recovery and weakened validation cannot be
+  accepted.
+- Backlog provenance: retained legacy backlog `#4` maps to CLI-created
+  canonical successor `#2`; its notes store every recovery path and checksum.
+  Successor `#2` remains open until final qualification supplies measured
+  doctor, release, H5, audit and lifecycle outcomes.
+- Rollback: restore the named pre-v12 backup with the prior packaged binary and
+  revert migration/source/CLI/docs together. Do not drop the table, rewrite
+  historical rows or use operational SQL writes. Story/backlog correction must
+  continue through CLI commands.
+- Compatibility obligation: retain legacy `schema_version`, current parser and
+  compatibility command surfaces through the observed N+2 window. No removal
+  is authorized by CL-71; an earlier cutover or additional platform requires a
+  separately approved story.
+
 ## 29. Immediate next action
 
-Preserve CL-70 release evidence and use the observed compatibility window
-before any N+2 removal. Reconcile or explicitly accept the historical audit and
-backlog `#4` debt separately; do not fabricate missing canonical records.
-Future platform additions or earlier compatibility breaks require a new
-approved story.
+Finish `TASK-000020` only after its full proof ladder passes and its capsule is
+committed. Then run the CL-71 terminal qualification task from a clean committed
+HEAD, close canonical backlog successor `#2` with measured outcomes, finish the
+task through the CLI, and repeat post-finish doctor/audit checks. Preserve the
+N+2 compatibility window; future platform additions or earlier compatibility
+breaks require a new approved story.

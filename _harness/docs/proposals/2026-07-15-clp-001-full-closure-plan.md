@@ -2,7 +2,8 @@
 
 Date: 2026-07-15
 
-Status: Ready for execution in a new session
+Status: Execution in progress — Tasks 0 and 1 completed; Task 2 approved and
+implementing durable reconciliation
 
 Parent plan:
 `_harness/docs/proposals/2026-07-14-command-first-lifecycle-execution-plan.md`
@@ -362,4 +363,3 @@ Suggested instruction for the next session:
 > sequentially. Start with the required command-first lifecycle task, stop for
 > every listed human gate, do not fabricate historical records, use structured
 > proof runs, and do not finish until the terminal acceptance checklist passes.
-

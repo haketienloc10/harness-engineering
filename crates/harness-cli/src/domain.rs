@@ -1031,6 +1031,39 @@ pub struct AuditFinding {
     pub title: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditDispositionRecord {
+    pub id: i64,
+    pub finding_key: String,
+    pub entity_id: String,
+    pub status: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub revoked_by: Option<String>,
+    pub revocation_reason: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct AcceptedAuditFinding {
+    pub disposition_id: i64,
+    pub finding_key: String,
+    pub entity_id: String,
+    pub title: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct ObservationCount {
     pub observed: i64,
@@ -1125,6 +1158,7 @@ impl MaturityReport {
 #[derive(Debug, PartialEq, Eq, Default, Serialize)]
 pub struct AuditResult {
     pub health_scope: String,
+    pub accepted_findings: Vec<AcceptedAuditFinding>,
     pub orphaned_stories: Vec<AuditFinding>,
     pub terminal_tasks_without_traces: Vec<AuditFinding>,
     pub unrooted_traces: Vec<AuditFinding>,

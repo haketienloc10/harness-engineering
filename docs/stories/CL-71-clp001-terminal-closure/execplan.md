@@ -11,7 +11,8 @@ meet every terminal acceptance criterion.
    non-behavior-bearing task.
 2. `TASK-000019`: release-suite reproducibility under a normal
    behavior-bearing task.
-3. Durable-state and audit reconciliation under a high-risk task.
+3. `TASK-000020`: durable-state and audit reconciliation under a high-risk
+   task.
 4. Terminal plan qualification from a clean committed `HEAD` under a high-risk
    task that owns no new product behavior.
 
@@ -31,6 +32,11 @@ Pause before:
 
 Task 2 requires recorded `architecture-direction` and `risk-policy` approval.
 Task 3 requires its policy-selected high-risk approval before finish.
+
+`TASK-000020` received both approvals before migration `012`, disposition
+creation, story status correction or legacy backlog mapping. Human approval
+also explicitly covers the two historical findings, canonical successor id
+assignment and backup-first operational migration.
 
 ## Phase Gates
 

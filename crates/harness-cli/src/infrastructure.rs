@@ -14,22 +14,23 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::application::{
-    BacklogAddInput, BacklogCloseInput, BrownfieldImportResult, DecisionAddInput,
-    DecisionVerifyResult, FrictionAddInput, FrictionResolveInput, HarnessContext, InitResult,
-    IntakeInput, InterventionAddInput, InterventionFilter, MigrateResult, ProofRecord,
-    ProofRunInput, ProofRunRecord, QueryTable, StoryAddInput, StoryUpdateInput, StoryVerifyResult,
-    TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput, TaskFinishRecord,
-    TaskHandoffInput, TaskRefreshInput, TaskRefreshRecord, TaskStartInput, TaskStatusRecord,
-    TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput, TraceInput,
+    AuditDispositionAddInput, AuditDispositionRevokeInput, BacklogAddInput, BacklogCloseInput,
+    BrownfieldImportResult, DecisionAddInput, DecisionVerifyResult, FrictionAddInput,
+    FrictionResolveInput, HarnessContext, InitResult, IntakeInput, InterventionAddInput,
+    InterventionFilter, MigrateResult, ProofRecord, ProofRunInput, ProofRunRecord, QueryTable,
+    StoryAddInput, StoryUpdateInput, StoryVerifyResult, TaskApprovalInput,
+    TaskContextAcknowledgeInput, TaskFinishInput, TaskFinishRecord, TaskHandoffInput,
+    TaskRefreshInput, TaskRefreshRecord, TaskStartInput, TaskStatusRecord, TaskStoryLinkInput,
+    TaskTransitionInput, ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     compiled_tool_registry, infer_context_phase, jsonish_list, normalize_token, score_context,
-    score_trace, task_transition_allowed, validate_tool_description, AuditFinding, AuditResult,
-    BacklogFilter, BacklogRecord, ContextScoreResult, ContextScoreSource, DecisionRecord,
-    FrictionRecord, HarnessStats, ImprovementProposal, IntakeRecord, InterventionRecord,
-    MaturityReport, ObservationCount, RiskLane, StoryMatrixRecord, StoryVerifyAllItem,
-    StoryVerifyAllResult, StoryVerifyStatus, StructuredErrorResult, ToolArgSpec, ToolEntry,
-    TraceRecord, TraceScoreResult, TraceScoreSource,
+    score_trace, task_transition_allowed, validate_tool_description, AcceptedAuditFinding,
+    AuditDispositionRecord, AuditFinding, AuditResult, BacklogFilter, BacklogRecord,
+    ContextScoreResult, ContextScoreSource, DecisionRecord, FrictionRecord, HarnessStats,
+    ImprovementProposal, IntakeRecord, InterventionRecord, MaturityReport, ObservationCount,
+    RiskLane, StoryMatrixRecord, StoryVerifyAllItem, StoryVerifyAllResult, StoryVerifyStatus,
+    StructuredErrorResult, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult, TraceScoreSource,
 };
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
@@ -63,6 +64,19 @@ pub enum HarnessInfraError {
     ToolValidation(#[from] crate::domain::ToolValidationError),
     #[error("backlog close: backlog item '{0}' not found")]
     BacklogNotFound(i64),
+    #[error("audit disposition: finding key '{0}' cannot be accepted")]
+    InvalidAuditDispositionFinding(String),
+    #[error("audit disposition: finding '{finding_key}' for entity '{entity_id}' is not currently unresolved")]
+    AuditFindingNotUnresolved {
+        finding_key: String,
+        entity_id: String,
+    },
+    #[error("audit disposition: approval task '{0}' must contain architecture-direction and risk-policy approvals")]
+    AuditDispositionApprovalMissing(String),
+    #[error("audit disposition: id '{0}' not found")]
+    AuditDispositionNotFound(i64),
+    #[error("audit disposition: id '{0}' is already revoked")]
+    AuditDispositionAlreadyRevoked(i64),
     #[error("trace '{0}' not found")]
     TraceNotFound(i64),
     #[error("task '{0}' not found")]
@@ -673,6 +687,9 @@ pub trait HarnessRepository {
     ) -> Result<Vec<ToolEntry>>;
     fn query_interventions(&self, filter: InterventionFilter) -> Result<Vec<InterventionRecord>>;
     fn query_stats(&self) -> Result<HarnessStats>;
+    fn add_audit_disposition(&self, input: AuditDispositionAddInput) -> Result<i64>;
+    fn list_audit_dispositions(&self) -> Result<Vec<AuditDispositionRecord>>;
+    fn revoke_audit_disposition(&self, input: AuditDispositionRevokeInput) -> Result<()>;
     fn audit(&self) -> Result<AuditResult>;
     fn propose(&self, commit: bool) -> Result<Vec<ImprovementProposal>>;
     fn query_sql(&self, sql: &str) -> Result<QueryTable>;
@@ -1691,6 +1708,19 @@ impl HarnessRepository for SqliteHarnessRepository {
             )?;
             if !has_task {
                 findings.push("SCHEMA_CONTRACT_MISSING:task".to_owned());
+            }
+        }
+        if db_versions.last().copied().unwrap_or(0) >= 12 {
+            let has_audit_disposition: bool = connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM sqlite_master
+                   WHERE type='table' AND name='audit_disposition'
+                 )",
+                [],
+                |row| row.get(0),
+            )?;
+            if !has_audit_disposition {
+                findings.push("SCHEMA_CONTRACT_MISSING:audit_disposition".to_owned());
             }
         }
         let has_meta: bool = connection.query_row(
@@ -4015,6 +4045,183 @@ impl HarnessRepository for SqliteHarnessRepository {
             .map_err(HarnessInfraError::from)
     }
 
+    fn add_audit_disposition(&self, input: AuditDispositionAddInput) -> Result<i64> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if !matches!(
+            input.finding_key.as_str(),
+            "terminal_task_without_trace" | "unrooted_trace"
+        ) {
+            return Err(HarnessInfraError::InvalidAuditDispositionFinding(
+                input.finding_key,
+            ));
+        }
+        if [
+            &input.entity_id,
+            &input.rationale,
+            &input.provenance,
+            &input.approval_source,
+            &input.actor,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty())
+        {
+            return Err(HarnessInfraError::WorkflowInvalid(
+                "audit disposition fields must not be empty".to_owned(),
+            ));
+        }
+
+        let connection = self.open_existing()?;
+        let approval_count: i64 = connection.query_row(
+            "SELECT COUNT(DISTINCT gate) FROM task_approval
+             WHERE task_id=?1 AND gate IN ('architecture-direction','risk-policy');",
+            params![input.approval_task_id],
+            |row| row.get(0),
+        )?;
+        if approval_count != 2 {
+            return Err(HarnessInfraError::AuditDispositionApprovalMissing(
+                input.approval_task_id,
+            ));
+        }
+
+        let unresolved: i64 = match input.finding_key.as_str() {
+            "terminal_task_without_trace" => connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM task
+                   WHERE task.id=?1
+                     AND task.status IN ('completed','abandoned','failed')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM trace WHERE trace.intake_id=task.intake_id
+                     )
+                 );",
+                params![input.entity_id],
+                |row| row.get(0),
+            )?,
+            "unrooted_trace" => connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM trace
+                   WHERE CAST(trace.id AS TEXT)=?1
+                     AND NOT EXISTS (
+                       SELECT 1 FROM task WHERE task.intake_id=trace.intake_id
+                     )
+                 );",
+                params![input.entity_id],
+                |row| row.get(0),
+            )?,
+            _ => unreachable!("finding key validated above"),
+        };
+        if unresolved == 0 {
+            return Err(HarnessInfraError::AuditFindingNotUnresolved {
+                finding_key: input.finding_key,
+                entity_id: input.entity_id,
+            });
+        }
+        if let Some(expires_at) = input.expires_at.as_deref() {
+            let future: i64 = connection.query_row(
+                "SELECT COALESCE(datetime(?1) > datetime('now'), 0);",
+                params![expires_at],
+                |row| row.get(0),
+            )?;
+            if future == 0 {
+                return Err(HarnessInfraError::WorkflowInvalid(
+                    "audit disposition --expires-at must be a valid future SQLite datetime"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        connection.execute(
+            "INSERT INTO audit_disposition(
+               finding_key, entity_id, rationale, provenance, approval_task_id,
+               approval_source, actor, expires_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+            params![
+                input.finding_key,
+                input.entity_id,
+                input.rationale,
+                input.provenance,
+                input.approval_task_id,
+                input.approval_source,
+                input.actor,
+                input.expires_at,
+            ],
+        )?;
+        Ok(connection.last_insert_rowid())
+    }
+
+    fn list_audit_dispositions(&self) -> Result<Vec<AuditDispositionRecord>> {
+        let connection = self.open_existing()?;
+        let mut statement = connection.prepare(
+            "SELECT id, finding_key, entity_id,
+                    CASE
+                      WHEN status='accepted' AND expires_at IS NOT NULL
+                           AND datetime(expires_at) <= datetime('now') THEN 'expired'
+                      ELSE status
+                    END AS effective_status,
+                    rationale, provenance, approval_task_id, approval_source,
+                    actor, created_at, expires_at, revoked_at, revoked_by,
+                    revocation_reason
+             FROM audit_disposition ORDER BY id;",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(AuditDispositionRecord {
+                id: row.get(0)?,
+                finding_key: row.get(1)?,
+                entity_id: row.get(2)?,
+                status: row.get(3)?,
+                rationale: row.get(4)?,
+                provenance: row.get(5)?,
+                approval_task_id: row.get(6)?,
+                approval_source: row.get(7)?,
+                actor: row.get(8)?,
+                created_at: row.get(9)?,
+                expires_at: row.get(10)?,
+                revoked_at: row.get(11)?,
+                revoked_by: row.get(12)?,
+                revocation_reason: row.get(13)?,
+            })
+        })?;
+        collect_rows(rows)
+    }
+
+    fn revoke_audit_disposition(&self, input: AuditDispositionRevokeInput) -> Result<()> {
+        let report = self.doctor()?;
+        if !report.ok || report.code != "HEALTHY" {
+            return Err(HarnessInfraError::UnsafeDurableState(report.code));
+        }
+        if input.actor.trim().is_empty() || input.reason.trim().is_empty() {
+            return Err(HarnessInfraError::WorkflowInvalid(
+                "audit disposition revoke actor and reason must not be empty".to_owned(),
+            ));
+        }
+        let connection = self.open_existing()?;
+        let status = connection
+            .query_row(
+                "SELECT status FROM audit_disposition WHERE id=?1;",
+                params![input.id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match status.as_deref() {
+            None => return Err(HarnessInfraError::AuditDispositionNotFound(input.id)),
+            Some("revoked") => {
+                return Err(HarnessInfraError::AuditDispositionAlreadyRevoked(input.id))
+            }
+            Some("accepted") => {}
+            Some(_) => unreachable!("schema constrains disposition status"),
+        }
+        connection.execute(
+            "UPDATE audit_disposition
+             SET status='revoked', revoked_at=datetime('now'), revoked_by=?2,
+                 revocation_reason=?3
+             WHERE id=?1;",
+            params![input.id, input.actor, input.reason],
+        )?;
+        Ok(())
+    }
+
     fn audit(&self) -> Result<AuditResult> {
         let connection = self.open_existing()?;
         let release_qualification_observed =
@@ -4041,8 +4248,40 @@ impl HarnessRepository for SqliteHarnessRepository {
         } else {
             release_coverage
         };
+        let terminal_tasks_without_traces = audit_findings(
+            &connection,
+            "SELECT task.id, task.summary
+             FROM task
+             LEFT JOIN trace ON trace.intake_id=task.intake_id
+             WHERE task.status IN ('completed','abandoned','failed')
+             GROUP BY task.id, task.summary
+             HAVING COUNT(trace.id)=0
+             ORDER BY task.id;",
+        )?;
+        let unrooted_traces = audit_findings(
+            &connection,
+            "SELECT CAST(trace.id AS TEXT), trace.task_summary
+             FROM trace
+             LEFT JOIN task ON task.intake_id=trace.intake_id
+             WHERE task.id IS NULL
+             ORDER BY trace.id;",
+        )?;
+        let mut accepted_findings = Vec::new();
+        let terminal_tasks_without_traces = reconcile_audit_dispositions(
+            &connection,
+            "terminal_task_without_trace",
+            terminal_tasks_without_traces,
+            &mut accepted_findings,
+        )?;
+        let unrooted_traces = reconcile_audit_dispositions(
+            &connection,
+            "unrooted_trace",
+            unrooted_traces,
+            &mut accepted_findings,
+        )?;
         let mut result = AuditResult {
             health_scope: "not_checked; run doctor for repository and database health".to_owned(),
+            accepted_findings,
             orphaned_stories: audit_findings(
                 &connection,
                 "SELECT story.id, story.title
@@ -4051,24 +4290,8 @@ impl HarnessRepository for SqliteHarnessRepository {
                  WHERE story.status IN ('planned','in_progress') AND trace.id IS NULL
                  ORDER BY story.id;",
             )?,
-            terminal_tasks_without_traces: audit_findings(
-                &connection,
-                "SELECT task.id, task.summary
-                 FROM task
-                 LEFT JOIN trace ON trace.intake_id=task.intake_id
-                 WHERE task.status IN ('completed','abandoned','failed')
-                 GROUP BY task.id, task.summary
-                 HAVING COUNT(trace.id)=0
-                 ORDER BY task.id;",
-            )?,
-            unrooted_traces: audit_findings(
-                &connection,
-                "SELECT CAST(trace.id AS TEXT), trace.task_summary
-                 FROM trace
-                 LEFT JOIN task ON task.intake_id=trace.intake_id
-                 WHERE task.id IS NULL
-                 ORDER BY trace.id;",
-            )?,
+            terminal_tasks_without_traces,
+            unrooted_traces,
             completed_tasks_below_gates: audit_findings(
                 &connection,
                 "SELECT task.id, task.summary
@@ -5025,6 +5248,49 @@ fn audit_findings(connection: &Connection, sql: &str) -> Result<Vec<AuditFinding
     collect_rows(rows)
 }
 
+fn reconcile_audit_dispositions(
+    connection: &Connection,
+    finding_key: &str,
+    findings: Vec<AuditFinding>,
+    accepted: &mut Vec<AcceptedAuditFinding>,
+) -> Result<Vec<AuditFinding>> {
+    let mut unresolved = Vec::new();
+    for finding in findings {
+        let disposition = connection
+            .query_row(
+                "SELECT id, rationale, provenance, approval_task_id,
+                        approval_source, actor, created_at, expires_at
+                 FROM audit_disposition
+                 WHERE finding_key=?1 AND entity_id=?2 AND status='accepted'
+                   AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
+                 ORDER BY id DESC LIMIT 1;",
+                params![finding_key, finding.id],
+                |row| {
+                    Ok(AcceptedAuditFinding {
+                        disposition_id: row.get(0)?,
+                        finding_key: finding_key.to_owned(),
+                        entity_id: finding.id.clone(),
+                        title: finding.title.clone(),
+                        rationale: row.get(1)?,
+                        provenance: row.get(2)?,
+                        approval_task_id: row.get(3)?,
+                        approval_source: row.get(4)?,
+                        actor: row.get(5)?,
+                        created_at: row.get(6)?,
+                        expires_at: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        if let Some(disposition) = disposition {
+            accepted.push(disposition);
+        } else {
+            unresolved.push(finding);
+        }
+    }
+    Ok(unresolved)
+}
+
 fn maturity_report(connection: &Connection) -> Result<MaturityReport> {
     let (terminal_tasks, tiny_tasks, normal_tasks, high_risk_tasks): (i64, i64, i64, i64) =
         connection.query_row(
@@ -5957,7 +6223,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 11);
+        assert_eq!(schema_version, 12);
         let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -6849,7 +7115,7 @@ mod tests {
         assert!(!db_path.exists());
         assert_eq!(
             report.source_versions,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
     }
 
@@ -6878,7 +7144,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (12)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (13)", [])
             .unwrap();
         drop(connection);
         let db_path = repository.db_path.clone();
@@ -6892,7 +7158,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            12
+            13
         );
     }
 
@@ -7260,6 +7526,25 @@ mod tests {
     }
 
     #[test]
+    fn doctor_rejects_a_claimed_disposition_version_without_its_table() {
+        let (_temp_dir, repository) = doctor_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute("DROP TABLE audit_disposition", [])
+            .unwrap();
+        drop(connection);
+
+        let report = repository.doctor().unwrap();
+
+        assert_eq!(report.code, "DB_UNHEALTHY");
+        assert!(report
+            .findings
+            .iter()
+            .any(|finding| finding == "SCHEMA_CONTRACT_MISSING:audit_disposition"));
+    }
+
+    #[test]
     fn migrate_applies_story_verify_columns_to_existing_database() {
         let (_temp_dir, repository) = doctor_repository();
         let connection = repository.open_or_create().unwrap();
@@ -7269,11 +7554,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            11
+            12
         );
         let story_columns = table_columns(&connection, "story");
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -7400,7 +7685,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (12)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (13)", [])
             .unwrap();
         drop(connection);
         let before = sha256_file(&repository.db_path).unwrap();
@@ -7419,7 +7704,7 @@ mod tests {
 
         let result = repository.migrate().unwrap();
 
-        assert_eq!(result.current_version, 11);
+        assert_eq!(result.current_version, 12);
         assert!(result.applied.is_empty());
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
@@ -7542,7 +7827,7 @@ mod tests {
         // Upgrade: migration 005 must infer kind from the command prefix.
         assert_eq!(
             repository.migrate().unwrap().applied,
-            vec![5, 6, 7, 8, 9, 10, 11]
+            vec![5, 6, 7, 8, 9, 10, 11, 12]
         );
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
@@ -8092,6 +8377,168 @@ mod tests {
             .query_backlog(BacklogFilter::Open)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn audit_dispositions_require_approval_remain_visible_and_reopen_when_inactive() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        let connection = repository.open_existing().unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO intake(id,input_type,summary,risk_lane)
+                   VALUES (201,'harness_improvement','approval task','high_risk');
+                 INSERT INTO task(
+                   id,intake_id,status,risk_lane,behavior_bearing,summary,worktree,
+                   context_manifest_json,context_manifest_checksum,capsule_required
+                 ) VALUES (
+                   'TASK-APPROVAL',201,'in_progress','high_risk',1,'approval task',
+                   '/tmp/approval','{\"must_read\":[]}','fixture',1
+                 );
+                 INSERT INTO task_approval(task_id,gate,source,evidence)
+                   VALUES ('TASK-APPROVAL','architecture-direction','human','approved');
+                 INSERT INTO task_approval(task_id,gate,source,evidence)
+                   VALUES ('TASK-APPROVAL','risk-policy','human','approved');
+                 INSERT INTO intake(id,input_type,summary,risk_lane)
+                   VALUES (202,'maintenance','historical task','normal');
+                 INSERT INTO task(
+                   id,intake_id,status,outcome,risk_lane,behavior_bearing,summary,worktree,
+                   context_manifest_json,context_manifest_checksum,capsule_required
+                 ) VALUES (
+                   'TASK-HIST',202,'abandoned','reclassified','normal',0,'historical task',
+                   '/tmp/historical','{\"must_read\":[]}','fixture',1
+                 );",
+            )
+            .unwrap();
+        let trace_id = repository
+            .record_trace(TraceInput {
+                task_summary: "historical unrooted trace".to_owned(),
+                intake_id: None,
+                story_id: None,
+                agent: Some("codex".to_owned()),
+                outcome: Some("completed".to_owned()),
+                duration_seconds: Some(1),
+                token_estimate: Some(1),
+                friction: Some("none".to_owned()),
+                notes: Some("immutable proof reference".to_owned()),
+                actions: CsvList::from_optional(Some("observed proof".to_owned())),
+                files_read: CsvList::from_optional(Some("docs/tasks/proof.md".to_owned())),
+                files_changed: CsvList::from_optional(None),
+                decisions: CsvList::from_optional(Some("preserve history".to_owned())),
+                errors: CsvList::from_optional(None),
+            })
+            .unwrap();
+
+        let initial = repository.audit().unwrap();
+        assert!(initial
+            .terminal_tasks_without_traces
+            .iter()
+            .any(|finding| finding.id == "TASK-HIST"));
+        assert!(initial
+            .unrooted_traces
+            .iter()
+            .any(|finding| finding.id == trace_id.to_string()));
+
+        assert!(matches!(
+            repository.add_audit_disposition(AuditDispositionAddInput {
+                finding_key: "terminal_task_without_trace".to_owned(),
+                entity_id: "TASK-HIST".to_owned(),
+                rationale: "historical replacement".to_owned(),
+                provenance: "immutable capsule".to_owned(),
+                approval_task_id: "TASK-HIST".to_owned(),
+                approval_source: "human".to_owned(),
+                actor: "codex".to_owned(),
+                expires_at: None,
+            }),
+            Err(HarnessInfraError::AuditDispositionApprovalMissing(task))
+                if task == "TASK-HIST"
+        ));
+        assert!(matches!(
+            repository.add_audit_disposition(AuditDispositionAddInput {
+                finding_key: "unknown_coverage".to_owned(),
+                entity_id: "release".to_owned(),
+                rationale: "forbidden".to_owned(),
+                provenance: "none".to_owned(),
+                approval_task_id: "TASK-APPROVAL".to_owned(),
+                approval_source: "human".to_owned(),
+                actor: "codex".to_owned(),
+                expires_at: None,
+            }),
+            Err(HarnessInfraError::InvalidAuditDispositionFinding(key))
+                if key == "unknown_coverage"
+        ));
+
+        let task_disposition = repository
+            .add_audit_disposition(AuditDispositionAddInput {
+                finding_key: "terminal_task_without_trace".to_owned(),
+                entity_id: "TASK-HIST".to_owned(),
+                rationale: "abandoned after risk reclassification".to_owned(),
+                provenance: "task outcome and replacement task".to_owned(),
+                approval_task_id: "TASK-APPROVAL".to_owned(),
+                approval_source: "human approval".to_owned(),
+                actor: "codex".to_owned(),
+                expires_at: None,
+            })
+            .unwrap();
+        let trace_disposition = repository
+            .add_audit_disposition(AuditDispositionAddInput {
+                finding_key: "unrooted_trace".to_owned(),
+                entity_id: trace_id.to_string(),
+                rationale: "persisted trace identifies existing proof".to_owned(),
+                provenance: "proof commit".to_owned(),
+                approval_task_id: "TASK-APPROVAL".to_owned(),
+                approval_source: "human approval".to_owned(),
+                actor: "codex".to_owned(),
+                expires_at: None,
+            })
+            .unwrap();
+
+        let accepted = repository.audit().unwrap();
+        assert!(!accepted
+            .terminal_tasks_without_traces
+            .iter()
+            .any(|finding| finding.id == "TASK-HIST"));
+        assert!(!accepted
+            .unrooted_traces
+            .iter()
+            .any(|finding| finding.id == trace_id.to_string()));
+        assert_eq!(accepted.accepted_findings.len(), 2);
+        assert_eq!(repository.list_audit_dispositions().unwrap().len(), 2);
+
+        repository
+            .revoke_audit_disposition(AuditDispositionRevokeInput {
+                id: task_disposition,
+                actor: "reviewer".to_owned(),
+                reason: "re-open for review".to_owned(),
+            })
+            .unwrap();
+        let revoked = repository.audit().unwrap();
+        assert!(revoked
+            .terminal_tasks_without_traces
+            .iter()
+            .any(|finding| finding.id == "TASK-HIST"));
+        assert_eq!(
+            repository.list_audit_dispositions().unwrap()[0].status,
+            "revoked"
+        );
+
+        connection
+            .execute(
+                "UPDATE audit_disposition SET expires_at='2000-01-01 00:00:00'
+                 WHERE id=?1;",
+                params![trace_disposition],
+            )
+            .unwrap();
+        let expired = repository.audit().unwrap();
+        assert!(expired
+            .unrooted_traces
+            .iter()
+            .any(|finding| finding.id == trace_id.to_string()));
+        assert!(expired.accepted_findings.is_empty());
+        assert_eq!(
+            repository.list_audit_dispositions().unwrap()[1].status,
+            "expired"
+        );
     }
 
     #[test]

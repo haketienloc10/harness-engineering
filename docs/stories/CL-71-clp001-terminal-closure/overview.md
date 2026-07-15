@@ -2,7 +2,7 @@
 
 ## Status
 
-planned
+in_progress
 
 ## Lane and Scope
 
@@ -48,3 +48,11 @@ Execution authority and the complete contract are in
 - Hiding accepted findings from human or JSON audit output.
 - Broadening the approved Linux `x86_64` platform scope.
 
+## Human Gates
+
+- `architecture-direction`: approved by the user for `TASK-000020`; durable
+  approval records the migration/CLI/disposition/backlog scope.
+- `risk-policy`: approved by the user for `TASK-000020`; durable approval
+  records strict-audit exclusions and expiry/revocation behavior.
+- The same explicit approval covers the two named historical findings, legacy
+  backlog `#4` successor mapping, and backup-first operational migration.

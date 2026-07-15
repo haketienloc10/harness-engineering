@@ -60,6 +60,10 @@ trace
 score-trace
 score-context
 audit
+audit disposition
+audit disposition add
+audit disposition list
+audit disposition revoke
 propose
 query
 query matrix

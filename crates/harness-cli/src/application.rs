@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use crate::domain::{
-    AuditResult, BacklogFilter, BacklogRecord, BoolFlag, ContextScoreResult, CsvList,
-    DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal, InputType, IntakeRecord,
-    InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult, StoryVerifyStatus,
-    ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
+    AuditDispositionRecord, AuditResult, BacklogFilter, BacklogRecord, BoolFlag,
+    ContextScoreResult, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
+    InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
+    StoryVerifyStatus, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
 };
 use crate::infrastructure::{
     DoctorReport, HarnessRepository, SqliteHarnessRepository, ToolCheckResult, WorkflowPolicy,
@@ -45,6 +45,25 @@ pub struct FrictionResolveInput {
     pub fingerprint: String,
     pub status: String,
     pub actual_outcome: String,
+}
+
+#[derive(Debug)]
+pub struct AuditDispositionAddInput {
+    pub finding_key: String,
+    pub entity_id: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AuditDispositionRevokeInput {
+    pub id: i64,
+    pub actor: String,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -546,6 +565,26 @@ impl HarnessService {
 
     pub fn audit(&self) -> crate::infrastructure::Result<AuditResult> {
         self.repository.audit()
+    }
+
+    pub fn add_audit_disposition(
+        &self,
+        input: AuditDispositionAddInput,
+    ) -> crate::infrastructure::Result<i64> {
+        self.repository.add_audit_disposition(input)
+    }
+
+    pub fn list_audit_dispositions(
+        &self,
+    ) -> crate::infrastructure::Result<Vec<AuditDispositionRecord>> {
+        self.repository.list_audit_dispositions()
+    }
+
+    pub fn revoke_audit_disposition(
+        &self,
+        input: AuditDispositionRevokeInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.revoke_audit_disposition(input)
     }
 
     pub fn propose(&self, commit: bool) -> crate::infrastructure::Result<Vec<ImprovementProposal>> {

@@ -54,6 +54,8 @@ pub struct TaskStartInput {
     pub risk_lane: Option<RiskLane>,
     pub lane_override_reason: Option<String>,
     pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub lease_seconds: Option<i64>,
     pub story_id: Option<String>,
     pub behavior_bearing: bool,
     pub risk_flags: Vec<String>,
@@ -65,6 +67,10 @@ pub struct TaskStatusRecord {
     pub status: String,
     pub risk_lane: String,
     pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub worktree: String,
+    pub lease_expires_at: Option<String>,
+    pub lease_state: String,
     pub story_id: Option<String>,
     pub allowed_next: Vec<String>,
     pub context_required: usize,
@@ -82,13 +88,18 @@ pub struct TaskTransitionInput {
     pub status: String,
     pub outcome: Option<String>,
     pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub lease_seconds: Option<i64>,
 }
 
 #[derive(Debug)]
 pub struct TaskHandoffInput {
     pub id: String,
     pub from_owner: String,
+    pub from_session: String,
     pub to_owner: String,
+    pub to_session: String,
+    pub lease_seconds: Option<i64>,
     pub source: String,
     pub evidence: String,
     pub scope: Option<String>,
@@ -100,12 +111,14 @@ pub struct TaskStoryLinkInput {
     pub story_id: String,
     pub role: String,
     pub owner: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug)]
 pub struct TaskFinishInput {
     pub id: String,
     pub owner: Option<String>,
+    pub session_id: Option<String>,
     pub trace_id: i64,
     pub friction: String,
     pub capsule_path: Option<String>,

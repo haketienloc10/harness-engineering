@@ -15,7 +15,8 @@ High-risk durable records, task ownership and behavior-bearing classification.
 acknowledgement; atomic intake/task/primary-story creation; explicit
 behavior-bearing input; doctor preflight; persisted policy manifest.
 
-## Deferred
+## Boundary
 
-Lease expiry/session identity remain deferred.
-`completed` remains owned solely by CL-43 `task finish`.
+`completed` remains owned solely by CL-43 `task finish`. Lease renewal is an
+explicit `task resume`; there is no background heartbeat or implicit session
+inference.

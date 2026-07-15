@@ -33,6 +33,10 @@ use crate::domain::{
 
 pub type Result<T> = std::result::Result<T, HarnessInfraError>;
 
+const DEFAULT_TASK_LEASE_SECONDS: i64 = 3_600;
+const MIN_TASK_LEASE_SECONDS: i64 = 60;
+const MAX_TASK_LEASE_SECONDS: i64 = 86_400;
+
 #[derive(Debug, Error)]
 pub enum HarnessInfraError {
     #[error("database not found at {0}. Run: harness init")]
@@ -67,12 +71,31 @@ pub enum HarnessInfraError {
     TaskStoryRequired,
     #[error("task start: story '{story_id}' is already active under owner '{owner}'")]
     TaskOwnerConflict { story_id: String, owner: String },
+    #[error("task identity requires --owner and --session together")]
+    TaskIdentityPairRequired,
+    #[error("task session required: task is leased to session '{0}'")]
+    TaskSessionRequired(String),
+    #[error("task session mismatch: task session is '{expected}', caller supplied '{actual}'")]
+    TaskSessionMismatch { expected: String, actual: String },
+    #[error("task lease duration must be between {MIN_TASK_LEASE_SECONDS} and {MAX_TASK_LEASE_SECONDS} seconds")]
+    InvalidTaskLeaseDuration,
+    #[error("task lease expired: run task resume with the matching owner and session")]
+    TaskLeaseExpired,
+    #[error("task lease conflict on {scope}: active task '{task_id}' is owned by '{owner}' in session '{session_id}'")]
+    TaskLeaseConflict {
+        scope: String,
+        task_id: String,
+        owner: String,
+        session_id: String,
+    },
     #[error("task owner mismatch: task owner is '{expected}', caller supplied '{actual}'")]
     TaskOwnerMismatch { expected: String, actual: String },
     #[error("task owner required: task is owned by '{0}'")]
     TaskOwnerRequired(String),
     #[error("task handoff: source and target owner must differ")]
     TaskHandoffSameOwner,
+    #[error("task handoff: source and target session must differ")]
+    TaskHandoffSameSession,
     #[error("task story link: role must be primary or secondary")]
     InvalidTaskStoryRole,
     #[error("task finish gate failed: {0}")]
@@ -533,6 +556,7 @@ type RepositoryProvenance = (
 type TaskFinishSource = (
     String,
     Option<String>,
+    Option<String>,
     String,
     i64,
     i64,
@@ -540,7 +564,10 @@ type TaskFinishSource = (
     String,
     Option<String>,
     Option<String>,
+    i64,
 );
+
+type TaskTransitionSource = (String, Option<String>, Option<String>, String, i64);
 
 #[derive(Debug)]
 struct ValidatedCapsule {
@@ -761,6 +788,112 @@ fn lane_rank(lane: &RiskLane) -> u8 {
         RiskLane::Normal => 1,
         RiskLane::HighRisk => 2,
     }
+}
+
+fn validate_task_identity(
+    owner: Option<&str>,
+    session_id: Option<&str>,
+    lease_seconds: Option<i64>,
+) -> Result<Option<i64>> {
+    match (owner, session_id) {
+        (None, None) if lease_seconds.is_none() => Ok(None),
+        (Some(owner), Some(session_id))
+            if !owner.trim().is_empty() && !session_id.trim().is_empty() =>
+        {
+            let lease_seconds = lease_seconds.unwrap_or(DEFAULT_TASK_LEASE_SECONDS);
+            if !(MIN_TASK_LEASE_SECONDS..=MAX_TASK_LEASE_SECONDS).contains(&lease_seconds) {
+                return Err(HarnessInfraError::InvalidTaskLeaseDuration);
+            }
+            Ok(Some(lease_seconds))
+        }
+        _ => Err(HarnessInfraError::TaskIdentityPairRequired),
+    }
+}
+
+fn require_matching_task_identity(
+    stored_owner: Option<&str>,
+    stored_session: Option<&str>,
+    supplied_owner: Option<&str>,
+    supplied_session: Option<&str>,
+) -> Result<()> {
+    if let Some(expected) = stored_owner {
+        let actual = supplied_owner
+            .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.to_owned()))?;
+        if actual != expected {
+            return Err(HarnessInfraError::TaskOwnerMismatch {
+                expected: expected.to_owned(),
+                actual: actual.to_owned(),
+            });
+        }
+    }
+    if let Some(expected) = stored_session {
+        let actual = supplied_session
+            .ok_or_else(|| HarnessInfraError::TaskSessionRequired(expected.to_owned()))?;
+        if actual != expected {
+            return Err(HarnessInfraError::TaskSessionMismatch {
+                expected: expected.to_owned(),
+                actual: actual.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn ensure_task_lease_available(
+    transaction: &rusqlite::Transaction<'_>,
+    task_id: &str,
+    worktree: &str,
+    session_id: &str,
+) -> Result<()> {
+    let conflict: Option<(String, String, String, String)> = transaction
+        .query_row(
+            "SELECT other.id, COALESCE(other.owner, '<none>'),
+                    COALESCE(other.session_id, '<legacy>'),
+                    CASE
+                      WHEN other.session_id=?3 THEN 'session'
+                      WHEN EXISTS (
+                        SELECT 1 FROM task_story mine
+                        JOIN task_story theirs ON theirs.story_id=mine.story_id
+                        WHERE mine.task_id=?1 AND mine.role='primary'
+                          AND theirs.task_id=other.id AND theirs.role='primary'
+                      ) THEN 'story'
+                      ELSE 'worktree'
+                    END
+             FROM task other
+             WHERE other.id != ?1
+               AND other.status IN ('open','in_progress','blocked','closing')
+               AND (other.session_id=?3 OR EXISTS (
+                    SELECT 1 FROM task_story mine
+                    JOIN task_story theirs ON theirs.story_id=mine.story_id
+                    WHERE mine.task_id=?1 AND mine.role='primary'
+                      AND theirs.task_id=other.id AND theirs.role='primary'
+               ) OR (other.worktree=?2 AND other.session_id IS NOT NULL
+                     AND other.lease_expires_at > datetime('now')))
+             ORDER BY CASE
+                        WHEN other.session_id=?3 THEN 0
+                        WHEN EXISTS (
+                          SELECT 1 FROM task_story mine
+                          JOIN task_story theirs ON theirs.story_id=mine.story_id
+                          WHERE mine.task_id=?1 AND mine.role='primary'
+                            AND theirs.task_id=other.id AND theirs.role='primary'
+                        ) THEN 1
+                        ELSE 2
+                      END,
+                      other.id
+             LIMIT 1;",
+            params![task_id, worktree, session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    if let Some((conflicting_task, owner, conflicting_session, scope)) = conflict {
+        return Err(HarnessInfraError::TaskLeaseConflict {
+            scope,
+            task_id: conflicting_task,
+            owner,
+            session_id: conflicting_session,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1724,10 +1857,14 @@ impl HarnessRepository for SqliteHarnessRepository {
             risk_lane: requested_lane,
             lane_override_reason,
             owner,
+            session_id,
+            lease_seconds,
             story_id,
             behavior_bearing,
             risk_flags,
         } = input;
+        let lease_seconds =
+            validate_task_identity(owner.as_deref(), session_id.as_deref(), lease_seconds)?;
         let policy = self.load_workflow_policy()?;
         let (recommended_lane, _) = policy.classify(&risk_flags);
         let recommended_lane = RiskLane::from_str(&recommended_lane)
@@ -1770,26 +1907,78 @@ impl HarnessRepository for SqliteHarnessRepository {
         let context_manifest_json = serde_json::to_string(&context_manifest)
             .map_err(|error| HarnessInfraError::Serialization(error.to_string()))?;
         let capsule_required = (lane_policy.capsule == "required") as i64;
+        let worktree = self.repo_root.to_string_lossy().into_owned();
         let mut connection = self.open_existing()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let (Some(story_id), Some(owner)) = (&story_id, &owner) {
-            let conflicting_owner: Option<String> = transaction
+        if let Some(session_id) = &session_id {
+            let conflicting_session: Option<(String, String)> = transaction
                 .query_row(
-                    "SELECT task.owner
+                    "SELECT id, COALESCE(owner, '<none>') FROM task
+                     WHERE session_id=?1
+                       AND status IN ('open','in_progress','blocked','closing')
+                     LIMIT 1;",
+                    params![session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((task_id, conflicting_owner)) = conflicting_session {
+                return Err(HarnessInfraError::TaskLeaseConflict {
+                    scope: "session".to_owned(),
+                    task_id,
+                    owner: conflicting_owner,
+                    session_id: session_id.clone(),
+                });
+            }
+        }
+        if let (Some(story_id), Some(session_id)) = (&story_id, &session_id) {
+            let conflict: Option<(String, String, Option<String>)> = transaction
+                .query_row(
+                    "SELECT task.id, task.owner, task.session_id
                      FROM task
                      JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
                      WHERE task_story.story_id=?1
                        AND task.status IN ('open','in_progress','blocked','closing')
-                       AND task.owner IS NOT NULL AND task.owner != ?2
+                       AND task.owner IS NOT NULL
+                       AND (task.session_id IS NULL OR task.session_id != ?2)
                      LIMIT 1;",
-                    params![story_id, owner],
-                    |row| row.get(0),
+                    params![story_id, session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?;
-            if let Some(conflicting_owner) = conflicting_owner {
+            if let Some((task_id, conflicting_owner, conflicting_session)) = conflict {
+                if let Some(conflicting_session) = conflicting_session {
+                    return Err(HarnessInfraError::TaskLeaseConflict {
+                        scope: format!("story:{story_id}"),
+                        task_id,
+                        owner: conflicting_owner,
+                        session_id: conflicting_session,
+                    });
+                }
                 return Err(HarnessInfraError::TaskOwnerConflict {
                     story_id: story_id.clone(),
                     owner: conflicting_owner,
+                });
+            }
+        }
+        if let Some(session_id) = &session_id {
+            let worktree_conflict: Option<(String, String, String)> = transaction
+                .query_row(
+                    "SELECT id, owner, session_id FROM task
+                     WHERE worktree=?1
+                       AND status IN ('open','in_progress','blocked','closing')
+                       AND session_id IS NOT NULL AND session_id != ?2
+                       AND lease_expires_at > datetime('now')
+                     LIMIT 1;",
+                    params![worktree, session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            if let Some((task_id, conflicting_owner, conflicting_session)) = worktree_conflict {
+                return Err(HarnessInfraError::TaskLeaseConflict {
+                    scope: "worktree".to_owned(),
+                    task_id,
+                    owner: conflicting_owner,
+                    session_id: conflicting_session,
                 });
             }
         }
@@ -1819,9 +2008,26 @@ impl HarnessRepository for SqliteHarnessRepository {
         )?;
         let intake_id = transaction.last_insert_rowid();
         transaction.execute(
-            "INSERT INTO task (id, intake_id, status, risk_lane, behavior_bearing, summary, owner, worktree, context_manifest_json, context_manifest_checksum, capsule_required)
-             VALUES (?1, ?2, 'in_progress', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10);",
-            params![id, intake_id, risk_lane.as_db_value(), behavior_bearing as i64, summary, owner, self.repo_root.to_string_lossy().into_owned(), context_manifest_json, context_manifest.checksum, capsule_required],
+            "INSERT INTO task (id, intake_id, status, risk_lane, behavior_bearing, summary,
+                               owner, session_id, lease_expires_at, worktree,
+                               context_manifest_json, context_manifest_checksum, capsule_required)
+             VALUES (?1, ?2, 'in_progress', ?3, ?4, ?5, ?6, ?7,
+                     CASE WHEN ?7 IS NULL THEN NULL ELSE datetime('now', ?8) END,
+                     ?9, ?10, ?11, ?12);",
+            params![
+                id,
+                intake_id,
+                risk_lane.as_db_value(),
+                behavior_bearing as i64,
+                summary,
+                owner,
+                session_id,
+                lease_seconds.map(|seconds| format!("+{seconds} seconds")),
+                worktree,
+                context_manifest_json,
+                context_manifest.checksum,
+                capsule_required
+            ],
         )?;
         if let Some(story_id) = story_id {
             transaction.execute(
@@ -1841,8 +2047,16 @@ impl HarnessRepository for SqliteHarnessRepository {
         let connection = self.open_existing()?;
         let mut task = connection
             .query_row(
-                "SELECT task.id, task.status, task.risk_lane, task.owner, task_story.story_id,
-                        task.context_manifest_json
+                "SELECT task.id, task.status, task.risk_lane, task.owner, task.session_id,
+                        task.worktree, task.lease_expires_at, task_story.story_id,
+                        task.context_manifest_json,
+                        CASE
+                          WHEN task.owner IS NULL THEN 'unowned'
+                          WHEN task.session_id IS NULL THEN 'legacy'
+                          WHEN task.status IN ('blocked','completed','abandoned','failed') THEN 'released'
+                          WHEN task.lease_expires_at > datetime('now') THEN 'active'
+                          ELSE 'expired'
+                        END
                  FROM task LEFT JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
                  WHERE task.id=?1;",
                 params![id],
@@ -1852,7 +2066,11 @@ impl HarnessRepository for SqliteHarnessRepository {
                         status: row.get(1)?,
                         risk_lane: row.get(2)?,
                         owner: row.get(3)?,
-                        story_id: row.get(4)?,
+                        session_id: row.get(4)?,
+                        worktree: row.get(5)?,
+                        lease_expires_at: row.get(6)?,
+                        story_id: row.get(7)?,
+                        lease_state: row.get(9)?,
                         allowed_next: Vec::new(),
                         context_required: 0,
                         context_acknowledged: 0,
@@ -1861,7 +2079,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                         latest_proof_state: None,
                         latest_proof_head_fresh: None,
                         latest_proof_dirty_fresh: None,
-                    }, row.get::<_, String>(5)?))
+                    }, row.get::<_, String>(8)?))
                 },
             )
             .optional()?
@@ -1908,6 +2126,11 @@ impl HarnessRepository for SqliteHarnessRepository {
             task.0.latest_proof_state = Some(state);
         }
         task.0.allowed_next = allowed_task_transitions(&task.0.status);
+        if task.0.status == "in_progress" && task.0.session_id.is_some() {
+            task.0.allowed_next.push("in_progress".to_owned());
+            task.0.allowed_next.sort();
+            task.0.allowed_next.dedup();
+        }
         Ok(task.0)
     }
 
@@ -1918,36 +2141,92 @@ impl HarnessRepository for SqliteHarnessRepository {
         }
         let mut connection = self.open_existing()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: Option<(String, Option<String>)> = transaction
+        let current: Option<TaskTransitionSource> = transaction
             .query_row(
-                "SELECT status, owner FROM task WHERE id=?1;",
+                "SELECT status, owner, session_id, worktree,
+                        CASE WHEN session_id IS NULL OR lease_expires_at > datetime('now') THEN 1 ELSE 0 END
+                 FROM task WHERE id=?1;",
                 params![input.id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()?;
-        let (current, stored_owner) =
+        let (current, stored_owner, stored_session, worktree, lease_active) =
             current.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
-        if let Some(expected) = stored_owner {
-            let actual = input
-                .owner
-                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
-            if actual != expected {
-                return Err(HarnessInfraError::TaskOwnerMismatch { expected, actual });
-            }
+        let changing_expired_session = input.status == "in_progress"
+            && stored_session.is_some()
+            && stored_session != input.session_id
+            && lease_active == 0;
+        if changing_expired_session {
+            require_matching_task_identity(
+                stored_owner.as_deref(),
+                None,
+                input.owner.as_deref(),
+                None,
+            )?;
+        } else {
+            require_matching_task_identity(
+                stored_owner.as_deref(),
+                stored_session.as_deref(),
+                input.owner.as_deref(),
+                input.session_id.as_deref(),
+            )?;
         }
-        if !task_transition_allowed(&current, &input.status) {
+        let renewing_active_lease =
+            current == "in_progress" && input.status == "in_progress" && stored_session.is_some();
+        if !renewing_active_lease && !task_transition_allowed(&current, &input.status) {
             return Err(HarnessInfraError::InvalidTaskTransition {
                 current,
                 next: input.status,
             });
         }
+        let lease_seconds = if input.status == "in_progress" && stored_session.is_some() {
+            let lease_seconds = validate_task_identity(
+                input.owner.as_deref(),
+                input.session_id.as_deref(),
+                input.lease_seconds,
+            )?;
+            let session_id = input
+                .session_id
+                .as_deref()
+                .expect("session identity validated before lease renewal");
+            let lease_seconds =
+                lease_seconds.expect("session identity always yields a lease duration");
+            ensure_task_lease_available(&transaction, &input.id, &worktree, session_id)?;
+            Some(lease_seconds)
+        } else {
+            None
+        };
         transaction.execute(
             "UPDATE task
              SET status=?2, outcome=?3,
                  closed_at=CASE WHEN ?2 IN ('abandoned','failed') THEN datetime('now') ELSE NULL END,
+                 lease_expires_at=CASE
+                   WHEN session_id IS NULL THEN NULL
+                   WHEN ?2='in_progress' THEN datetime('now', ?4)
+                   WHEN ?2 IN ('blocked','abandoned','failed') THEN datetime('now')
+                   ELSE lease_expires_at
+                 END,
+                 session_id=CASE
+                   WHEN session_id IS NOT NULL AND ?2='in_progress' THEN ?5
+                   ELSE session_id
+                 END,
                  updated_at=datetime('now')
              WHERE id=?1;",
-            params![input.id, input.status, input.outcome],
+            params![
+                input.id,
+                input.status,
+                input.outcome,
+                lease_seconds.map(|seconds| format!("+{seconds} seconds")),
+                input.session_id
+            ],
         )?;
         transaction.commit()?;
         self.task_status(&input.id)
@@ -1961,16 +2240,25 @@ impl HarnessRepository for SqliteHarnessRepository {
         if input.from_owner == input.to_owner {
             return Err(HarnessInfraError::TaskHandoffSameOwner);
         }
+        if input.from_session == input.to_session {
+            return Err(HarnessInfraError::TaskHandoffSameSession);
+        }
+        let lease_seconds = validate_task_identity(
+            Some(&input.to_owner),
+            Some(&input.to_session),
+            input.lease_seconds,
+        )?
+        .expect("handoff target identity is present");
         let mut connection = self.open_existing()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current: Option<(String, Option<String>)> = transaction
+        let current: Option<(String, Option<String>, Option<String>, String)> = transaction
             .query_row(
-                "SELECT status, owner FROM task WHERE id=?1;",
+                "SELECT status, owner, session_id, worktree FROM task WHERE id=?1;",
                 params![input.id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        let (status, owner) =
+        let (status, owner, session_id, worktree) =
             current.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
         if matches!(status.as_str(), "completed" | "abandoned" | "failed") {
             return Err(HarnessInfraError::InvalidTaskTransition {
@@ -1978,19 +2266,27 @@ impl HarnessRepository for SqliteHarnessRepository {
                 next: "handoff".to_owned(),
             });
         }
-        match owner {
-            Some(expected) if expected != input.from_owner => {
-                return Err(HarnessInfraError::TaskOwnerMismatch {
-                    expected,
-                    actual: input.from_owner,
-                })
-            }
-            None => return Err(HarnessInfraError::TaskOwnerRequired(input.from_owner)),
-            _ => {}
+        require_matching_task_identity(
+            owner.as_deref(),
+            session_id.as_deref(),
+            Some(&input.from_owner),
+            Some(&input.from_session),
+        )?;
+        if owner.is_none() {
+            return Err(HarnessInfraError::TaskOwnerRequired(input.from_owner));
         }
+        ensure_task_lease_available(&transaction, &input.id, &worktree, &input.to_session)?;
         transaction.execute(
-            "UPDATE task SET owner=?2, updated_at=datetime('now') WHERE id=?1;",
-            params![input.id, input.to_owner],
+            "UPDATE task
+             SET owner=?2, session_id=?3, lease_expires_at=datetime('now', ?4),
+                 updated_at=datetime('now')
+             WHERE id=?1;",
+            params![
+                input.id,
+                input.to_owner,
+                input.to_session,
+                format!("+{lease_seconds} seconds")
+            ],
         )?;
         transaction.execute(
             "INSERT INTO task_approval (task_id, gate, source, evidence, scope) VALUES (?1, 'handoff', ?2, ?3, ?4);",
@@ -2010,24 +2306,50 @@ impl HarnessRepository for SqliteHarnessRepository {
         }
         let mut connection = self.open_existing()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let owner: Option<Option<String>> = transaction
+        let identity: Option<(Option<String>, Option<String>, i64)> = transaction
             .query_row(
-                "SELECT owner FROM task WHERE id=?1;",
+                "SELECT owner, session_id,
+                        CASE WHEN session_id IS NULL OR lease_expires_at > datetime('now') THEN 1 ELSE 0 END
+                 FROM task WHERE id=?1;",
                 params![input.id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let stored_owner =
-            owner.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
-        if let Some(expected) = stored_owner {
-            let actual = input
-                .owner
-                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
-            if actual != expected {
-                return Err(HarnessInfraError::TaskOwnerMismatch { expected, actual });
-            }
+        let (stored_owner, stored_session, lease_active) =
+            identity.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
+        require_matching_task_identity(
+            stored_owner.as_deref(),
+            stored_session.as_deref(),
+            input.owner.as_deref(),
+            input.session_id.as_deref(),
+        )?;
+        if stored_session.is_some() && lease_active == 0 {
+            return Err(HarnessInfraError::TaskLeaseExpired);
         }
         if input.role == "primary" {
+            if stored_session.is_some() {
+                let conflict: Option<(String, String, String)> = transaction
+                    .query_row(
+                        "SELECT task.id, COALESCE(task.owner, '<none>'),
+                                COALESCE(task.session_id, '<legacy>')
+                         FROM task
+                         JOIN task_story ON task_story.task_id=task.id AND task_story.role='primary'
+                         WHERE task.id != ?1 AND task_story.story_id=?2
+                           AND task.status IN ('open','in_progress','blocked','closing')
+                         LIMIT 1;",
+                        params![input.id, input.story_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                if let Some((task_id, owner, session_id)) = conflict {
+                    return Err(HarnessInfraError::TaskLeaseConflict {
+                        scope: format!("story:{}", input.story_id),
+                        task_id,
+                        owner,
+                        session_id,
+                    });
+                }
+            }
             transaction.execute(
                 "UPDATE task_story SET role='secondary' WHERE task_id=?1 AND role='primary' AND story_id != ?2;",
                 params![input.id, input.story_id],
@@ -2077,15 +2399,18 @@ impl HarnessRepository for SqliteHarnessRepository {
         let connection = self.open_existing()?;
         let task: Option<TaskFinishSource> = connection
             .query_row(
-                "SELECT status, owner, risk_lane, behavior_bearing, intake_id, capsule_required, context_manifest_json, capsule_path, closure_nonce
+                "SELECT status, owner, session_id, risk_lane, behavior_bearing, intake_id,
+                        capsule_required, context_manifest_json, capsule_path, closure_nonce,
+                        CASE WHEN session_id IS NULL OR lease_expires_at > datetime('now') THEN 1 ELSE 0 END
                  FROM task WHERE id=?1;",
                 params![input.id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?)),
             )
             .optional()?;
         let (
             status,
             stored_owner,
+            stored_session,
             lane,
             behavior_bearing,
             intake_id,
@@ -2093,19 +2418,14 @@ impl HarnessRepository for SqliteHarnessRepository {
             manifest_json,
             stored_capsule_path,
             stored_closure_nonce,
+            lease_active,
         ) = task.ok_or_else(|| HarnessInfraError::TaskNotFound(input.id.clone()))?;
-        if let Some(expected) = stored_owner.as_ref() {
-            let actual = input
-                .owner
-                .as_ref()
-                .ok_or_else(|| HarnessInfraError::TaskOwnerRequired(expected.clone()))?;
-            if actual != expected {
-                return Err(HarnessInfraError::TaskOwnerMismatch {
-                    expected: expected.clone(),
-                    actual: actual.clone(),
-                });
-            }
-        }
+        require_matching_task_identity(
+            stored_owner.as_deref(),
+            stored_session.as_deref(),
+            input.owner.as_deref(),
+            input.session_id.as_deref(),
+        )?;
         if status == "completed" {
             if stored_capsule_path.as_deref() != input.capsule_path.as_deref() {
                 return Err(HarnessInfraError::TaskFinishGate(
@@ -2134,6 +2454,9 @@ impl HarnessRepository for SqliteHarnessRepository {
                 current: status,
                 next: "completed".to_owned(),
             });
+        }
+        if stored_session.is_some() && lease_active == 0 {
+            return Err(HarnessInfraError::TaskLeaseExpired);
         }
         if lane == "high_risk" {
             let approvals: i64 = connection.query_row(
@@ -2259,7 +2582,8 @@ impl HarnessRepository for SqliteHarnessRepository {
                 transaction.execute(
                 "UPDATE task
                  SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
-                     capsule_path=?2, capsule_checksum=?3, capsule_omission_reason=NULL, closure_nonce=?4
+                     capsule_path=?2, capsule_checksum=?3, capsule_omission_reason=NULL,
+                     closure_nonce=?4, lease_expires_at=CASE WHEN session_id IS NULL THEN NULL ELSE datetime('now') END
                  WHERE id=?1;",
                 params![input.id, capsule.path, capsule.checksum, nonce],
             )?;
@@ -2267,7 +2591,8 @@ impl HarnessRepository for SqliteHarnessRepository {
                 transaction.execute(
                 "UPDATE task
                  SET status='completed', outcome='completed', closed_at=datetime('now'), updated_at=datetime('now'),
-                     capsule_omission_reason='non-material tiny task; friction none', closure_nonce=?2
+                     capsule_omission_reason='non-material tiny task; friction none', closure_nonce=?2,
+                     lease_expires_at=CASE WHEN session_id IS NULL THEN NULL ELSE datetime('now') END
                  WHERE id=?1;",
                 params![input.id, nonce],
             )?;
@@ -4421,7 +4746,7 @@ mod tests {
         assert_eq!(repository.query_stats().unwrap().intakes, 0);
         let connection = repository.open_existing().unwrap();
         let schema_version = SqliteHarnessRepository::schema_version(&connection).unwrap();
-        assert_eq!(schema_version, 9);
+        assert_eq!(schema_version, 10);
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
         assert!(story_columns.contains(&"last_verified_at".to_owned()));
@@ -4429,7 +4754,7 @@ mod tests {
     }
 
     #[test]
-    fn task_schema_rejects_terminal_state_without_outcome() {
+    fn task_schema_rejects_invalid_terminal_state_and_partial_session_identity() {
         let (_temp_dir, repository) = test_repository();
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
@@ -4451,6 +4776,15 @@ mod tests {
             [],
         );
         assert!(invalid_status.is_err());
+        let partial_identity = connection.execute(
+            "INSERT INTO task (
+                id, status, risk_lane, behavior_bearing, summary, owner, worktree,
+                context_manifest_json, context_manifest_checksum, capsule_required
+             ) VALUES ('TASK-PARTIAL-IDENTITY', 'in_progress', 'normal', 0,
+                'partial identity', 'codex', '/tmp/worktree', '{}', 'checksum', 0);",
+            [],
+        );
+        assert!(partial_identity.is_err());
     }
 
     #[test]
@@ -4509,6 +4843,8 @@ mod tests {
                 risk_lane: None,
                 lane_override_reason: None,
                 owner: Some("codex".to_owned()),
+                session_id: Some("session-a".to_owned()),
+                lease_seconds: None,
                 story_id: Some("CL-TASK".to_owned()),
                 behavior_bearing: true,
                 risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
@@ -4518,6 +4854,8 @@ mod tests {
         let task = repository.task_status(&id).unwrap();
         assert_eq!(task.status, "in_progress");
         assert_eq!(task.risk_lane, "normal");
+        assert_eq!(task.session_id.as_deref(), Some("session-a"));
+        assert_eq!(task.lease_state, "active");
         assert_eq!(task.story_id.as_deref(), Some("CL-TASK"));
         repository
             .acknowledge_task_context(TaskContextAcknowledgeInput {
@@ -4629,11 +4967,13 @@ mod tests {
                 risk_lane: Some(RiskLane::Normal),
                 lane_override_reason: None,
                 owner: Some("other-agent".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
                 story_id: Some("CL-TASK".to_owned()),
                 behavior_bearing: true,
                 risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
             }),
-            Err(HarnessInfraError::TaskOwnerConflict { .. })
+            Err(HarnessInfraError::TaskLeaseConflict { .. })
         ));
         assert!(matches!(
             repository.transition_task(TaskTransitionInput {
@@ -4641,6 +4981,8 @@ mod tests {
                 status: "blocked".to_owned(),
                 outcome: None,
                 owner: Some("other-agent".to_owned()),
+                session_id: Some("session-a".to_owned()),
+                lease_seconds: None,
             }),
             Err(HarnessInfraError::TaskOwnerMismatch { .. })
         ));
@@ -4648,7 +4990,10 @@ mod tests {
             .handoff_task(TaskHandoffInput {
                 id: id.clone(),
                 from_owner: "codex".to_owned(),
+                from_session: "session-a".to_owned(),
                 to_owner: "reviewer".to_owned(),
+                to_session: "session-b".to_owned(),
+                lease_seconds: None,
                 source: "human".to_owned(),
                 evidence: "fixture handoff".to_owned(),
                 scope: Some("task".to_owned()),
@@ -4664,6 +5009,7 @@ mod tests {
                 story_id: "CL-SECOND".to_owned(),
                 role: "secondary".to_owned(),
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
             })
             .unwrap();
         repository
@@ -4672,6 +5018,7 @@ mod tests {
                 story_id: "CL-SECOND".to_owned(),
                 role: "primary".to_owned(),
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
             })
             .unwrap();
         assert_eq!(
@@ -4685,6 +5032,8 @@ mod tests {
                 status: "blocked".to_owned(),
                 outcome: None,
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
             })
             .unwrap();
         assert_eq!(blocked.status, "blocked");
@@ -4694,6 +5043,8 @@ mod tests {
                 status: "in_progress".to_owned(),
                 outcome: None,
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
             })
             .unwrap();
         assert_eq!(resumed.status, "in_progress");
@@ -4703,6 +5054,8 @@ mod tests {
                 status: "abandoned".to_owned(),
                 outcome: Some("No longer needed".to_owned()),
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
             })
             .unwrap();
         assert_eq!(abandoned.status, "abandoned");
@@ -4712,6 +5065,8 @@ mod tests {
                 status: "in_progress".to_owned(),
                 outcome: None,
                 owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
             }),
             Err(HarnessInfraError::InvalidTaskTransition { .. })
         ));
@@ -4722,6 +5077,8 @@ mod tests {
             risk_lane: Some(RiskLane::Normal),
             lane_override_reason: None,
             owner: None,
+            session_id: None,
+            lease_seconds: None,
             story_id: Some("MISSING".to_owned()),
             behavior_bearing: true,
             risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
@@ -4736,6 +5093,8 @@ mod tests {
                 risk_lane: Some(RiskLane::Normal),
                 lane_override_reason: None,
                 owner: None,
+                session_id: None,
+                lease_seconds: None,
                 story_id: None,
                 behavior_bearing: true,
                 risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
@@ -4749,11 +5108,124 @@ mod tests {
                 risk_lane: Some(RiskLane::Tiny),
                 lane_override_reason: Some("fixture request".to_owned()),
                 owner: None,
+                session_id: None,
+                lease_seconds: None,
                 story_id: None,
                 behavior_bearing: false,
                 risk_flags: vec!["auth".to_owned()],
             }),
             Err(HarnessInfraError::TaskLaneOverrideCannotLower { .. })
+        ));
+    }
+
+    #[test]
+    fn task_session_lease_guards_session_story_and_worktree_concurrency() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        for (id, title) in [("CL-LEASE-A", "Lease A"), ("CL-LEASE-B", "Lease B")] {
+            repository
+                .add_story(StoryAddInput {
+                    id: id.to_owned(),
+                    title: title.to_owned(),
+                    risk_lane: RiskLane::Normal,
+                    contract_doc: None,
+                    verify_command: None,
+                    notes: None,
+                })
+                .unwrap();
+        }
+
+        let start = |owner: &str, session_id: Option<&str>, story_id: &str| TaskStartInput {
+            input_type: InputType::ChangeRequest,
+            summary: format!("Lease fixture for {story_id}"),
+            risk_lane: Some(RiskLane::Normal),
+            lane_override_reason: None,
+            owner: Some(owner.to_owned()),
+            session_id: session_id.map(str::to_owned),
+            lease_seconds: Some(300),
+            story_id: Some(story_id.to_owned()),
+            behavior_bearing: true,
+            risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
+        };
+
+        assert!(matches!(
+            repository.start_task(start("codex", None, "CL-LEASE-A")),
+            Err(HarnessInfraError::TaskIdentityPairRequired)
+        ));
+        let first = repository
+            .start_task(start("codex", Some("session-a"), "CL-LEASE-A"))
+            .unwrap();
+        assert!(matches!(
+            repository.start_task(start("codex", Some("session-a"), "CL-LEASE-B")),
+            Err(HarnessInfraError::TaskLeaseConflict { scope, .. }) if scope == "session"
+        ));
+        assert!(matches!(
+            repository.start_task(start("reviewer", Some("session-b"), "CL-LEASE-B")),
+            Err(HarnessInfraError::TaskLeaseConflict { scope, .. }) if scope == "worktree"
+        ));
+
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "UPDATE task SET lease_expires_at=datetime('now', '-1 second') WHERE id=?1;",
+                params![first],
+            )
+            .unwrap();
+        assert_eq!(
+            repository.task_status(&first).unwrap().lease_state,
+            "expired"
+        );
+        assert!(matches!(
+            repository.start_task(start("reviewer", Some("session-b"), "CL-LEASE-A")),
+            Err(HarnessInfraError::TaskLeaseConflict { scope, .. }) if scope == "story:CL-LEASE-A"
+        ));
+        let second = repository
+            .start_task(start("reviewer", Some("session-b"), "CL-LEASE-B"))
+            .unwrap();
+        assert!(matches!(
+            repository.transition_task(TaskTransitionInput {
+                id: first.clone(),
+                status: "in_progress".to_owned(),
+                outcome: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("session-a".to_owned()),
+                lease_seconds: Some(300),
+            }),
+            Err(HarnessInfraError::TaskLeaseConflict { scope, .. }) if scope == "worktree"
+        ));
+        repository
+            .transition_task(TaskTransitionInput {
+                id: second,
+                status: "blocked".to_owned(),
+                outcome: None,
+                owner: Some("reviewer".to_owned()),
+                session_id: Some("session-b".to_owned()),
+                lease_seconds: None,
+            })
+            .unwrap();
+        let resumed = repository
+            .transition_task(TaskTransitionInput {
+                id: first.clone(),
+                status: "in_progress".to_owned(),
+                outcome: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("session-c".to_owned()),
+                lease_seconds: Some(300),
+            })
+            .unwrap();
+        assert_eq!(resumed.lease_state, "active");
+        assert_eq!(resumed.session_id.as_deref(), Some("session-c"));
+        assert!(matches!(
+            repository.transition_task(TaskTransitionInput {
+                id: first,
+                status: "blocked".to_owned(),
+                outcome: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("wrong-session".to_owned()),
+                lease_seconds: None,
+            }),
+            Err(HarnessInfraError::TaskSessionMismatch { .. })
         ));
     }
 
@@ -4768,6 +5240,8 @@ mod tests {
                 risk_lane: None,
                 lane_override_reason: None,
                 owner: Some("codex".to_owned()),
+                session_id: Some("tiny-session".to_owned()),
+                lease_seconds: None,
                 story_id: None,
                 behavior_bearing: false,
                 risk_flags: Vec::new(),
@@ -4830,6 +5304,7 @@ mod tests {
             repository.finish_task(TaskFinishInput {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
+                session_id: Some("tiny-session".to_owned()),
                 trace_id,
                 friction: "none".to_owned(),
                 capsule_path: None,
@@ -4848,6 +5323,7 @@ mod tests {
             .finish_task(TaskFinishInput {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
+                session_id: Some("tiny-session".to_owned()),
                 trace_id,
                 friction: "none".to_owned(),
                 capsule_path: None,
@@ -4860,6 +5336,7 @@ mod tests {
                 .finish_task(TaskFinishInput {
                     id,
                     owner: Some("codex".to_owned()),
+                    session_id: Some("tiny-session".to_owned()),
                     trace_id,
                     friction: "none".to_owned(),
                     capsule_path: None,
@@ -4891,6 +5368,8 @@ mod tests {
                 risk_lane: None,
                 lane_override_reason: None,
                 owner: Some("codex".to_owned()),
+                session_id: Some("normal-session".to_owned()),
+                lease_seconds: None,
                 story_id: Some("CL-FINISH".to_owned()),
                 behavior_bearing: true,
                 risk_flags: vec!["public-contract".to_owned(), "weak-proof".to_owned()],
@@ -4978,6 +5457,7 @@ mod tests {
         let failed_finish = repository.finish_task(TaskFinishInput {
             id: id.clone(),
             owner: Some("codex".to_owned()),
+            session_id: Some("normal-session".to_owned()),
             trace_id,
             friction: "none".to_owned(),
             capsule_path: Some(capsule_path.to_owned()),
@@ -5003,6 +5483,7 @@ mod tests {
             .finish_task(TaskFinishInput {
                 id: id.clone(),
                 owner: Some("codex".to_owned()),
+                session_id: Some("normal-session".to_owned()),
                 trace_id,
                 friction: "none".to_owned(),
                 capsule_path: Some(capsule_path.to_owned()),
@@ -5043,7 +5524,7 @@ mod tests {
         assert_eq!(report.code, "DB_MISSING");
         assert!(report.ok);
         assert!(!db_path.exists());
-        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(report.source_versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 
     #[test]
@@ -5071,7 +5552,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (10)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (11)", [])
             .unwrap();
         drop(connection);
         let db_path = repository.db_path.clone();
@@ -5085,7 +5566,7 @@ mod tests {
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            10
+            11
         );
     }
 
@@ -5462,11 +5943,11 @@ mod tests {
         let result = repository.migrate().unwrap();
 
         assert_eq!(result.current_version, 1);
-        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(result.applied, vec![2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let connection = repository.open_existing().unwrap();
         assert_eq!(
             SqliteHarnessRepository::schema_version(&connection).unwrap(),
-            9
+            10
         );
         let story_columns = story_columns(&connection);
         assert!(story_columns.contains(&"verify_command".to_owned()));
@@ -5593,7 +6074,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("INSERT INTO schema_version(version) VALUES (10)", [])
+            .execute("INSERT INTO schema_version(version) VALUES (11)", [])
             .unwrap();
         drop(connection);
         let before = sha256_file(&repository.db_path).unwrap();
@@ -5612,7 +6093,7 @@ mod tests {
 
         let result = repository.migrate().unwrap();
 
-        assert_eq!(result.current_version, 9);
+        assert_eq!(result.current_version, 10);
         assert!(result.applied.is_empty());
         assert!(!repository.repo_root.join("harness.db.backups").exists());
     }
@@ -5623,7 +6104,7 @@ mod tests {
         repository.init().unwrap();
         let connection = repository.open_existing().unwrap();
         connection
-            .execute("DELETE FROM schema_version WHERE version = 9", [])
+            .execute("DELETE FROM schema_version WHERE version >= 9", [])
             .unwrap();
         connection
             .execute("DROP INDEX friction_task_status_idx", [])
@@ -5733,7 +6214,10 @@ mod tests {
         drop(connection);
 
         // Upgrade: migration 005 must infer kind from the command prefix.
-        assert_eq!(repository.migrate().unwrap().applied, vec![5, 6, 7, 8, 9]);
+        assert_eq!(
+            repository.migrate().unwrap().applied,
+            vec![5, 6, 7, 8, 9, 10]
+        );
         let connection = repository.open_existing().unwrap();
         let kind_of = |name: &str| -> String {
             connection

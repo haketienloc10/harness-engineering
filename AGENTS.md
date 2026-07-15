@@ -3,8 +3,8 @@
 Harness là lifecycle tooling cho agent; product files và user instructions vẫn
 là nguồn sự thật cho sản phẩm.
 
-1. Trước khi sửa, chạy `_harness/bin/harness-cli task start` với input, flags
-   và owner phù hợp.
+1. Trước khi sửa, chạy `_harness/bin/harness-cli task start` với input, flags,
+   owner và session phù hợp.
 2. Đọc context và hoàn tất gates mà command trả về; chỉ đọc thêm product docs,
    stories hoặc decisions khi context yêu cầu.
 3. Dùng `proof run` cho verification và `task finish` trước final response.

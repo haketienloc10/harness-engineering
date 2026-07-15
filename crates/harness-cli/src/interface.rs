@@ -347,6 +347,10 @@ struct TaskStartArgs {
     #[arg(long)]
     owner: Option<String>,
     #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
+    lease_seconds: Option<i64>,
+    #[arg(long)]
     story: Option<String>,
     #[arg(long)]
     flags: Option<String>,
@@ -383,6 +387,8 @@ struct TaskBlockArgs {
     #[arg(long)]
     owner: Option<String>,
     #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
     json: bool,
 }
 
@@ -393,6 +399,10 @@ struct TaskResumeArgs {
     #[arg(long)]
     owner: Option<String>,
     #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
+    lease_seconds: Option<i64>,
+    #[arg(long)]
     json: bool,
 }
 
@@ -402,6 +412,8 @@ struct TaskAbandonArgs {
     id: String,
     #[arg(long)]
     owner: Option<String>,
+    #[arg(long)]
+    session: Option<String>,
     #[arg(long)]
     outcome: String,
     #[arg(long)]
@@ -414,8 +426,14 @@ struct TaskHandoffArgs {
     id: String,
     #[arg(long = "from")]
     from_owner: String,
+    #[arg(long = "from-session")]
+    from_session: String,
     #[arg(long = "to")]
     to_owner: String,
+    #[arg(long = "to-session")]
+    to_session: String,
+    #[arg(long)]
+    lease_seconds: Option<i64>,
     #[arg(long)]
     source: String,
     #[arg(long)]
@@ -437,6 +455,8 @@ struct TaskLinkStoryArgs {
     #[arg(long)]
     owner: Option<String>,
     #[arg(long)]
+    session: Option<String>,
+    #[arg(long)]
     json: bool,
 }
 
@@ -446,6 +466,8 @@ struct TaskFinishArgs {
     id: String,
     #[arg(long)]
     owner: Option<String>,
+    #[arg(long)]
+    session: Option<String>,
     #[arg(long)]
     trace: String,
     #[arg(long)]
@@ -1139,6 +1161,8 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     risk_lane: args.lane.as_deref().map(RiskLane::from_str).transpose()?,
                     lane_override_reason: args.lane_reason,
                     owner: args.owner,
+                    session_id: args.session,
+                    lease_seconds: args.lease_seconds,
                     story_id: args.story,
                     behavior_bearing: parse_behavior_bearing(&args.behavior_bearing)?,
                     risk_flags: args
@@ -1153,26 +1177,41 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         })
                         .unwrap_or_default(),
                 })?;
+                let task = service.task_status(&id)?;
                 if args.json {
                     println!(
-                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"in_progress\"}}",
-                        json_escape(&id)
+                        "{{\"ok\":true,\"task_id\":\"{}\",\"status\":\"{}\",\"owner\":{},\"session_id\":{},\"lease_expires_at\":{},\"lease_state\":\"{}\"}}",
+                        json_escape(&id),
+                        json_escape(&task.status),
+                        json_optional(task.owner.as_deref()),
+                        json_optional(task.session_id.as_deref()),
+                        json_optional(task.lease_expires_at.as_deref()),
+                        json_escape(&task.lease_state),
                     );
                 } else {
-                    println!("Task {id} started (in_progress).");
+                    println!(
+                        "Task {id} started ({}); session={}, lease={}.",
+                        task.status,
+                        task.session_id.as_deref().unwrap_or("<none>"),
+                        task.lease_expires_at.as_deref().unwrap_or("<none>")
+                    );
                 }
             }
             TaskAction::Status { id, json } => {
                 let task = service.task_status(&id)?;
                 if json {
-                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"dirty_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
+                    println!("{{\"task_id\":\"{}\",\"status\":\"{}\",\"lane\":\"{}\",\"owner\":{},\"session_id\":{},\"worktree\":\"{}\",\"lease_expires_at\":{},\"lease_state\":\"{}\",\"story_id\":{},\"allowed_next\":{},\"context\":{{\"required\":{},\"acknowledged\":{}}},\"approvals\":{},\"proof\":{{\"runs\":{},\"latest_state\":{},\"head_fresh\":{},\"dirty_fresh\":{}}}}}", json_escape(&task.id), json_escape(&task.status), json_escape(&task.risk_lane), json_optional(task.owner.as_deref()), json_optional(task.session_id.as_deref()), json_escape(&task.worktree), json_optional(task.lease_expires_at.as_deref()), json_escape(&task.lease_state), json_optional(task.story_id.as_deref()), json_strings(&task.allowed_next), task.context_required, task.context_acknowledged, task.approvals, task.proof_runs, json_optional(task.latest_proof_state.as_deref()), task.latest_proof_head_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()), task.latest_proof_dirty_fresh.map(|value| value.to_string()).unwrap_or_else(|| "null".to_owned()));
                 } else {
                     println!(
-                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, dirty-fresh={}",
+                        "task: {}\nstatus: {}\nlane: {}\nowner: {}\nsession: {}\nworktree: {}\nlease: {} ({})\nstory: {}\nallowed next: {}\ncontext: {}/{} acknowledged\napprovals: {}\nproof: {} run(s), latest={}, head-fresh={}, dirty-fresh={}",
                         task.id,
                         task.status,
                         task.risk_lane,
                         task.owner.as_deref().unwrap_or("<none>"),
+                        task.session_id.as_deref().unwrap_or("<none>"),
+                        task.worktree,
+                        task.lease_expires_at.as_deref().unwrap_or("<none>"),
+                        task.lease_state,
                         task.story_id.as_deref().unwrap_or("<none>"),
                         task.allowed_next.join(", "),
                         task.context_acknowledged,
@@ -1191,6 +1230,8 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     status: "blocked".to_owned(),
                     outcome: None,
                     owner: args.owner,
+                    session_id: args.session,
+                    lease_seconds: None,
                 })?;
                 print_task_transition(&task, args.json);
             }
@@ -1200,6 +1241,8 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     status: "in_progress".to_owned(),
                     outcome: None,
                     owner: args.owner,
+                    session_id: args.session,
+                    lease_seconds: args.lease_seconds,
                 })?;
                 print_task_transition(&task, args.json);
             }
@@ -1209,6 +1252,8 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     status: "abandoned".to_owned(),
                     outcome: Some(args.outcome),
                     owner: args.owner,
+                    session_id: args.session,
+                    lease_seconds: None,
                 })?;
                 print_task_transition(&task, args.json);
             }
@@ -1216,7 +1261,10 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 service.handoff_task(TaskHandoffInput {
                     id: args.id,
                     from_owner: args.from_owner,
+                    from_session: args.from_session,
                     to_owner: args.to_owner,
+                    to_session: args.to_session,
+                    lease_seconds: args.lease_seconds,
                     source: args.source,
                     evidence: args.evidence,
                     scope: args.scope,
@@ -1233,6 +1281,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     story_id: args.story,
                     role: args.role,
                     owner: args.owner,
+                    session_id: args.session,
                 })?;
                 if args.json {
                     println!("{{\"ok\":true,\"linked\":true}}");
@@ -1254,6 +1303,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 let finished = service.finish_task(TaskFinishInput {
                     id: args.id,
                     owner: args.owner,
+                    session_id: args.session,
                     trace_id,
                     friction: args.friction,
                     capsule_path: args.capsule,
@@ -3289,6 +3339,26 @@ mod tests {
             .render_long_help()
             .to_string();
         assert!(story_add_help.contains("--lane <tiny|normal|high-risk>"));
+
+        let task_start_help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("start")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(task_start_help.contains("--session <SESSION>"));
+        assert!(task_start_help.contains("--lease-seconds <LEASE_SECONDS>"));
+
+        let task_handoff_help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("handoff")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(task_handoff_help.contains("--from-session <FROM_SESSION>"));
+        assert!(task_handoff_help.contains("--to-session <TO_SESSION>"));
 
         let backlog_add_help = command
             .find_subcommand_mut("backlog")

@@ -3,7 +3,7 @@
 Date: 2026-07-14
 
 Status: In implementation. The 2026-07-15 maintenance reconciliation records
-17 of 22 work items completed, 4 in progress, with CL-70 blocked. Release
+18 of 22 work items completed, 3 in progress, with CL-70 blocked. Release
 qualification has not started.
 
 Plan ID: `CLP-001`
@@ -25,9 +25,9 @@ Plan ID: `CLP-001`
 | CL-31 | completed | Deterministic temporary rebuild, projection and safe apply are proven. |
 | CL-32 | completed | Capsule renderer, checksum, redaction and collision/orphan checks are proven. |
 | CL-40 | completed | Task root schema and transition constraints are implemented. |
-| CL-41 | in_progress | Core task operations work; session/lease identity remains deferred. |
+| CL-41 | completed | Migration 010, explicit owner/session pairing, bounded renewable leases, story/session/worktree conflicts, handoff and status are source/packaged proven. |
 | CL-42 | in_progress | Structured proof works; branch/output provenance and artifact-scoped freshness remain. |
-| CL-43 | in_progress | Closure implementation is proven, but its story and dependencies CL-41/42 are not complete. |
+| CL-43 | in_progress | Closure implementation and CL-41 dependency are proven; CL-42 remains incomplete. |
 | CL-50 | completed | Installed `AGENTS.md` is compact and command-first. |
 | CL-51 | completed | Progressive story template owns the supported authoring surface. |
 | CL-52 | completed | Runtime workflow no longer depends on source-only policy docs. |
@@ -368,6 +368,7 @@ _harness/bin/harness-cli task start \
   --flags "public-contract,weak-proof" \
   --behavior-bearing auto \
   --owner codex \
+  --session codex-20260715-a \
   --json
 ```
 
@@ -382,7 +383,9 @@ Arguments:
 - `--story new`: atomically allocate/scaffold a new story when policy requires
   one; combine with `--story-title`. The CLI creates metadata/template only,
   never invents acceptance criteria.
-- `--owner`: agent/session identity; default from environment only when stable.
+- `--owner`: stable agent identity; pair with `--session` for owned tasks.
+- `--session`: explicit execution-session identity; it is never inferred from
+  free text. `--lease-seconds` optionally selects the bounded renewable lease.
 - `--resume`: explicit task ID; never silently resume by fuzzy summary.
 - `--lane`: optional override only with `--lane-reason`; override cannot lower a
   hard gate without linked approval.
@@ -398,7 +401,7 @@ Execution order:
    inference must be deterministic, advisory and include evidence. CLI must not
    pretend it understands arbitrary prompt semantics from summary text alone.
 6. Compute recommended lane and gates from explicit/validated flags.
-7. Check owner conflicts/open tasks on same story/worktree.
+7. Check session, primary-story and live worktree-lease conflicts.
 8. Create intake + task root in one DB transaction.
 9. Attach or require story according to behavior-bearing result.
 10. Run `tool check`; return only capabilities relevant to selected gates.
@@ -696,6 +699,7 @@ lane_override_reason
 summary
 owner
 session_id
+lease_expires_at
 repository_id
 worktree
 branch
@@ -1649,9 +1653,9 @@ Agents update this table only after evidence exists.
 | CL-31 Memory rebuild | completed | CL-30 | Typed temporary rebuild, artifact/story/decision projection, logical digest, conflict gate and explicit safe apply are proven | Start CL-32 |
 | CL-32 Capsule renderer | completed | CL-30 | Versioned renderer/parser, checksum, redaction, collision refusal and orphan detection are proven | Start CL-40 |
 | CL-40 Task schema | completed | Phase 3 | Transition graph and terminal SQLite constraints are tested; current retained DB health is tracked by reopened CL-11 | CL-41 may use the validated root after safe preflight is restored |
-| CL-41 Task start/status | in_progress | CL-40 | Atomic start, policy lane/context, acknowledgement, approval, explicit refresh, owner enforcement/handoff and primary/secondary story links are fixture-tested | Add session/lease identity |
+| CL-41 Task start/status | completed | CL-40 | Migration 010; 67 Rust tests; source/packaged session-lease black boxes; workflow parity, memory check and installer state-safety pass | CL-42 may consume the final task identity contract |
 | CL-42 Proof run | in_progress | CL-40 | Structured `proof run/query` append/expose executable+argv, pass/fail, HEAD and dirty fingerprint; status compares freshness | Add branch/output provenance, artifact-scoped freshness and remove direct boolean normal path |
-| CL-43 Task finish | in_progress | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery and completion gates are implemented; story status remains open while CL-41/42 contracts are incomplete | Close CL-41/42, then rerun the final Phase 4 matrix |
+| CL-43 Task finish | in_progress | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery and completion gates are implemented; CL-41 is complete | Close CL-42, then rerun the final Phase 4 matrix |
 | CL-50 Compact AGENTS | completed | CL-43 | Canonical/install shared `AGENTS.md` is command-first only and installer byte parity passed | CL-51/CL-60 may begin |
 | CL-51 Templates | completed | CL-43 | Progressive story template owns high-risk expansion, validation and rollback; compatibility templates are deprecated; policy/parity and installer checks pass | CL-52 may begin |
 | CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
@@ -1802,8 +1806,30 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   the cited HEAD evidence is invalidated; do not restore the foreign DB as the
   active main-lineage database.
 
+### 2026-07-15 — Complete CL-41 session and lease identity
+
+- Author/agent: Codex task `TASK-000003`, requested by the current user
+  instruction to continue CL-41.
+- Affected work items: CL-41, CL-43 and CL-70.
+- Old gap: task ownership used free-text owner only; the schema and CLI had no
+  session identity, expiry, renewal or live-worktree conflict contract.
+- New evidence: canonical migration 010 adds `session_id` and
+  `lease_expires_at` with an insert guard. New owned tasks pair explicit owner
+  and session, use bounded renewable leases, reserve one lifecycle root per
+  session, retain primary-story exclusivity through expiry, and protect a live
+  worktree claim. Block releases the worktree claim; resume atomically
+  reacquires or renews it; handoff changes owner/session and records approval.
+- Decision/approval reference: the already-approved CLP-001 session/lease
+  target and the 2026-07-15 amendment to ADR 0019. `TASK-000003` records the
+  user's CL-41 continuation as the `architecture-direction` approval evidence.
+- Validation and rollback impact: format, 67 Rust tests, workspace Clippy,
+  workflow parity, read-only memory check, installer state safety, source and
+  installed-binary temporary-DB black boxes pass. The retained DB was upgraded
+  backup-first and doctor reports `HEALTHY` at `001..010`. Rollback uses that
+  backup and the prior binary; it must not manually rewrite task identity.
+
 ## 29. Immediate next action
 
-Finish CL-41 and CL-42 before closing CL-43. Complete the CL-61
+Finish CL-42 before closing CL-43. Complete the CL-61
 outcome-derived maturity report and observation evidence before starting
 CL-70 release qualification.

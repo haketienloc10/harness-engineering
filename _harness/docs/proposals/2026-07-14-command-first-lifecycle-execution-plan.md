@@ -3,7 +3,7 @@
 Date: 2026-07-14
 
 Status: In implementation. The 2026-07-15 maintenance reconciliation records
-18 of 22 work items completed, 3 in progress, with CL-70 blocked. Release
+20 of 22 work items completed, 1 in progress, with CL-70 blocked. Release
 qualification has not started.
 
 Plan ID: `CLP-001`
@@ -27,7 +27,7 @@ Plan ID: `CLP-001`
 | CL-40 | completed | Task root schema and transition constraints are implemented. |
 | CL-41 | completed | Migration 010, explicit owner/session pairing, bounded renewable leases, story/session/worktree conflicts, handoff and status are source/packaged proven. |
 | CL-42 | completed | Migration 011, full proof/output/artifact provenance, fail-closed freshness and proof-derived matrix behavior pass source and packaged validation. |
-| CL-43 | in_progress | Closure implementation and CL-41/42 dependencies are proven; the final Phase 4 completion matrix remains. |
+| CL-43 | completed | Final Phase 4 source/packaged failure matrix, crash-recovery and idempotency cases, installer state-safety, workflow parity, memory validation and strict doctor gates passed; see `docs/stories/CL-43-task-finish-and-crash-recovery/validation.md` and `TASK-000009`. |
 | CL-50 | completed | Installed `AGENTS.md` is compact and command-first. |
 | CL-51 | completed | Progressive story template owns the supported authoring surface. |
 | CL-52 | completed | Runtime workflow no longer depends on source-only policy docs. |
@@ -1654,8 +1654,8 @@ Agents update this table only after evidence exists.
 | CL-32 Capsule renderer | completed | CL-30 | Versioned renderer/parser, checksum, redaction, collision refusal and orphan detection are proven | Start CL-40 |
 | CL-40 Task schema | completed | Phase 3 | Transition graph and terminal SQLite constraints are tested; current retained DB health is tracked by reopened CL-11 | CL-41 may use the validated root after safe preflight is restored |
 | CL-41 Task start/status | completed | CL-40 | Migration 010; 67 Rust tests; source/packaged session-lease black boxes; workflow parity, memory check and installer state-safety pass | CL-42 may consume the final task identity contract |
-| CL-42 Proof run | completed | CL-40 | Migration 011; 68 Rust tests; full branch/output/artifact provenance; fail-closed status/finish freshness; proof-derived matrix; packaged JSON smoke | Rerun the final Phase 4 matrix for CL-43 |
-| CL-43 Task finish | in_progress | CL-41, CL-42, CL-32 | Required-capsule staging/atomic rename, deterministic closure nonce, rollback/retry recovery and completion gates are implemented; CL-41/42 are complete | Rerun the final Phase 4 matrix |
+| CL-42 Proof run | completed | CL-40 | Migration 011; 68 Rust tests; full branch/output/artifact provenance; fail-closed status/finish freshness; proof-derived matrix; packaged JSON smoke | Preserve proof provenance and freshness contracts |
+| CL-43 Task finish | completed | CL-41, CL-42, CL-32 | `TASK-000009` and commit `a8f6ce5`; final Phase 4 source/packaged failure matrix, crash recovery, idempotency, installer state-safety, workflow parity, memory validation and strict doctor gates passed | Continue CL-61 observation evidence |
 | CL-50 Compact AGENTS | completed | CL-43 | Canonical/install shared `AGENTS.md` is command-first only and installer byte parity passed | CL-51/CL-60 may begin |
 | CL-51 Templates | completed | CL-43 | Progressive story template owns high-risk expansion, validation and rollback; compatibility templates are deprecated; policy/parity and installer checks pass | CL-52 may begin |
 | CL-52 Remove runtime docs | completed | CL-50, CL-51 | Workflow context no longer points at source-only docs; installer excludes them and upgrade-safety checks pass | CL-60 may begin |
@@ -1845,8 +1845,26 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
 - Rollback: restore the pre-v11 database backup with the prior binary. Do not
   drop provenance columns or manually rewrite current proof rows.
 
+### 2026-07-15 — Complete CL-43 task finish and crash recovery
+
+- Author/agent: Codex task `TASK-000009`, requested by the CL-43 completion
+  instruction.
+- Affected work items: CL-43, CL-61 and CL-70.
+- Closed gaps: the final Phase 4 table-driven failure matrix proves that every
+  configured closure-gate failure returns structured remediation without
+  mutating task or capsule state. Dedicated cases cover capsule staging and
+  terminal-SQL abort recovery, deterministic retry, idempotent repeated finish,
+  owner conflict and orphan/terminal-capsule doctor failures.
+- Validation: commit `a8f6ce5` records the source and packaged black-box
+  matrix, installer state-safety, source/packaged workflow parity, memory
+  validation and strict doctor proof. Detailed evidence is retained in
+  `docs/stories/CL-43-task-finish-and-crash-recovery/validation.md` and
+  `docs/tasks/2026/07/TASK-000009-cl-43-structured-finish-failures-phase.md`.
+- Rollback: revert the CL-43 implementation commit and use the prior packaged
+  binary; preserve the operational database and task capsules, and do not
+  manually rewrite terminal task state.
+
 ## 29. Immediate next action
 
-Rerun the final Phase 4 matrix before closing CL-43. Complete the CL-61
-outcome-derived maturity report and observation evidence before starting CL-70
-release qualification.
+Complete the CL-61 outcome-derived maturity report and observation evidence.
+Start CL-70 release qualification only after CL-61 is completed.

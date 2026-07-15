@@ -2,8 +2,9 @@
 
 Date: 2026-07-15
 
-Status: Execution in progress — Tasks 0 and 1 completed; Task 2 approved and
-implementing durable reconciliation
+Status: Fully closed — Tasks `TASK-000018..21` supply bootstrap,
+release-reproducibility, durable reconciliation and terminal qualification
+evidence on Linux `x86_64`
 
 Parent plan:
 `_harness/docs/proposals/2026-07-14-command-first-lifecycle-execution-plan.md`
@@ -302,30 +303,30 @@ state or hand-write a capsule.
 
 CLP-001 may be marked `Fully closed` only when every item is true:
 
-- [ ] All original 22 work items remain completed.
-- [ ] CL-71 is implemented with durable validation evidence.
-- [ ] No lifecycle task remains active after terminal closure.
-- [ ] Final task status is `completed` with released lease.
-- [ ] Final context acknowledgement count equals the required count.
-- [ ] Required high-risk approvals are present.
-- [ ] Required proof runs pass with output/artifact provenance.
-- [ ] Every required normal/high-risk task has a valid capsule and trace.
-- [ ] `doctor --strict --json` exits `0` with `HEALTHY`.
-- [ ] `audit --strict --json` exits `0` with no unresolved findings and no
+- [x] All original 22 work items remain completed.
+- [x] CL-71 is implemented with durable validation evidence.
+- [x] No lifecycle task remains active after terminal closure.
+- [x] Final task status is `completed` with released lease.
+- [x] Final context acknowledgement count equals the required count.
+- [x] Required high-risk approvals are present.
+- [x] Required proof runs pass with output/artifact provenance.
+- [x] Every required normal/high-risk task has a valid capsule and trace.
+- [x] `doctor --strict --json` exits `0` with `HEALTHY`.
+- [x] `audit --strict --json` exits `0` with no unresolved findings and no
       unknown coverage.
-- [ ] Accepted historical findings remain explicitly visible with approval and
+- [x] Accepted historical findings remain explicitly visible with approval and
       provenance.
-- [ ] H5 remains `achieved` from observed lifecycle evidence.
-- [ ] The full release suite passes from a clean committed HEAD.
-- [ ] Source, packaged, and tracked command manifests agree.
-- [ ] Memory rebuild/check and installer state-safety pass.
-- [ ] CL-11 and retained US story statuses match their verified contracts.
-- [ ] Legacy backlog `#4` maps to a closed canonical successor with measured
+- [x] H5 remains `achieved` from observed lifecycle evidence.
+- [x] The full release suite passes from a clean committed HEAD.
+- [x] Source, packaged, and tracked command manifests agree.
+- [x] Memory rebuild/check and installer state-safety pass.
+- [x] CL-11 and retained US story statuses match their verified contracts.
+- [x] Legacy backlog `#4` maps to a closed canonical successor with measured
       actual outcome.
-- [ ] The parent plan records the final evidence, rollback, and compatibility
+- [x] The parent plan records the final evidence, rollback, and compatibility
       window obligation.
-- [ ] Post-finish read-only doctor/audit checks pass.
-- [ ] Repository changes and generated capsules are committed intentionally;
+- [x] Post-finish read-only doctor/audit checks pass.
+- [x] Repository changes and generated capsules are committed intentionally;
       final `git status --short` is clean.
 
 ## 10. Human Gates and Stop Conditions

@@ -13,8 +13,8 @@ meet every terminal acceptance criterion.
    behavior-bearing task.
 3. `TASK-000020`: durable-state and audit reconciliation under a high-risk
    task.
-4. Terminal plan qualification from a clean committed `HEAD` under a high-risk
-   task that owns no new product behavior.
+4. `TASK-000021`: terminal plan qualification from a clean committed `HEAD`
+   under a high-risk task that owns no new product behavior.
 
 Only one live worktree lease may exist at a time. Every repository or durable
 state change occurs under its active task.

@@ -17,7 +17,7 @@ story link. Read-only post-finish checks confirm terminal durable state.
 | E2E | clean and dirty release qualification modes and fixtures | Task 1 dirty and clean proofs pass |
 | Platform | `doctor --strict --json` is `HEALTHY` on Linux `x86_64` | source/operational migrations `001..012` are `HEALTHY` after backup-first migration |
 | Audit | `audit --strict --json` has no unresolved or unknown coverage | Task 2 structured strict audit passes; accepted findings remain visible |
-| Release | `bash tests/release_qualification.sh all` from clean committed `HEAD` | Task 1 and Task 2 clean committed-HEAD proofs pass; terminal Task 3 rerun pending |
+| Release | `bash tests/release_qualification.sh all` from clean committed `HEAD` | Tasks 1–3 clean committed-HEAD proofs pass |
 
 ## Story Reconciliation Evidence Required
 
@@ -113,7 +113,40 @@ trace before status/evidence changes.
 
 ## Terminal Evidence
 
-Pending Tasks 1–3. Completion requires exact task ids, proof commands and
-outcomes, approval sources, rollback procedure, compatibility obligation,
-canonical backlog successor id, final post-finish doctor/audit output, and a
-clean `git status --short`.
+- Task: `TASK-000021`; context `5/5`; scoped `risk-policy` approval records the
+  user's full-plan instruction and explicit approval of human-gate items 1–6.
+- Clean committed HEAD: `0af49ee0e8d82f8879a98d5e4e5c60c9f971da7f`.
+- Proof commands pass through structured runs: format, workspace Clippy, 76
+  workspace tests, shell syntax, installer safety, workflow parity, memory
+  dry-run, full release qualification, strict audit, strict doctor and
+  `git diff --check`.
+- Terminal proof hashes: unit stdout
+  `cbc97b00e1e20e907790d447b436a162a9d72b83d18af208ef3bfc4541b8e2b8`;
+  release stdout
+  `d588de3918b352c279ab7c5336ce7ff96befe58e13b528a27dd57afa896df068`;
+  audit stdout
+  `246e58f3fdb9bae298fa9051e919ef2b5d386933381db3bab487b589e5f0792f`;
+  doctor stdout
+  `a5181ad610c609f7bf74675063b8a412db95fa9c64b537c71c51771947bbc6b6`.
+- Strict audit is `AUDIT_CLEAR`, with zero unresolved findings and zero
+  unknown coverage. Accepted dispositions `#1` and `#2` remain visible with
+  approval and immutable provenance. H5 remains `achieved`.
+- Canonical backlog successor `#2` is `implemented`; its measured actual
+  outcome covers doctor `001..012`, clean release qualification, H5, strict
+  audit and observed task closure gates.
+- Durable CL-71 status is `implemented`; retained CL-11 and US stories are
+  `implemented` from current story-linked evidence.
+- CLI-rendered capsule:
+  `docs/tasks/2026/07/TASK-000021-fully-closed-clp-001-with-clean.md`.
+- Detailed terminal trace: `#28`, rooted in `TASK-000021` intake and selected
+  by `task finish`.
+- Rollback: restore
+  `harness.db.backups/harness.db.1784104246235156032.v11.main.a5af5ab9060c.bak`
+  with the prior packaged binary and revert the migration/source/CLI/docs unit;
+  preserve all traces, proof outputs, dispositions and capsules. Never use
+  manual SQL or destructive recovery.
+- Compatibility: retain legacy `schema_version`, supported parser and command
+  surfaces through the observed N+2 window. No compatibility removal or
+  platform expansion is authorized by CL-71.
+- Final lifecycle outcome is recorded by `task finish`; post-finish read-only
+  doctor/audit/task-status and clean-worktree checks are the terminal authority.

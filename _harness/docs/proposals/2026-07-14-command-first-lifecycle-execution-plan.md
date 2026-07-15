@@ -2,11 +2,9 @@
 
 Date: 2026-07-14
 
-Status: Terminal closure in progress. The 2026-07-15 CL-70 qualification keeps
-all original 22 work items completed on the approved Linux `x86_64` scope.
-CL-71 Tasks `TASK-000018..20` have made release qualification reproducible and
-reconciled the historical audit/backlog state; final clean-HEAD qualification
-remains pending.
+Status: Fully closed. All original 22 work items remain completed on the
+approved Linux `x86_64` scope. CL-71 Tasks `TASK-000018..21` provide clean-HEAD
+release qualification, durable reconciliation and terminal lifecycle evidence.
 
 Plan ID: `CLP-001`
 
@@ -36,7 +34,7 @@ Plan ID: `CLP-001`
 | CL-60 | completed | Format, 66 workspace tests, Clippy, packaged/source command parity and installer state-safety proof pass at HEAD `0df8291`. |
 | CL-61 | completed | Outcome-derived human/JSON audit report, strict debt semantics, explicit unknown coverage, multiple measured improvements and dogfood observation gaps are proven by `TASK-000011` and `docs/stories/CL-61-evidence-based-maturity/validation.md`. |
 | CL-70 | completed | `TASK-000012..14`; repeatable state/distribution suite, source/packaged matrices, installer missing-CLI preflight, deterministic fresh-clone rebuild, parity/latency evidence and terminal H5 observation. |
-| CL-71 | in_progress | `TASK-000018` bootstrap and `TASK-000019` release reproducibility are completed. Approved `TASK-000020` owns migration 012, story/audit reconciliation and canonical backlog successor `#2`; terminal Task 3 remains. |
+| CL-71 | completed | `TASK-000018..21`; migration 012, explicit historical dispositions, verified canonical stories, closed backlog successor `#2`, clean-HEAD release qualification, strict doctor/audit and terminal lifecycle gates. |
 
 Original approved baseline (historical, not current runtime state):
 
@@ -1954,11 +1952,45 @@ completion invariant hoặc privacy policy, tạo/update ADR trước.
   is authorized by CL-71; an earlier cutover or additional platform requires a
   separately approved story.
 
+### 2026-07-15 — Fully close CLP-001 through CL-71
+
+- Author/agent: Codex tasks `TASK-000018`, `TASK-000019`, `TASK-000020` and
+  terminal `TASK-000021`, requested by the user's full-plan execution
+  instruction and explicit approval of all human-gate items 1–6.
+- Final release evidence: clean committed HEAD
+  `0af49ee0e8d82f8879a98d5e4e5c60c9f971da7f` passes format, workspace Clippy,
+  76 tests, source/packaged Phase 4 matrices, shell syntax, installer safety,
+  workflow parity, memory check/rebuild, full release qualification and diff.
+  Terminal release stdout SHA-256 is
+  `d588de3918b352c279ab7c5336ce7ff96befe58e13b528a27dd57afa896df068`.
+- Final durable evidence: strict doctor is `HEALTHY` at source/DB migrations
+  `001..012`; strict audit is `AUDIT_CLEAR` with zero unresolved findings and
+  zero unknown coverage. Accepted dispositions `#1` and `#2` remain explicitly
+  visible with human approval and immutable provenance. H5 remains `achieved`.
+- Final lifecycle evidence: `TASK-000018` and `TASK-000019` are completed;
+  high-risk `TASK-000020` completed with context `4/4`, two approvals, detailed
+  trace `#27`, fresh proof and committed capsule. `TASK-000021` owns context
+  `5/5`, scoped approval, terminal structured proofs, detailed trace `#28` and
+  capsule
+  `docs/tasks/2026/07/TASK-000021-fully-closed-clp-001-with-clean.md`.
+- Backlog: recovered legacy `#4` maps to canonical successor `#2`, now
+  `implemented` with a measured actual outcome covering doctor health, clean
+  release, H5, strict audit and observed task closure gates.
+- Rollback: restore
+  `harness.db.backups/harness.db.1784104246235156032.v11.main.a5af5ab9060c.bak`
+  with the prior packaged binary and revert migration/source/CLI/docs together.
+  Preserve dispositions, traces, proof outputs, friction records and capsules;
+  do not manually rewrite operational state.
+- Compatibility obligation: retain legacy `schema_version`, supported parser
+  and compatibility commands through the observed N+2 window. CL-71 does not
+  authorize early removal or platform expansion.
+- Terminal authority: `task finish` records the final completed/released state;
+  post-finish read-only task status, doctor, audit and Git status checks prove
+  closure without further repository mutation.
+
 ## 29. Immediate next action
 
-Finish `TASK-000020` only after its full proof ladder passes and its capsule is
-committed. Then run the CL-71 terminal qualification task from a clean committed
-HEAD, close canonical backlog successor `#2` with measured outcomes, finish the
-task through the CLI, and repeat post-finish doctor/audit checks. Preserve the
-N+2 compatibility window; future platform additions or earlier compatibility
-breaks require a new approved story.
+Preserve the fully closed CLP-001 evidence and observe the N+2 compatibility
+window. Any new platform, early compatibility removal, disposition revocation,
+or lifecycle invariant change requires a separately approved story and proof
+plan.

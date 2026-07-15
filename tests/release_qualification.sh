@@ -33,15 +33,21 @@ run_state_qualification() {
     packaged_cli_phase4_failure_matrix -- --ignored
 
   local clone="$WORK/fresh-clone"
+  local candidate_patch="$WORK/candidate.patch"
   git clone --quiet --no-local "$ROOT" "$clone"
-  git diff --binary HEAD | git -C "$clone" apply
+  git diff --binary HEAD >"$candidate_patch"
+  if test -s "$candidate_patch"; then
+    git -C "$clone" apply "$candidate_patch"
+  fi
   while IFS= read -r -d '' path; do
     mkdir -p "$clone/$(dirname "$path")"
     cp "$ROOT/$path" "$clone/$path"
   done < <(git ls-files --others --exclude-standard -z)
   git -C "$clone" add -A
-  git -C "$clone" -c user.name='CL-70 Qualification' \
-    -c user.email='cl70@example.invalid' commit --quiet -m 'CL-70 release candidate'
+  if ! git -C "$clone" diff --cached --quiet; then
+    git -C "$clone" -c user.name='CL-70 Qualification' \
+      -c user.email='cl70@example.invalid' commit --quiet -m 'CL-70 release candidate'
+  fi
 
   local clone_cli="$clone/_harness/bin/harness-cli"
   local rebuild_one='.harness-evidence/cl70-rebuild-one.db'

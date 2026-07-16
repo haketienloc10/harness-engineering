@@ -12,7 +12,6 @@ ARCHIVE_URL="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/${REF
 # khung dùng chung cho mọi repo - KHÔNG liệt kê tài nguyên riêng của repo
 # harness-engineering (xem EXCLUDE_PATHS bên dưới để lọc artifact lẫn trong các thư mục).
 INSTALL_ITEMS=(
-  ".editorconfig"
   ".prettierignore"
   ".prettierrc"
   "_harness"

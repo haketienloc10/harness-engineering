@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d /dev/shm/harness-installer.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
 ARCHIVE="$WORK/source.tar.gz"
@@ -25,7 +25,8 @@ cp "$ROOT/harness.db" "$TARGET/harness.db"
 DB_HASH_BEFORE="$(sha256sum "$TARGET/harness.db" | awk '{print $1}')"
 
 run_install() {
-  PATH="$MOCK_BIN:$PATH" HARNESS_TEST_ARCHIVE="$ARCHIVE" HARNESS_LITE_TARGET_DIR="$TARGET" HARNESS_LITE_OWNER="test" HARNESS_LITE_REPO="harness" HARNESS_LITE_REF="fixture" bash "$ROOT/install.sh"
+  local target="${1:-$TARGET}"
+  PATH="$MOCK_BIN:$PATH" HARNESS_TEST_ARCHIVE="$ARCHIVE" HARNESS_LITE_TARGET_DIR="$target" HARNESS_LITE_OWNER="test" HARNESS_LITE_REPO="harness" HARNESS_LITE_REF="fixture" bash "$ROOT/install.sh"
 }
 
 run_install >"$WORK/first.log"
@@ -33,11 +34,18 @@ run_install >"$WORK/first.log"
 test -f "$TARGET/.harness-id"
 test -f "$TARGET/AGENTS.md"
 test -f "$TARGET/_harness/.harness-manifest"
+test -x "$TARGET/_harness/bin/harness-cli"
+test -f "$TARGET/_harness/workflow.toml"
+test -f "$TARGET/_harness/command-manifest.txt"
+test -f "$TARGET/_harness/templates/story.md"
+test -f "$TARGET/_harness/scripts/schema/manifest.toml"
 test ! -e "$TARGET/_harness/HARNESS.md"
 test ! -e "$TARGET/_harness/FEATURE_INTAKE.md"
 test ! -e "$TARGET/_harness/CONTEXT_RULES.md"
 test ! -e "$TARGET/_harness/TRACE_SPEC.md"
 test ! -e "$TARGET/_harness/TEST_MATRIX.md"
+test ! -e "$TARGET/_harness/docs"
+test ! -e "$TARGET/.agents"
 test "$(cat "$TARGET/docs/product/existing.md")" = "existing product contract"
 test "$(sha256sum "$TARGET/harness.db" | awk '{print $1}')" = "$DB_HASH_BEFORE"
 grep -qx 'custom.cache' "$TARGET/.gitignore"
@@ -56,6 +64,27 @@ cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
 "$TARGET/_harness/bin/harness-cli" workflow commands >"$WORK/installed-commands.txt"
 grep -v '^#' "$TARGET/_harness/command-manifest.txt" | sed '/^[[:space:]]*$/d' >"$WORK/tracked-commands.txt"
 cmp "$WORK/tracked-commands.txt" "$WORK/installed-commands.txt"
+
+# A completely fresh target can initialize its local state and start/status a
+# tiny task without any pre-created docs/ directories. Product records remain
+# lazy-created by the workflow that needs them.
+FRESH_TARGET="$WORK/fresh-target"
+mkdir -p "$FRESH_TARGET"
+git init -q "$FRESH_TARGET"
+run_install "$FRESH_TARGET" >"$WORK/fresh.log"
+FRESH_CLI="$FRESH_TARGET/_harness/bin/harness-cli"
+(
+  cd "$FRESH_TARGET"
+  ./_harness/bin/harness-cli init
+) >"$WORK/fresh-init.log"
+START_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task start --type 'maintenance request' \
+  --summary 'installer fresh-target smoke' --lane tiny \
+  --lane-reason 'installer smoke test' --owner smoke --session fresh-target \
+  --behavior-bearing no --json)"
+TASK_ID="$(printf '%s\n' "$START_JSON" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')"
+test -n "$TASK_ID"
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task status --id "$TASK_ID" --json) | grep -q '"status":"in_progress"'
+test ! -e "$FRESH_TARGET/docs"
 
 run_install >"$WORK/second.log"
 

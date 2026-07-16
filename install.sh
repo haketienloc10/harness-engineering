@@ -8,15 +8,15 @@ TARGET_DIR="${HARNESS_LITE_TARGET_DIR:-$PWD}"
 
 ARCHIVE_URL="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/${REF}"
 
-# Khung mẫu (scaffold) được cài vào repo đích. CHỈ liệt kê những thứ là bộ
-# khung dùng chung cho mọi repo - KHÔNG liệt kê tài nguyên riêng của repo
-# harness-engineering (xem EXCLUDE_PATHS bên dưới để lọc artifact lẫn trong các thư mục).
+# Payload tối thiểu để một repo đích vận hành Harness. Dùng allowlist thay vì
+# copy cả thư mục rồi lọc: tài liệu, evidence và config của repo nguồn không
+# được coi là một phần của runtime cài đặt.
 INSTALL_ITEMS=(
-  ".prettierignore"
-  ".prettierrc"
-  "_harness"
-  "docs"
-  ".agents"
+  "_harness/bin/harness-cli"
+  "_harness/workflow.toml"
+  "_harness/command-manifest.txt"
+  "_harness/templates"
+  "_harness/scripts/schema"
 )
 
 # AGENTS.md KHÔNG nằm trong INSTALL_ITEMS: thay vì copy nguyên file, ta NHÚNG
@@ -33,53 +33,6 @@ HARNESS_IGNORE_END="# HARNESS:END local state"
 # Danh sách file thực sự được copy - ghi vào _harness/.harness-manifest ở cuối.
 # Vừa là DẤU HIỆU "repo này đã cài Harness", vừa phục vụ gỡ/nâng cấp về sau.
 INSTALLED_FILES=()
-
-# Artifact là TÀI NGUYÊN riêng của harness-engineering - không phải khung mẫu,
-# không được sao chép sang repo đích. So khớp theo đường dẫn tương đối tính từ gốc
-# repo (xem is_excluded). Quy ước:
-#   - "dir/*"      => bỏ MỌI file dưới dir đó
-#   - "dir/keep/*" cộng nhánh keep ở is_excluded => giữ lại ngoại lệ
-# Các thư mục product/stories/decisions/proposals chỉ giữ README/backlog/template
-# generic; nội dung thực (story, decision record, proposal, read-model...) bị loại.
-ensure_empty_dir() {
-  # Một số thư mục scaffold (vd: proposals) sau khi lọc sẽ rỗng. Tạo sẵn để
-  # agent có chỗ ghi mà không kéo theo artifact của repo nguồn.
-  mkdir -p "$TARGET_DIR/_harness/docs/proposals"
-}
-
-# Trả về 0 (true => LOẠI) nếu path tương đối là artifact riêng của repo nguồn.
-is_excluded() {
-  local p="$1"
-  case "$p" in
-    # Dữ liệu vận hành / evidence / CSDL riêng của repo nguồn (đều trong _harness/)
-    _harness/harness.db) return 0 ;;
-    _harness/.harness-manifest) return 0 ;;
-    _harness/evidence/*) return 0 ;;
-    # Ma trận test được generate riêng cho repo nguồn
-    _harness/docs/TEST_MATRIX.md) return 0 ;;
-    # Runtime policy is now command/config-backed. Retain source-only records
-    # in harness-engineering but do not install them into target repositories.
-    _harness/HARNESS.md|_harness/FEATURE_INTAKE.md|_harness/CONTEXT_RULES.md|_harness/TRACE_SPEC.md|_harness/TOOL_REGISTRY.md|_harness/TEST_MATRIX.md|_harness/ARCHITECTURE.md|_harness/IMPROVEMENT_PROTOCOL.md|_harness/HARNESS_AUDIT.md|_harness/HARNESS_COMPONENTS.md|_harness/HARNESS_MATURITY.md|_harness/README.md) return 0 ;;
-    # Bản đồ orient + wiki được generate riêng cho repo nguồn
-    docs/KNOWLEDGE_INDEX.md) return 0 ;;
-    docs/wiki/*) return 0 ;;
-    # Thư mục scaffold: chỉ giữ hướng dẫn generic, bỏ nội dung thực của repo nguồn
-    _harness/docs/proposals/*)
-      case "$p" in _harness/docs/proposals/README.md) return 1 ;; *) return 0 ;; esac ;;
-    docs/decisions/*)
-      case "$p" in docs/decisions/README.md) return 1 ;; *) return 0 ;; esac ;;
-    docs/product/*)
-      case "$p" in docs/product/README.md) return 1 ;; *) return 0 ;; esac ;;
-    docs/stories/epics/*)
-      case "$p" in docs/stories/epics/README.md) return 1 ;; *) return 0 ;; esac ;;
-    docs/stories/*)
-      case "$p" in
-        docs/stories/README.md | docs/stories/backlog.md) return 1 ;;
-        *) return 0 ;;
-      esac ;;
-  esac
-  return 1
-}
 
 # Sinh block Harness từ root AGENTS.md canonical của source repository. Phần
 # Installed Surface Contract chỉ thuộc target; phần nằm giữa HARNESS:SHARED là
@@ -266,20 +219,14 @@ SRC_DIR="$(find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 log "Cài khung mẫu vào workspace: $TARGET_DIR"
 
 MISSING_ITEMS=()
-SKIPPED_FILES=0
 EXISTING_FILES=0
 
-# Copy một file đơn lẻ, tôn trọng is_excluded + KHÔNG ghi đè file của repo đích.
+# Copy một file trong allowlist. _harness/ là payload do Harness sở hữu; các
+# generated integration files ngoài nó vẫn được xử lý riêng và không ghi đè.
 copy_file() {
   local rel="$1" src="$2"
-  if is_excluded "$rel"; then
-    SKIPPED_FILES=$((SKIPPED_FILES + 1))
-    return 0
-  fi
   local dest="$TARGET_DIR/$rel"
-  # _harness/ thuộc Harness hoàn toàn -> luôn ghi đè để NÂNG CẤP khung. Mọi path
-  # khác (dotfile, docs/ workspace) có thể là tài sản của repo đích -> KHÔNG đè
-  # nếu đã tồn tại, tránh nuốt config/nội dung sẵn có của họ.
+  # _harness/ thuộc Harness hoàn toàn -> luôn ghi đè để nâng cấp runtime.
   case "$rel" in
     _harness/*) : ;;
     *)
@@ -303,7 +250,7 @@ for item in "${INSTALL_ITEMS[@]}"; do
   fi
 
   if [ -d "$src" ]; then
-    # Duyệt từng file, bỏ qua artifact theo is_excluded.
+    # Duyệt từng file trong directory đã được allowlist.
     while IFS= read -r -d '' f; do
       rel="${f#"$SRC_DIR"/}"
       copy_file "$rel" "$f"
@@ -315,18 +262,12 @@ for item in "${INSTALL_ITEMS[@]}"; do
   fi
 done
 
-ensure_empty_dir
-
 # Nhúng block Harness vào AGENTS.md repo đích (sau khi _harness/ đã có mặt) và
 # ghi manifest đánh dấu chế độ "đã cài Harness".
 install_agents_md
 install_gitignore_block
 ensure_repository_id
 write_manifest
-
-if [ "$SKIPPED_FILES" -gt 0 ]; then
-  log "Đã bỏ qua $SKIPPED_FILES file artifact (tài nguyên riêng của repo nguồn)."
-fi
 
 if [ "$EXISTING_FILES" -gt 0 ]; then
   log "Giữ nguyên $EXISTING_FILES file đã có sẵn của repo đích (không ghi đè)."

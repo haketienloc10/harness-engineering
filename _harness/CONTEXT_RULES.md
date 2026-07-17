@@ -33,7 +33,7 @@ Read to decide the smallest safe approach and expected proof.
 | -------------------------------------------------------------------------------- | ------ | ----------------------------------- | --------------------------------- |
 | Current files to edit                                                            | Must   | Must                                | Must                              |
 | `_harness/templates/story.md`                                              | Skip   | Must when creating/updating a story | Should                            |
-| `_harness/templates/high-risk-story/*`                                     | Skip   | Skip unless risk escalates          | Must                              |
+| `_harness/templates/story.md`                                               | Skip   | Must when creating/updating a story | Must                              |
 | `_harness/ARCHITECTURE.md`                                                 | Skip   | Should for code or boundary changes | Must                              |
 | `_harness/TEST_MATRIX.md` or `_harness/bin/harness-cli query matrix` | Should | Must                                | Must                              |
 | Relevant decisions                                                               | Skip   | Should                              | Must                              |
@@ -65,7 +65,7 @@ Read to prove the change and avoid claiming unsupported completion.
 | Story acceptance criteria                                                        | Should           | Must                     | Must                                    |
 | `_harness/TEST_MATRIX.md` or `_harness/bin/harness-cli query matrix` | Should           | Must                     | Must                                    |
 | Validation section of story packet                                               | Skip if no story | Must                     | Must                                    |
-| `_harness/templates/validation-report.md`                                  | Skip             | Should for notable proof | Must for high-risk proof                |
+| `_harness/templates/story.md`                                              | Skip             | Should for notable proof | Must for high-risk proof                |
 | Relevant commands from README/package docs                                       | Should           | Must                     | Must                                    |
 | External benchmark or release protocol, when supplied                            | Skip             | Skip unless requested    | Must if the story depends on that proof |
 | `_harness/HARNESS_MATURITY.md`                                                   | Skip             | Should for Harness improvements | Must for maturity claims |
@@ -90,7 +90,7 @@ Read to leave useful evidence for the next agent.
 | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Task touches database schema, durable records, or migrations                                   | Read `docs/decisions/0004-sqlite-durable-layer.md`, `_harness/scripts/schema/`, and relevant CLI code before planning.                                        |
 | Task touches CLI command behavior or installer distribution                                    | Read `docs/decisions/0005-prebuilt-rust-harness-cli.md`, `_harness/scripts/schema/`, CLI help output, root `install.sh`, and installer docs. |
-| Task touches auth, authorization, audit/security, data loss, or external providers             | Treat as high-risk, read `_harness/templates/high-risk-story/*`, and check prior decisions before implementation.                                                       |
+| Task touches auth, authorization, audit/security, data loss, or external providers             | Treat as high-risk, read `_harness/templates/story.md` and relevant prior decisions before implementation.                                                           |
 | Task changes public API shape, product behavior, or user-visible workflow                      | Read relevant `docs/product/*`, story packets, and validation expectations before editing.                                                                          |
 | Task changes Harness policy, source hierarchy, risk classification, or validation requirements | Read `_harness/HARNESS.md`, `_harness/FEATURE_INTAKE.md`, `_harness/ARCHITECTURE.md`, and `docs/decisions/*`; pause if direction is ambiguous.    |
 | Task discovers repeated confusion, stale docs, or missing proof                                | Query backlog, read `_harness/IMPROVEMENT_PROTOCOL.md`, record `harness_friction`, and add a backlog item when the fix is out of scope.                                                                                |
@@ -104,7 +104,7 @@ Read to leave useful evidence for the next agent.
 | --------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Tiny      | About 2K tokens of Harness context  | `AGENTS.md`, `_harness/FEATURE_INTAKE.md`, matrix query, and the exact file being changed.                            | Tiny work should not spend more context on policy than on the edit.                                              |
 | Normal    | About 5K tokens of Harness context  | Intake docs, relevant product/story docs, architecture when structural, validation expectations, and trace spec at the end. | Normal work needs enough context to preserve contracts and record proof without reading every historical file.   |
-| High-risk | About 10K tokens of Harness context | Full intake, architecture, relevant decisions, high-risk templates, product docs, validation docs, and trace spec.          | High-risk work needs source hierarchy, prior decisions, and proof expectations in context before implementation. |
+| High-risk | About 10K tokens of Harness context | Full intake, architecture, relevant decisions, progressive story template, product docs, validation evidence, and trace spec. | High-risk work needs source hierarchy, prior decisions, and proof expectations in context before implementation. |
 
 Budget rules:
 

@@ -37,6 +37,7 @@ intent
   -> validation
   -> task trace
   -> friction or backlog
+  -> task finish
 ```
 
 `task start` initializes the task-rooted durable lifecycle when work begins.

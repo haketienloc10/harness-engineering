@@ -86,8 +86,9 @@ roles/platforms.
 
 Requirements:
 
-- Create a story folder using `_harness/templates/high-risk-story/`.
-- Fill in `execplan.md`, `overview.md`, `design.md`, and `validation.md`.
+- Create or update one progressive story from `_harness/templates/story.md`.
+- Expand its scope, design, human-gate, validation, and rollback sections with
+  the high-risk evidence required for the change.
 - Ask for human confirmation before implementation only if direction is
   ambiguous.
 - Record a durable decision when behavior, architecture, authorization, data

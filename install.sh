@@ -270,4 +270,4 @@ if [ "${#MISSING_ITEMS[@]}" -gt 0 ]; then
   done
 fi
 
-log "Hoàn tất. Payload đã cập nhật; harness.db không bị thay đổi. Chạy task start hoặc init để ensure DB khi sẵn sàng."
+log "Hoàn tất. Payload đã cập nhật; harness.db không bị thay đổi. Chạy task start để ensure DB khi sẵn sàng."

@@ -19,16 +19,13 @@ docs/stories/epics/E01-domain-name/US-001-short-story-title.md
 ## High-Risk Story
 
 Use the progressive `_harness/templates/story.md` when the feature intake
-classifies work as high-risk.
+classifies work as high-risk. Expand its scope, design, human-gate,
+validation, and rollback sections instead of creating a multi-file packet.
 
 Suggested path:
 
 ```text
-docs/stories/epics/E02-risky-domain/US-012-risky-story-title/
-  execplan.md
-  overview.md
-  design.md
-  validation.md
+docs/stories/epics/E02-risky-domain/US-012-risky-story-title.md
 ```
 
 ## Status Flow

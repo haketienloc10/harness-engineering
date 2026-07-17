@@ -150,39 +150,22 @@ without parsing the human table.
 
 ## Compiled Harness Commands (Outbound Manifest)
 
-| Command               | Responsibility         | Purpose                                                                          | Arguments                                                                                                                    |
-| --------------------- | ---------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `init`                | Task state             | Create the harness database.                                                     | none                                                                                                                         |
-| `migrate`             | Task state             | Apply pending schema migrations.                                                 | none                                                                                                                         |
-| `import brownfield`   | Project memory         | Seed durable records from markdown state.                                        | none                                                                                                                         |
-| `intake`              | Task specification     | Record a feature intake classification.                                          | `--type`, `--summary`, `--lane`                                                                                              |
-| `story add`           | Task state             | Create a durable story record.                                                   | `--id`, `--title`, `--lane`, optional `--contract`, `--verify`, `--notes`                                                    |
-| `story update`        | Task state             | Update story status, evidence, or verification command; direct proof booleans are legacy-only. | `--id`, optional status/evidence/verify fields                                                                     |
-| `story verify`        | Verification           | Run one story `verify_command` and record pass/fail.                             | story id                                                                                                                     |
-| `story verify-all`    | Verification           | Run every configured story verification command, skipping stories without one.    | none                                                                                                                         |
-| `decision add`        | Project memory         | Create a durable decision record.                                                | `--id`, `--title`, optional `--doc`, `--verify`                                                                              |
-| `decision verify`     | Verification           | Run one decision verification command.                                           | decision id                                                                                                                  |
-| `backlog add`         | Entropy auditing       | Record a harness improvement proposal.                                           | `--title`, optional pain/suggestion/risk/predicted fields                                                                    |
-| `backlog close`       | Entropy auditing       | Close a backlog item with outcome evidence.                                      | `--id`, optional `--status`, `--outcome`                                                                                     |
-| `tool register`       | Tool access            | Register an external project tool.                                               | `--name`, `--command`, `--description`, `--responsibility`, optional `--kind`, `--capability`, `--scan`, `--args`, `--force` |
-| `tool check`          | Tool access            | Scan registered tools and persist present/missing/unknown status.                | optional `--name`, `--json`                                                                                                  |
-| `tool remove`         | Tool access            | Remove a registered external tool.                                               | `--name`                                                                                                                     |
-| `intervention add`    | Intervention recording | Record a human, reviewer, CI, or agent intervention.                             | `--type`, `--description`, `--source`, optional `--trace`, `--story`, `--impact`                                             |
-| `trace`               | Observability          | Record an agent execution trace and print trace quality.                         | `--summary`, optional trace fields                                                                                           |
-| `score-trace`         | Observability          | Score trace detail against lane requirements.                                    | optional `--id`                                                                                                              |
-| `score-context`       | Context selection      | Score trace reads against compiled context rules.                                | trace id                                                                                                                     |
-| `audit`               | Entropy auditing       | Run drift checks and compute entropy score.                                      | none                                                                                                                         |
-| `propose`             | Entropy auditing       | Generate improvement proposals from friction, interventions, and audit findings. | optional `--commit`                                                                                                          |
-| `query matrix`        | Task state             | Show durable story proof matrix.                                                 | optional `--numeric`                                                                                                         |
-| `query backlog`       | Entropy auditing       | Show harness improvement backlog.                                                | optional `--open`, `--closed`                                                                                                |
-| `query decisions`     | Project memory         | Show durable decision records.                                                   | none                                                                                                                         |
-| `query intakes`       | Task specification     | Show recent intake records.                                                      | none                                                                                                                         |
-| `query traces`        | Observability          | Show recent trace records.                                                       | none                                                                                                                         |
-| `query friction`      | Failure attribution    | Show traces with harness friction.                                               | none                                                                                                                         |
-| `query tools`         | Tool access            | Show compiled and registered tool entries.                                       | optional `--json`, `--summary`, `--responsibility`, `--capability`, `--status`                                               |
-| `query interventions` | Intervention recording | Show intervention records.                                                       | optional `--trace`, `--story`, `--type`                                                                                      |
-| `query stats`         | Task state             | Show durable record counts.                                                      | none                                                                                                                         |
-| `query sql`           | Tool access            | Run arbitrary SQL against `harness.db`.                                          | SQL text                                                                                                                     |
+The executable manifest is authoritative and changes with the CLI build:
+
+```bash
+_harness/bin/harness-cli workflow commands --json
+```
+
+Use command help for arguments and semantics:
+
+```bash
+_harness/bin/harness-cli <command> --help
+```
+
+The required lifecycle is `task start`, context acknowledgement, `proof run`,
+`task trace`, and `task finish`. Do not invoke retired compatibility commands
+such as `init`, `migrate`, standalone `intake`/`trace`, or mutable `story`
+subcommands.
 
 ## Validation Rules
 

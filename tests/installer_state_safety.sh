@@ -47,6 +47,7 @@ grep -qx 'ref = feature-rework' "$OVERRIDE_TARGET/_harness/.harness-manifest"
 test -f "$TARGET/.harness-id"
 test -f "$TARGET/AGENTS.md"
 test -f "$TARGET/_harness/.harness-manifest"
+test -f "$TARGET/_harness/installation.toml"
 test -x "$TARGET/_harness/bin/harness-cli"
 test -f "$TARGET/_harness/workflow.toml"
 test -f "$TARGET/_harness/command-manifest.txt"
@@ -73,6 +74,9 @@ awk '
 cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
 grep -q '^# Harness đã cài đặt$' "$TARGET/AGENTS.md"
 grep -q 'runtime cho agent' "$TARGET/AGENTS.md"
+grep -qx 'mode = "repository"' "$TARGET/_harness/installation.toml"
+grep -qx 'installation_mode = repository' "$TARGET/_harness/.harness-manifest"
+grep -q 'Installation mode: `repository`' "$TARGET/AGENTS.md"
 
 "$TARGET/_harness/bin/harness-cli" workflow validate --json | grep -q '"mode":"shadow"'
 "$TARGET/_harness/bin/harness-cli" workflow parity --json | grep -q '"code":"WORKFLOW_PARITY_OK"'
@@ -96,6 +100,40 @@ TASK_ID="$(printf '%s\n' "$START_JSON" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/
 test -n "$TASK_ID"
 (cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task status --id "$TASK_ID" --json) | grep -q '"status":"in_progress"'
 test ! -e "$FRESH_TARGET/docs"
+
+# Coordination mode is valid only at a Git root, retains user instructions,
+# and rejects lifecycle CLI calls made from a nested delivery repository.
+COORDINATION_TARGET="$WORK/coordination-target"
+mkdir -p "$COORDINATION_TARGET/delivery"
+git init -q "$COORDINATION_TARGET"
+git init -q "$COORDINATION_TARGET/delivery"
+printf '# Workspace Instructions\n\nuser-owned coordination policy\n' >"$COORDINATION_TARGET/AGENTS.md"
+HARNESS_INSTALL_MODE=coordination run_install "$COORDINATION_TARGET" >"$WORK/coordination.log"
+grep -q 'user-owned coordination policy' "$COORDINATION_TARGET/AGENTS.md"
+grep -q 'Installation mode: `coordination`' "$COORDINATION_TARGET/AGENTS.md"
+grep -qx 'mode = "coordination"' "$COORDINATION_TARGET/_harness/installation.toml"
+grep -qx 'installation_mode = coordination' "$COORDINATION_TARGET/_harness/.harness-manifest"
+(cd "$COORDINATION_TARGET" && ./_harness/bin/harness-cli workflow validate --json) | grep -q 'WORKFLOW_VALID'
+if (cd "$COORDINATION_TARGET/delivery" && ../_harness/bin/harness-cli workflow validate --json) \
+  >"$WORK/coordination-child-auto.log" 2>&1; then
+  echo "coordination CLI unexpectedly auto-resolved from nested repository" >&2
+  exit 1
+fi
+grep -q 'coordination mode' "$WORK/coordination-child-auto.log"
+if (cd "$COORDINATION_TARGET/delivery" && HARNESS_REPO_ROOT="$COORDINATION_TARGET" \
+  ../_harness/bin/harness-cli workflow validate --json) >"$WORK/coordination-child.log" 2>&1; then
+  echo "coordination CLI unexpectedly ran from nested repository" >&2
+  exit 1
+fi
+grep -q 'coordination mode' "$WORK/coordination-child.log"
+
+NON_GIT_TARGET="$WORK/non-git-coordination-target"
+mkdir -p "$NON_GIT_TARGET"
+if HARNESS_INSTALL_MODE=coordination run_install "$NON_GIT_TARGET" >"$WORK/non-git-coordination.log" 2>&1; then
+  echo "coordination mode unexpectedly installed outside a Git root" >&2
+  exit 1
+fi
+grep -q 'coordination mode chỉ cài vào Git root' "$WORK/non-git-coordination.log"
 
 run_install >"$WORK/second.log"
 

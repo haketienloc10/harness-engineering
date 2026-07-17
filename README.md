@@ -56,6 +56,16 @@ Install into another directory:
 curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | HARNESS_LITE_TARGET_DIR=/path/to/target bash
 ```
 
+Install a Git-root workspace that coordinates independent nested repositories:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | env HARNESS_INSTALL_MODE=coordination bash
+```
+
+`repository` is the default installation mode. `coordination` requires the
+target to be a Git root and allows `harness-cli` only from that root; nested
+repositories retain their own source, Git, build, test, and release flows.
+
 From a local checkout, run the same installer:
 
 ```bash

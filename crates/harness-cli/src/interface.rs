@@ -4293,11 +4293,24 @@ fn print_artifact_check(result: ArtifactCheckResult, json: bool) {
 fn resolve_context() -> Result<HarnessContext, InterfaceError> {
     let repo_root = match env::var_os("HARNESS_REPO_ROOT") {
         Some(path) => validate_explicit_repo_root(PathBuf::from(path))?,
-        None => find_repository_root(env::current_dir().map_err(InterfaceError::CurrentDir)?)?,
+        None => {
+            let current = env::current_dir().map_err(InterfaceError::CurrentDir)?;
+            match find_repository_root(current.clone()) {
+                Ok(root) => root,
+                Err(error) => {
+                    if let Some(root) = coordination_root_ancestor(&current)? {
+                        return Err(coordination_root_error(&root));
+                    }
+                    return Err(error);
+                }
+            }
+        }
     };
     let db_path = env::var_os("HARNESS_DB")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root.join("harness.db"));
+
+    enforce_installation_topology(&repo_root)?;
 
     let schema_dir = resolve_schema_dir(&repo_root);
 
@@ -4306,6 +4319,74 @@ fn resolve_context() -> Result<HarnessContext, InterfaceError> {
         db_path,
         schema_dir,
     })
+}
+
+fn enforce_installation_topology(repo_root: &std::path::Path) -> Result<(), InterfaceError> {
+    match installation_mode(repo_root)?.as_str() {
+        "repository" => Ok(()),
+        "coordination" => {
+            let current = env::current_dir()
+                .map_err(InterfaceError::CurrentDir)?
+                .canonicalize()
+                .map_err(|error| {
+                    InterfaceError::RepositoryRoot(format!(
+                        "cannot canonicalize current directory: {error}"
+                    ))
+                })?;
+            if current == repo_root {
+                Ok(())
+            } else {
+                Err(coordination_root_error(repo_root))
+            }
+        }
+        _ => unreachable!("installation_mode validates the configured value"),
+    }
+}
+
+fn installation_mode(repo_root: &std::path::Path) -> Result<String, InterfaceError> {
+    let config = repo_root.join("_harness/installation.toml");
+    if !config.exists() {
+        return Ok("repository".to_owned());
+    }
+    let contents = fs::read_to_string(&config).map_err(|error| {
+        InterfaceError::RepositoryRoot(format!(
+            "cannot read installation topology '{}': {error}",
+            config.display()
+        ))
+    })?;
+    let mode = contents
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("mode ="))
+        .map(str::trim)
+        .map(|value| value.trim_matches('"'))
+        .unwrap_or("repository");
+    match mode {
+        "repository" | "coordination" => Ok(mode.to_owned()),
+        value => Err(InterfaceError::RepositoryRoot(format!(
+            "invalid installation mode '{value}' in {}",
+            config.display()
+        ))),
+    }
+}
+
+fn coordination_root_ancestor(start: &std::path::Path) -> Result<Option<PathBuf>, InterfaceError> {
+    let start = start.canonicalize().map_err(|error| {
+        InterfaceError::RepositoryRoot(format!("cannot canonicalize current directory: {error}"))
+    })?;
+    for ancestor in start.ancestors().filter(|path| path.join(".git").exists()) {
+        if installation_mode(ancestor)? == "coordination" {
+            return Ok(Some(ancestor.to_path_buf()));
+        }
+    }
+    Ok(None)
+}
+
+fn coordination_root_error(repo_root: &std::path::Path) -> InterfaceError {
+    InterfaceError::RepositoryRoot(format!(
+        "Harness is installed in coordination mode; run harness-cli from coordination root '{}'",
+        repo_root.display()
+    ))
 }
 
 fn validate_explicit_repo_root(path: PathBuf) -> Result<PathBuf, InterfaceError> {
@@ -5000,5 +5081,30 @@ mod tests {
         assert!(error
             .to_string()
             .contains("ambiguous nested repository roots"));
+    }
+
+    #[test]
+    fn coordination_mode_requires_the_calling_directory_to_be_the_root() {
+        let temp = tempfile::Builder::new()
+            .prefix("harness-cli-coordination-")
+            .tempdir_in("/dev/shm")
+            .unwrap();
+        let root = temp.path().join("workspace");
+        let child = root.join("delivery");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("_harness")).unwrap();
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(
+            root.join("_harness/installation.toml"),
+            "version = 1\nmode = \"coordination\"\nroot_only = true\n",
+        )
+        .unwrap();
+
+        let previous = env::current_dir().unwrap();
+        env::set_current_dir(&child).unwrap();
+        let error = enforce_installation_topology(&root).unwrap_err();
+        env::set_current_dir(previous).unwrap();
+
+        assert!(error.to_string().contains("coordination mode"));
     }
 }

@@ -34,30 +34,20 @@ HARNESS_IGNORE_END="# HARNESS:END local state"
 # Vừa là DẤU HIỆU "repo này đã cài Harness", vừa phục vụ gỡ/nâng cấp về sau.
 INSTALLED_FILES=()
 
-# Sinh block Harness từ root AGENTS.md canonical của source repository. Phần
-# Installed Surface Contract chỉ thuộc target; phần nằm giữa HARNESS:SHARED là
-# byte-for-byte từ AGENTS.md và được parity-test.
+# Sinh block cài đặt từ AGENTS.md canonical. Phần shared phải byte-for-byte để
+# repo đích luôn nhận instruction surface agents-first mới nhất.
 build_harness_block() {
   local shared_source="$SRC_DIR/AGENTS.md"
   [ -f "$shared_source" ] || fail "Thiếu canonical AGENTS.md trong source archive"
   printf '%s\n' "$HARNESS_BLOCK_BEGIN"
   cat <<'EOF'
 
-# Installed Harness Surface
+# Harness đã cài đặt
 
-This repository has Harness installed.
-
-## Installed Surface Contract
-
-- `_harness/` is the Harness operating scaffold for agents: CLI, runtime policy,
-  schema migrations, templates, and workflow references. It is not target-repo
-  product source. Do not treat it as application code unless the task is a
-  Harness improvement.
-- `docs/product/`, `docs/stories/`, and `docs/decisions/` are target-repo product
-  contracts used by the Harness workflow. They are part of the target repo's
-  durable product record, not Harness runtime internals.
-- Everything outside `_harness/` belongs to the target repo unless a file
-  explicitly says otherwise.
+- Xem `_harness/` là runtime cho agent, không phải source sản phẩm của repo đích.
+- Xem `docs/product/`, `docs/stories/`, và `docs/decisions/` là durable product
+  record của repo đích.
+- Xem các path khác là thuộc repo đích, trừ khi file tự chỉ định khác.
 EOF
   printf '%s\n' "$HARNESS_SHARED_BEGIN"
   cat "$shared_source"
@@ -152,7 +142,7 @@ install_agents_md() {
   if [ ! -e "$dest" ]; then
     {
       printf '# Agent Instructions\n\n'
-      printf 'Add project-specific agent instructions here.\n\n'
+      printf 'Thêm instructions riêng của repo tại đây.\n\n'
       printf '%s\n' "$block"
     } >"$dest"
     log "Tạo mới AGENTS.md + nhúng block Harness"

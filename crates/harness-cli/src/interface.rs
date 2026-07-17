@@ -14,8 +14,8 @@ use crate::application::{
     DecisionAddInput, FrictionAddInput, FrictionResolveInput, HarnessContext, HarnessService,
     InterventionAddInput, InterventionFilter, ProofRecord, ProofRunInput, QueryTable,
     TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput, TaskHandoffInput,
-    TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput,
-    ToolRegisterInput, TraceInput,
+    TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput,
+    TraceInput,
 };
 use crate::domain::{
     normalize_capability, normalize_token, parse_optional_integer, parse_tool_args, proof_display,
@@ -365,6 +365,11 @@ enum TaskAction {
     Refresh(TaskRefreshArgs),
     Context(TaskContextArgs),
     Approve(TaskApproveArgs),
+    /// Recommend the next safe action without changing task state.
+    Next {
+        #[arg(long)]
+        json: bool,
+    },
     Status {
         #[arg(long)]
         id: String,
@@ -651,6 +656,9 @@ enum CapsuleAction {
     Render {
         #[arg(long)]
         id: String,
+        /// Explicit lowercase English kebab-case filename slug.
+        #[arg(long)]
+        slug: String,
         #[arg(long)]
         date: String,
         #[arg(long, value_name = "tiny|normal|high-risk")]
@@ -1340,6 +1348,14 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     print_task_status_contract_human(&contract);
                 }
             }
+            TaskAction::Next { json } => {
+                let contract = task_next_contract_json(&service, &repo_root)?;
+                if json {
+                    println!("{}", serde_json::to_string(&contract).expect("task next contract serializes"));
+                } else {
+                    print_task_next_contract_human(&contract);
+                }
+            }
             TaskAction::Block(args) => {
                 let task = service.transition_task(TaskTransitionInput {
                     id: args.id,
@@ -1751,6 +1767,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             MemoryAction::Capsule(args) => match args.action {
                 CapsuleAction::Render {
                     id,
+                    slug,
                     date,
                     lane,
                     outcome,
@@ -1761,6 +1778,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                         &repo_root,
                         &active_db_path,
                         &id,
+                        &slug,
                         &date,
                         &lane,
                         &outcome,
@@ -2768,7 +2786,7 @@ fn task_status_contract_json(
         task.capsule_required,
         capsule_satisfied,
         vec![format!(
-            "_harness/bin/harness-cli memory capsule render --id {} --date \"$(date +%F)\" --lane {} --outcome completed --summary '<SUMMARY>' --json",
+            "_harness/bin/harness-cli memory capsule render --id {} --slug '<ENGLISH-KEBAB-SLUG>' --date \"$(date +%F)\" --lane {} --outcome completed --summary '<SUMMARY>' --json",
             task.id, task.risk_lane.replace('_', "-")
         )],
     );
@@ -2830,6 +2848,115 @@ fn task_status_contract_json(
         "remediation": remediation,
         "next_command": remediation.first(),
     }))
+}
+
+/// Read-only continuation guidance.  This deliberately reports an existing
+/// lifecycle root instead of resuming it: ownership and lease checks still
+/// belong to the explicit `task resume`/`task handoff` commands.
+fn task_next_contract_json(
+    service: &HarnessService,
+    repo_root: &std::path::Path,
+) -> Result<serde_json::Value, InterfaceError> {
+    let worktree = repo_root.to_string_lossy().replace('\'', "''");
+    let active = query_table_objects(service.query_sql(&format!(
+        "SELECT id FROM task \
+         WHERE worktree='{worktree}' AND status IN ('in_progress','blocked','closing') \
+         ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'blocked' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1"
+    ))?);
+
+    if let Some(id) = active
+        .first()
+        .and_then(|row| row.get("id"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let task = service.task_status(id)?;
+        let status = task_status_contract_json(service, &task)?;
+        let recommendation = match task.status.as_str() {
+            "in_progress" if task.lease_state == "active" => {
+                "Inspect the active task and complete its reported next command; do not start another task."
+            }
+            "in_progress" => {
+                "Inspect the expired task before an explicit resume; do not resume it implicitly."
+            }
+            "blocked" => {
+                "Inspect the blocked task and its missing authority or external condition; do not resume it implicitly."
+            }
+            _ => "Inspect the existing lifecycle task before taking a state-changing action.",
+        };
+        return Ok(serde_json::json!({
+            "ok": true,
+            "state": "active_task",
+            "recommendation": recommendation,
+            "next_command": format!("_harness/bin/harness-cli task status --id {} --json", task.id),
+            "task": status,
+            "backlog": [],
+            "latest_trace": null,
+        }));
+    }
+
+    let backlog = service.query_backlog(crate::domain::BacklogFilter::Open)?;
+    let backlog_json = backlog
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "id": item.id,
+                "title": item.title,
+                "status": item.status,
+                "risk": item.risk,
+                "predicted_impact": item.predicted_impact,
+            })
+        })
+        .collect::<Vec<_>>();
+    let latest_trace = service.query_traces()?.into_iter().next().map(|trace| {
+        serde_json::json!({
+            "id": trace.id,
+            "created_at": trace.created_at,
+            "outcome": trace.outcome,
+            "task_summary": trace.task_summary,
+        })
+    });
+    let (state, recommendation, next_command) = if let Some(item) = backlog.first() {
+        (
+            "backlog_review",
+            format!(
+                "No active task exists. Review open backlog #{} ({}) with the human before starting it.",
+                item.id, item.title
+            ),
+            "_harness/bin/harness-cli query backlog --open".to_owned(),
+        )
+    } else {
+        (
+            "awaiting_intent",
+            "No active task or open backlog exists. Use the latest completed trace as context and ask for new intent.".to_owned(),
+            "_harness/bin/harness-cli query traces".to_owned(),
+        )
+    };
+    Ok(serde_json::json!({
+        "ok": true,
+        "state": state,
+        "recommendation": recommendation,
+        "next_command": next_command,
+        "task": null,
+        "backlog": backlog_json,
+        "latest_trace": latest_trace,
+    }))
+}
+
+fn print_task_next_contract_human(contract: &serde_json::Value) {
+    println!("state: {}", contract["state"]);
+    println!("recommendation: {}", contract["recommendation"]);
+    println!("next: {}", contract["next_command"]);
+    if let Some(task_id) = contract["task"]["task_id"].as_str() {
+        println!("task: {task_id}");
+    }
+    if let Some(backlog) = contract["backlog"].as_array() {
+        for item in backlog {
+            println!(
+                "backlog #{} [{}]: {}",
+                item["id"], item["status"], item["title"]
+            );
+        }
+    }
 }
 
 fn query_table_objects(table: crate::application::QueryTable) -> Vec<serde_json::Value> {
@@ -3436,6 +3563,7 @@ fn render_capsule(
     repo_root: &std::path::Path,
     database: &std::path::Path,
     id: &str,
+    slug: &str,
     date: &str,
     lane: &str,
     outcome: &str,
@@ -3531,27 +3659,8 @@ fn render_capsule(
         .join("docs/tasks")
         .join(&date[..4])
         .join(&month[5..]);
-    let slug = redacted
-        .to_lowercase()
-        .chars()
-        .map(|value| {
-            if value.is_ascii_alphanumeric() {
-                value
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("-");
-    let path = directory.join(format!(
-        "{}-{}.md",
-        id,
-        if slug.is_empty() { "task" } else { &slug }
-    ));
+    let slug = validate_capsule_slug(slug)?;
+    let path = directory.join(format!("{}-{}.md", id, slug));
     if path.exists() {
         return Err(InterfaceError::WorkflowParity(format!(
             "capsule already exists at {}",
@@ -3571,6 +3680,24 @@ fn render_capsule(
         .unwrap_or(&path)
         .to_string_lossy()
         .into_owned())
+}
+
+fn validate_capsule_slug(slug: &str) -> Result<&str, InterfaceError> {
+    let valid = !slug.is_empty()
+        && slug.len() <= 72
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && !slug.contains("--")
+        && slug.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        });
+    if valid {
+        Ok(slug)
+    } else {
+        Err(InterfaceError::WorkflowParity(
+            "capsule slug must be 1-72 lowercase ASCII letters, digits, and single hyphens; provide an explicit English kebab-case --slug".to_owned(),
+        ))
+    }
 }
 
 fn redact_capsule_text(value: &str) -> String {
@@ -4629,6 +4756,28 @@ mod tests {
     #[test]
     fn cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn capsule_slug_requires_explicit_lowercase_kebab_case() {
+        assert_eq!(
+            validate_capsule_slug("verify-continuation-gap").unwrap(),
+            "verify-continuation-gap"
+        );
+        for slug in [
+            "",
+            "Verify-gap",
+            "verify_gap",
+            "verify--gap",
+            "-verify-gap",
+            "verify-gap-",
+            "xác-minh",
+        ] {
+            assert!(
+                validate_capsule_slug(slug).is_err(),
+                "expected invalid slug: {slug}"
+            );
+        }
     }
 
     #[test]

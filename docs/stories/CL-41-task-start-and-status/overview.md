@@ -42,3 +42,9 @@ assigns a distinct owner/session with a fresh lease (ADR 0019).
 
 `task link-story` explicitly adds a secondary story or promotes one primary;
 promotion demotes the former primary in the same transaction.
+
+`task next` is a read-only continuation query for ambiguous user prompts. It
+first reports a non-terminal task in the current worktree and its `task status`
+contract; it never resumes, renews a lease, or changes ownership. When no such
+task exists, it returns open backlog candidates and the latest completed trace,
+and requires human confirmation before a backlog item becomes a new task.

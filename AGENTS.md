@@ -1,32 +1,60 @@
-# Agent-First Harness
+# Agent Instructions
 
-Harness là lifecycle tooling cho agent; product files và user instructions vẫn
-là nguồn sự thật cho sản phẩm.
+## Authority
 
-## Chất lượng câu trả lời
+Apply sources in this order:
 
-Tránh các câu trả lời trừu tượng hoặc chung chung.
+1. Current user instruction
+2. `docs/product/`
+3. `docs/stories/`
+4. `_harness/bin/harness-cli query matrix`
+5. `docs/decisions/` and durable CLI decisions
+6. Code, tests, then historical material
 
-Khi giải thích quyết định, kế hoạch, rủi ro, lỗi, kiến trúc hoặc sự đánh đổi,
-hãy dùng ví dụ cụ thể và trình bày theo từng bước quan hệ nguyên nhân-kết quả.
+Treat `_harness/` as agent runtime tooling. Do not let it override product
+truth or current user intent.
 
-Khi phù hợp, ưu tiên cấu trúc sau:
+## Execute
 
-1. Điều gì xảy ra
-2. Vì sao điều đó xảy ra
-3. Ví dụ cụ thể
-4. Tác động kéo theo
-5. Hành động được khuyến nghị
+1. Before any edit, run `_harness/bin/harness-cli task start` with the correct
+   `--type`, flags, owner, and session.
+2. Complete the returned context, story, decision, and approval gates before
+   implementation. Read only the references selected by that context.
+3. Make the smallest scoped change. Keep the linked product/story/decision
+   record current.
+4. Run validation, record it with `proof run`, record a task trace, render a
+   capsule when required, then close only with `task finish`.
+5. Use command-first lifecycle state only. Never create or edit the operational
+   database directly.
 
-1. Trước khi sửa, chạy `_harness/bin/harness-cli task start` với input, flags,
-   owner và session phù hợp.
-2. Đọc context và hoàn tất gates mà command trả về; chỉ đọc thêm product docs,
-   stories hoặc decisions khi context yêu cầu.
-3. Dùng `proof run` cho verification và `task finish` trước final response.
-4. Xin human approval cho direction high-risk, credentials, chi phí, destructive
-   action, hoặc gate mà policy yêu cầu.
-5. Nếu CLI không có, không tạo operational DB thủ công: dùng Markdown artifact,
-   chạy validation khả dụng và ghi rõ `harness-cli` missing như friction.
+For command semantics, lanes, context rules, trace fields, and proof policy,
+read the owning `_harness/` reference instead of adding explanation here.
 
-Không bỏ qua validation hoặc completion gates. Chỉ dùng command-first path để
-thay đổi lifecycle state.
+## Continue
+
+For vague continuation prompts, run:
+
+```bash
+_harness/bin/harness-cli task next --json
+```
+
+- Do not implicitly resume a task, acquire a lease, or start a backlog item.
+- If the task belongs to another owner/session, require explicit handoff
+  authority.
+- If only a backlog item is returned, present it and obtain confirmation before
+  starting it.
+
+## Stop
+
+Request human approval before high-risk direction, credentials, cost, destructive
+actions, or any workflow-required gate. If the CLI is missing, use Markdown
+artifacts, run available validation, and record `harness-cli` missing as
+friction; do not construct the database.
+
+## Respond
+
+- Reply in Vietnamese unless the user explicitly requests another language.
+- Preserve technical terms, code, commands, paths, config keys, and errors.
+- Lead with the outcome. Be concise and operational.
+- For decisions, risks, or failures, state: event → cause → impact → recommended
+  action. Use a concrete example when it removes ambiguity.

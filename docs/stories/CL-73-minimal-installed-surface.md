@@ -56,3 +56,8 @@ not installed.
 Revert the installer and its safety test together. The target installer remains
 non-destructive outside its owned `_harness/` runtime payload and generated
 integration block.
+
+2026-07-17 follow-up: the generated target block now uses Vietnamese,
+agents-first installation instructions while preserving byte-for-byte parity of
+the canonical shared `AGENTS.md` segment. Installer state-safety proof asserts
+both the parity segment and the generated Vietnamese runtime contract.

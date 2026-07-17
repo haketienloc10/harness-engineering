@@ -19,6 +19,7 @@ task refresh
 task context
 task context acknowledge
 task approve
+task next
 task status
 proof
 proof run

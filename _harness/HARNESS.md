@@ -51,6 +51,7 @@ Core commands:
 
 ```bash
 _harness/bin/harness-cli task start --type <type> --summary <text> --owner <owner> --session <session>
+_harness/bin/harness-cli task next --json
 _harness/bin/harness-cli task context acknowledge --id <task-id> --read <path>
 _harness/bin/harness-cli task link-story --id <task-id> --story <story-id> --role primary
 _harness/bin/harness-cli proof run --task <task-id> --story <story-id> --layer unit -- <command>

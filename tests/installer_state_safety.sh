@@ -58,6 +58,8 @@ awk '
   capture { print }
 ' "$TARGET/AGENTS.md" >"$WORK/installed-shared-agents.md"
 cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
+grep -q '^# Harness đã cài đặt$' "$TARGET/AGENTS.md"
+grep -q 'runtime cho agent' "$TARGET/AGENTS.md"
 
 "$TARGET/_harness/bin/harness-cli" workflow validate --json | grep -q '"mode":"shadow"'
 "$TARGET/_harness/bin/harness-cli" workflow parity --json | grep -q '"code":"WORKFLOW_PARITY_OK"'

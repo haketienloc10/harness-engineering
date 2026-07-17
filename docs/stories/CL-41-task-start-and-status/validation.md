@@ -43,6 +43,18 @@ Completion validation passed:
 - `bash tests/installer_state_safety.sh`
 - packaged `doctor --json` at canonical migrations `001..010`
 
+Follow-up validation for backlog #3 (2026-07-17):
+
+- `task next --json` from both the source CLI and rebuilt packaged CLI reported
+  the current worktree's active `TASK-000035`, including its `task status`
+  contract and a non-mutating `task status` next command.
+- `cargo test -p harness-cli` passed (79 tests), source and packaged
+  `workflow parity --json` returned `WORKFLOW_PARITY_OK`, and
+  `memory check --dry-run --json` passed.
+- `cargo clippy -p harness-cli -- -D warnings` remains blocked by 38 existing
+  `dead_code` diagnostics from retired legacy command paths; `task next` did
+  not add a new diagnostic.
+
 Rollback retains the backup created before migration 010, restores the prior
 installed binary and removes only the migration-010 contract changes. It must
 not delete or rewrite task records manually.

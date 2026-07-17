@@ -1,3 +1,8 @@
+// Some domain values support retained compatibility operations that are
+// exercised only by unit tests; keep production linting focused on reachable
+// CLI paths until that compatibility surface is removed as a unit.
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;

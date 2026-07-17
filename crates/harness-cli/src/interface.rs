@@ -1774,16 +1774,16 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                     summary,
                     json,
                 } => {
-                    let path = render_capsule(
-                        &repo_root,
-                        &active_db_path,
-                        &id,
-                        &slug,
-                        &date,
-                        &lane,
-                        &outcome,
-                        &summary,
-                    )?;
+                    let path = render_capsule(CapsuleRenderInput {
+                        repo_root: &repo_root,
+                        database: &active_db_path,
+                        id: &id,
+                        slug: &slug,
+                        date: &date,
+                        lane: &lane,
+                        outcome: &outcome,
+                        summary: &summary,
+                    })?;
                     if json {
                         println!("{{\"ok\":true,\"path\":\"{}\"}}", json_escape(&path));
                     } else {
@@ -3559,16 +3559,28 @@ fn checkpoint_rebuild_database(database: &std::path::Path) -> Result<(), Interfa
     Ok(())
 }
 
-fn render_capsule(
-    repo_root: &std::path::Path,
-    database: &std::path::Path,
-    id: &str,
-    slug: &str,
-    date: &str,
-    lane: &str,
-    outcome: &str,
-    summary: &str,
-) -> Result<String, InterfaceError> {
+struct CapsuleRenderInput<'a> {
+    repo_root: &'a std::path::Path,
+    database: &'a std::path::Path,
+    id: &'a str,
+    slug: &'a str,
+    date: &'a str,
+    lane: &'a str,
+    outcome: &'a str,
+    summary: &'a str,
+}
+
+fn render_capsule(input: CapsuleRenderInput<'_>) -> Result<String, InterfaceError> {
+    let CapsuleRenderInput {
+        repo_root,
+        database,
+        id,
+        slug,
+        date,
+        lane,
+        outcome,
+        summary,
+    } = input;
     if id.is_empty()
         || !id
             .chars()

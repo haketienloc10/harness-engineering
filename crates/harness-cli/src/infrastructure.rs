@@ -1,3 +1,7 @@
+// The repository keeps compatibility import and verification operations for
+// unit-test coverage while their CLI commands are retired.
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;

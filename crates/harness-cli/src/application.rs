@@ -1,3 +1,7 @@
+// The application layer retains compatibility operations exercised by the
+// repository's unit tests although the current CLI no longer exposes them.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 use crate::domain::{

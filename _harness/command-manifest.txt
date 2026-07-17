@@ -1,4 +1,5 @@
 # Generated contract for the command-first workflow surface.
+init
 doctor
 workflow
 workflow validate

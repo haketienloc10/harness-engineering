@@ -28,9 +28,8 @@ run_state_qualification() {
     infrastructure::tests::backup_can_restore_the_pre_migration_database
   cargo test -p harness-cli \
     infrastructure::tests::task_session_lease_guards_session_story_and_worktree_concurrency
-  cargo test -p harness-cli --test phase4_failure_matrix source_cli_phase4_failure_matrix
-  cargo test -p harness-cli --test phase4_failure_matrix \
-    packaged_cli_phase4_failure_matrix -- --ignored
+  cargo test -p harness-cli \
+    infrastructure::tests::phase4_failure_matrix_is_structured_and_preflight_is_non_mutating
 
   local clone="$WORK/fresh-clone"
   local candidate_patch="$WORK/candidate.patch"
@@ -92,14 +91,16 @@ run_state_qualification() {
   fi
   grep -q 'TASK_OWNERSHIP_CONFLICT' "$WORK/session-conflict.out"
   HARNESS_REPO_ROOT="$clone" HARNESS_DB="$clone/$rebuild_one" \
-    "$clone_cli" task block --id "$first_task" --owner codex --session cl70-a --json \
+    "$clone_cli" task block --id "$first_task" --owner codex --session cl70-a \
+      --reason 'release qualification fixture' --json \
     >/dev/null
   second_task="$(HARNESS_REPO_ROOT="$clone" HARNESS_DB="$clone/$rebuild_one" \
     "$clone_cli" task start --type 'maintenance request' \
     --summary 'CL-70 concurrent session B' --owner codex --session cl70-b \
     --behavior-bearing no --json | jq -r .task_id)"
   HARNESS_REPO_ROOT="$clone" HARNESS_DB="$clone/$rebuild_one" \
-    "$clone_cli" task block --id "$second_task" --owner codex --session cl70-b --json \
+    "$clone_cli" task block --id "$second_task" --owner codex --session cl70-b \
+      --reason 'release qualification fixture' --json \
     >/dev/null
   HARNESS_REPO_ROOT="$clone" HARNESS_DB="$clone/$rebuild_one" \
     "$clone_cli" task resume --id "$first_task" --owner codex --session cl70-a --json \

@@ -53,3 +53,9 @@ validation, while legacy mutable story commands are removed.
 
 Restore the removed command variants and their callers as one compatibility
 surface. This intentionally breaks callers of the retired commands.
+
+## Follow-up
+
+CL-77 amends ADR 0025 by restoring only `init` as a record-free database
+bootstrap boundary. The remaining legacy commands stay removed, so this
+completed story's command-first lifecycle outcome remains intact.

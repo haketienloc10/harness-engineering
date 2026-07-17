@@ -47,7 +47,7 @@ const MAX_PROOF_OUTPUT_BYTES: usize = 1_048_576;
 
 #[derive(Debug, Error)]
 pub enum HarnessInfraError {
-    #[error("database not found at {0}. Run: harness init")]
+    #[error("database not found at {0}. Run: _harness/bin/harness-cli init")]
     MissingDatabase(String),
     #[error("schema file missing: {0}")]
     MissingSchema(String),
@@ -86,6 +86,8 @@ pub enum HarnessInfraError {
     TraceNotFound(i64),
     #[error("task '{0}' not found")]
     TaskNotFound(String),
+    #[error("task start: story '{0}' does not exist in the operational projection")]
+    TaskStoryNotFound(String),
     #[error("task transition from '{current}' to '{next}' is not allowed")]
     InvalidTaskTransition { current: String, next: String },
     #[error("task start: story '{story_id}' is already active under owner '{owner}'")]
@@ -555,6 +557,47 @@ fn context_manifest_checksum(manifest: &WorkflowContextManifest) -> String {
         manifest.token_budget_hint,
     );
     format!("{:x}", Sha256::digest(canonical.as_bytes()))
+}
+
+fn concretize_task_context(
+    mut manifest: WorkflowContextManifest,
+    changed_paths: &[String],
+    linked_story_paths: &[String],
+) -> WorkflowContextManifest {
+    let expand = |entries: Vec<WorkflowContextEntry>| {
+        let mut expanded = Vec::new();
+        for entry in entries {
+            let replacements = match entry.path.as_str() {
+                "<changed-files>" => Some(changed_paths),
+                "docs/stories/" => Some(linked_story_paths),
+                _ => None,
+            };
+            if let Some(paths) = replacements {
+                for path in paths {
+                    if !expanded
+                        .iter()
+                        .any(|existing: &WorkflowContextEntry| existing.path == *path)
+                    {
+                        expanded.push(WorkflowContextEntry {
+                            path: path.clone(),
+                            reason: entry.reason.clone(),
+                        });
+                    }
+                }
+            } else if !expanded
+                .iter()
+                .any(|existing: &WorkflowContextEntry| existing.path == entry.path)
+            {
+                expanded.push(entry);
+            }
+        }
+        expanded
+    };
+    manifest.must_read = expand(manifest.must_read);
+    manifest.should_read = expand(manifest.should_read);
+    manifest.skip = expand(manifest.skip);
+    manifest.checksum = context_manifest_checksum(&manifest);
+    manifest
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1659,7 +1702,7 @@ impl HarnessRepository for SqliteHarnessRepository {
                 source_versions,
                 Vec::new(),
                 findings,
-                vec!["Run harness-cli init (compatibility command) or task start to create and ensure the local database.".to_owned()],
+                vec!["Run _harness/bin/harness-cli init to create the local operational database without creating lifecycle records.".to_owned()],
             ));
         }
         let connection = match Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
@@ -2025,15 +2068,37 @@ impl HarnessRepository for SqliteHarnessRepository {
             RiskLane::Normal => &policy.lanes.normal,
             RiskLane::HighRisk => &policy.lanes.high_risk,
         };
-        let linked_artifacts = story_id
-            .as_ref()
-            .map(|_| vec!["docs/stories/".to_owned()])
-            .unwrap_or_default();
-        let context_manifest = policy.context_manifest(
-            risk_lane.as_db_value(),
-            "work",
+        let context_connection = self.open_existing()?;
+        let linked_artifacts = if let Some(story_id) = story_id.as_ref() {
+            let story_exists: bool = context_connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM story WHERE id=?1)",
+                params![story_id],
+                |row| row.get(0),
+            )?;
+            if !story_exists {
+                return Err(HarnessInfraError::TaskStoryNotFound(story_id.clone()));
+            }
+            context_connection
+                .query_row(
+                    "SELECT path FROM artifact_index WHERE artifact_type='story' AND artifact_id=?1",
+                    params![story_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let context_manifest = concretize_task_context(
+            policy.context_manifest(
+                risk_lane.as_db_value(),
+                "work",
+                &[],
+                &risk_flags,
+                &linked_artifacts,
+            ),
             &[],
-            &risk_flags,
             &linked_artifacts,
         );
         let context_manifest_json = serde_json::to_string(&context_manifest)
@@ -2114,8 +2179,17 @@ impl HarnessRepository for SqliteHarnessRepository {
                 });
             }
         }
-        let sequence: i64 =
-            transaction.query_row("SELECT COUNT(*) + 1 FROM task;", [], |row| row.get(0))?;
+        let sequence: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM (
+                 SELECT CAST(substr(id, 6) AS INTEGER) AS sequence
+                 FROM task WHERE id GLOB 'TASK-[0-9]*'
+                 UNION ALL
+                 SELECT CAST(substr(task_id, 6) AS INTEGER) AS sequence
+                 FROM portable_task_summary WHERE task_id GLOB 'TASK-[0-9]*'
+             );",
+            [],
+            |row| row.get(0),
+        )?;
         let id = format!("TASK-{sequence:06}");
         transaction.execute(
             "INSERT INTO intake (input_type, summary, risk_lane, risk_flags, story_id, notes)
@@ -3005,17 +3079,30 @@ impl HarnessRepository for SqliteHarnessRepository {
             .prepare("SELECT story_id FROM task_story WHERE task_id=?1 ORDER BY story_id;")?;
         let stories =
             collect_rows(statement.query_map(params![input.id], |row| row.get::<_, String>(0))?)?;
-        let linked_artifacts = if stories.is_empty() {
-            Vec::new()
-        } else {
-            vec!["docs/stories/".to_owned()]
-        };
+        let linked_artifacts = stories
+            .iter()
+            .filter_map(|story_id| {
+                connection
+                    .query_row(
+                        "SELECT path FROM artifact_index WHERE artifact_type='story' AND artifact_id=?1",
+                        params![story_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
         let policy = self.load_workflow_policy()?;
-        let current = policy.context_manifest(
-            &lane,
-            "work",
+        let current = concretize_task_context(
+            policy.context_manifest(
+                &lane,
+                "work",
+                &[],
+                &jsonish_list(Some(&risk_flags)),
+                &linked_artifacts,
+            ),
             &[],
-            &jsonish_list(Some(&risk_flags)),
             &linked_artifacts,
         );
         let changed = current.checksum != previous_checksum;
@@ -6298,10 +6385,6 @@ mod tests {
         input
     }
 
-    fn phase4_unmet_context(repository: &SqliteHarnessRepository) -> TaskFinishInput {
-        start_tiny_finish_fixture(repository, false, None)
-    }
-
     fn phase4_missing_proof(repository: &SqliteHarnessRepository) -> TaskFinishInput {
         start_tiny_finish_fixture(repository, true, None)
     }
@@ -6468,11 +6551,6 @@ mod tests {
                 expected_code: "TASK_STORY_REQUIRED",
             },
             Case {
-                name: "unmet context",
-                setup: phase4_unmet_context,
-                expected_code: "TASK_CONTEXT_UNMET",
-            },
-            Case {
                 name: "missing proof",
                 setup: phase4_missing_proof,
                 expected_code: "TASK_PROOF_MISSING",
@@ -6621,6 +6699,100 @@ mod tests {
     }
 
     #[test]
+    fn task_ids_continue_after_portable_task_summaries() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "INSERT INTO portable_task_summary (
+                    task_id, capsule_path, capsule_schema, task_date, risk_lane,
+                    outcome, summary, content_checksum
+                 ) VALUES (
+                    'TASK-000040', 'docs/tasks/2099/01/TASK-000040-history.md',
+                    'harness/task-capsule/v2', '2099-01-01', 'normal',
+                    'completed', 'portable history', 'fixture-checksum'
+                 );",
+                [],
+            )
+            .unwrap();
+
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::Maintenance,
+                summary: "Continue after portable history".to_owned(),
+                risk_lane: Some(RiskLane::Tiny),
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("portable-sequence".to_owned()),
+                lease_seconds: None,
+                story_id: None,
+                behavior_bearing: false,
+                risk_flags: Vec::new(),
+            })
+            .unwrap();
+
+        assert_eq!(id, "TASK-000041");
+    }
+
+    #[test]
+    fn task_context_uses_a_concrete_linked_story_and_no_placeholders() {
+        let (_temp_dir, repository) = test_repository();
+        repository.init().unwrap();
+        repository
+            .add_story(StoryAddInput {
+                id: "CL-CONTEXT".to_owned(),
+                title: "Concrete context".to_owned(),
+                risk_lane: RiskLane::Normal,
+                contract_doc: None,
+                verify_command: None,
+                notes: None,
+            })
+            .unwrap();
+        repository
+            .open_existing()
+            .unwrap()
+            .execute(
+                "INSERT INTO artifact_index (
+                    artifact_type, artifact_id, path, checksum, schema_version, status
+                 ) VALUES (
+                    'story', 'CL-CONTEXT', 'docs/stories/CL-CONTEXT.md',
+                    'fixture-checksum', 'legacy', 'in_progress'
+                 );",
+                [],
+            )
+            .unwrap();
+
+        let id = repository
+            .start_task(TaskStartInput {
+                input_type: InputType::ChangeRequest,
+                summary: "Use concrete context".to_owned(),
+                risk_lane: Some(RiskLane::Normal),
+                lane_override_reason: None,
+                owner: Some("codex".to_owned()),
+                session_id: Some("concrete-context".to_owned()),
+                lease_seconds: None,
+                story_id: Some("CL-CONTEXT".to_owned()),
+                behavior_bearing: true,
+                risk_flags: vec!["public-contract".to_owned(), "workflow".to_owned()],
+            })
+            .unwrap();
+        let task = repository.task_status(&id).unwrap();
+        let required = task.context_manifest["must_read"].as_array().unwrap();
+
+        assert!(required
+            .iter()
+            .any(|entry| { entry["path"].as_str() == Some("docs/stories/CL-CONTEXT.md") }));
+        assert!(!required.iter().any(|entry| {
+            matches!(
+                entry["path"].as_str(),
+                Some("<changed-files>" | "docs/stories/")
+            )
+        }));
+    }
+
+    #[test]
     fn proof_output_is_size_limited_and_hashed_from_retained_bytes() {
         let temp_dir = TempDir::new().unwrap();
         let output = vec![b'x'; MAX_PROOF_OUTPUT_BYTES + 17];
@@ -6737,13 +6909,15 @@ mod tests {
         assert_eq!(task.session_id.as_deref(), Some("session-a"));
         assert_eq!(task.lease_state, "active");
         assert_eq!(task.story_id.as_deref(), Some("CL-TASK"));
-        repository
-            .acknowledge_task_context(TaskContextAcknowledgeInput {
-                id: id.clone(),
-                path: "docs/stories/".to_owned(),
-                actor: Some("codex".to_owned()),
-            })
-            .unwrap();
+        assert!(!task.context_manifest["must_read"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| matches!(
+                entry["path"].as_str(),
+                Some("<changed-files>" | "docs/stories/")
+            )));
+        acknowledge_all_context(&repository, &id);
         assert!(matches!(
             repository.acknowledge_task_context(TaskContextAcknowledgeInput {
                 id: id.clone(),
@@ -7239,13 +7413,7 @@ mod tests {
                 risk_flags: Vec::new(),
             })
             .unwrap();
-        repository
-            .acknowledge_task_context(TaskContextAcknowledgeInput {
-                id: id.clone(),
-                path: "<changed-files>".to_owned(),
-                actor: Some("codex".to_owned()),
-            })
-            .unwrap();
+        assert_eq!(repository.task_status(&id).unwrap().context_required, 0);
         repository
             .run_proof(ProofRunInput {
                 task_id: id.clone(),

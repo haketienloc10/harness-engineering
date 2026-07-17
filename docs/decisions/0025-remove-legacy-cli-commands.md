@@ -4,7 +4,7 @@ Date: 2026-07-17
 
 ## Status
 
-Accepted
+Accepted, amended 2026-07-17
 
 ## Context
 
@@ -24,8 +24,19 @@ state. `task start` creates the intake root; `proof run` records proof; and
 The user explicitly approved removal of all commands not used by the reworked
 workflow on 2026-07-17.
 
+Amendment, 2026-07-17: restore `harness-cli init` as the single exception. It
+owns only idempotent database creation and safe migration and must not create
+an intake, task, lease, trace, proof or capsule. `task start` remains the sole
+command-first lifecycle root. The user approved this correction after dogfood
+showed that using `task start` for bootstrap necessarily creates a fake task
+and pollutes telemetry.
+
 ## Consequences
 
 Existing automation that invokes a removed command must migrate to the
 command-first equivalent or stop invoking it. Source, packaged and installed
 CLI help, tests and documentation must stay identical.
+
+The restored `init` command is not a lifecycle compatibility alias. It is the
+minimal database bootstrap boundary required before lifecycle discovery and
+must remain idempotent and record-free.

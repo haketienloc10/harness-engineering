@@ -19,6 +19,7 @@ chmod 755 "$MOCK_BIN/curl"
 
 TARGET="$WORK/target"
 mkdir -p "$TARGET/docs/product"
+git init -q "$TARGET"
 printf 'existing product contract\n' >"$TARGET/docs/product/existing.md"
 printf '# user ignore\ncustom.cache\n' >"$TARGET/.gitignore"
 cp "$ROOT/harness.db" "$TARGET/harness.db"
@@ -51,6 +52,7 @@ test -f "$TARGET/_harness/installation.toml"
 test -x "$TARGET/_harness/bin/harness-cli"
 test -f "$TARGET/_harness/workflow.toml"
 test -f "$TARGET/_harness/command-manifest.txt"
+test -f "$TARGET/_harness/tests/policy-parity-cases.toml"
 test -f "$TARGET/_harness/templates/story.md"
 test -f "$TARGET/_harness/scripts/schema/manifest.toml"
 test ! -e "$TARGET/_harness/HARNESS.md"
@@ -78,9 +80,9 @@ grep -qx 'mode = "repository"' "$TARGET/_harness/installation.toml"
 grep -qx 'installation_mode = repository' "$TARGET/_harness/.harness-manifest"
 grep -q 'Installation mode: `repository`' "$TARGET/AGENTS.md"
 
-"$TARGET/_harness/bin/harness-cli" workflow validate --json | grep -q '"mode":"shadow"'
-"$TARGET/_harness/bin/harness-cli" workflow parity --json | grep -q '"code":"WORKFLOW_PARITY_OK"'
-"$TARGET/_harness/bin/harness-cli" workflow commands >"$WORK/installed-commands.txt"
+(cd "$TARGET" && ./_harness/bin/harness-cli workflow validate --json) | grep -q '"mode":"shadow"'
+(cd "$TARGET" && ./_harness/bin/harness-cli workflow parity --json) | grep -q '"code":"WORKFLOW_PARITY_OK"'
+(cd "$TARGET" && ./_harness/bin/harness-cli workflow commands) >"$WORK/installed-commands.txt"
 grep -v '^#' "$TARGET/_harness/command-manifest.txt" | sed '/^[[:space:]]*$/d' >"$WORK/tracked-commands.txt"
 cmp "$WORK/tracked-commands.txt" "$WORK/installed-commands.txt"
 
@@ -92,6 +94,11 @@ mkdir -p "$FRESH_TARGET"
 git init -q "$FRESH_TARGET"
 run_install "$FRESH_TARGET" >"$WORK/fresh.log"
 FRESH_CLI="$FRESH_TARGET/_harness/bin/harness-cli"
+INIT_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli init --json)"
+printf '%s\n' "$INIT_JSON" | grep -q '"lifecycle_records_created":false'
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli query stats) | awk 'NR == 3 { exit !($1 == 0) }'
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli audit --json) \
+  | grep -q '"code":"AUDIT_INSUFFICIENT_EVIDENCE"'
 START_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task start --type 'maintenance request' \
   --summary 'installer fresh-target smoke' --lane tiny \
   --lane-reason 'installer smoke test' --owner smoke --session fresh-target \
@@ -99,6 +106,26 @@ START_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task start --type
 TASK_ID="$(printf '%s\n' "$START_JSON" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')"
 test -n "$TASK_ID"
 (cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task status --id "$TASK_ID" --json) | grep -q '"status":"in_progress"'
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task block --id "$TASK_ID" \
+  --owner smoke --session fresh-target --reason 'installer blocker contract' --json) >/dev/null
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task status --id "$TASK_ID" --json) \
+  | grep -q '"reason":"installer blocker contract"'
+
+NORMAL_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task start \
+  --type 'maintenance request' --summary 'storyless normal contract' --lane normal \
+  --lane-reason 'installer contract test' --owner smoke --session fresh-normal \
+  --behavior-bearing no --json)"
+NORMAL_ID="$(printf '%s\n' "$NORMAL_JSON" | sed -n 's/.*"task_id":"\([^"]*\)".*/\1/p')"
+NORMAL_STATUS="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task status \
+  --id "$NORMAL_ID" --json)"
+printf '%s\n' "$NORMAL_STATUS" | grep -q '"required_layers":\["task-validation"\]'
+printf '%s\n' "$NORMAL_STATUS" | grep -q '"state":"pending"'
+if printf '%s\n' "$NORMAL_STATUS" | grep -q -- '--story <STORY>'; then
+  echo 'storyless trace remediation unexpectedly requires a story' >&2
+  exit 1
+fi
+(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task block --id "$NORMAL_ID" \
+  --owner smoke --session fresh-normal --reason 'installer contract complete' --json) >/dev/null
 test ! -e "$FRESH_TARGET/docs"
 
 # Coordination mode is valid only at a Git root, retains user instructions,

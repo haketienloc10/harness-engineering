@@ -196,8 +196,6 @@ probe_minimal_finish_executes() {
   task_id="$(HARNESS_REPO_ROOT="$clone" HARNESS_DB="$database" "$CLI" task start \
     --type maintenance --summary 'Minimal finish fixture' \
     --owner codex --session minimal-finish --behavior-bearing no --json | jq -r .task_id)"
-  HARNESS_REPO_ROOT="$clone" HARNESS_DB="$database" "$CLI" task context acknowledge \
-    --id "$task_id" --read '<changed-files>' --actor codex --json >/dev/null
   HARNESS_REPO_ROOT="$clone" HARNESS_DB="$database" "$CLI" proof run \
     --task "$task_id" --layer quick -- true >/dev/null
   intake_id="$(HARNESS_REPO_ROOT="$clone" HARNESS_DB="$database" "$CLI" query sql \

@@ -22,6 +22,7 @@ INSTALL_ITEMS=(
   "_harness/bin/harness-cli"
   "_harness/workflow.toml"
   "_harness/command-manifest.txt"
+  "_harness/tests/policy-parity-cases.toml"
   "_harness/templates"
   "_harness/scripts/schema"
 )

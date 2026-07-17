@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::application::{
     AuditDispositionAddInput, AuditDispositionRevokeInput, BacklogAddInput, BacklogCloseInput,
     DecisionAddInput, FrictionAddInput, FrictionResolveInput, HarnessContext, HarnessService,
-    InterventionAddInput, InterventionFilter, ProofRecord, ProofRunInput, QueryTable,
+    InitResult, InterventionAddInput, InterventionFilter, ProofRecord, ProofRunInput, QueryTable,
     TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput, TaskHandoffInput,
     TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput, ToolRegisterInput,
     TraceInput,
@@ -38,6 +38,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Create or safely migrate the local operational database without creating lifecycle records.
+    Init(InitArgs),
     /// Inspect repository and database health without changing state.
     Doctor(DoctorArgs),
     /// Validate or explain the typed Harness workflow policy.
@@ -66,6 +68,12 @@ enum Command {
     Propose(ProposeArgs),
     /// Query harness data.
     Query(QueryArgs),
+}
+
+#[derive(Args, Debug)]
+struct InitArgs {
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -380,7 +388,10 @@ enum TaskAction {
 
 #[derive(Args, Debug)]
 struct TaskStartArgs {
-    #[arg(long = "type")]
+    #[arg(
+        long = "type",
+        value_name = "new-spec|spec-slice|change-request|new-initiative|maintenance-request|harness-improvement"
+    )]
     input_type: String,
     #[arg(long)]
     summary: String,
@@ -396,7 +407,8 @@ struct TaskStartArgs {
     lease_seconds: Option<i64>,
     #[arg(long)]
     story: Option<String>,
-    #[arg(long)]
+    /// Comma-separated typed workflow flags; run `workflow explain --flags ...` to inspect classification.
+    #[arg(long, value_name = "FLAG[,FLAG...]")]
     flags: Option<String>,
     #[arg(long, value_name = "auto|yes|no", default_value = "auto")]
     behavior_bearing: String,
@@ -432,6 +444,9 @@ struct TaskBlockArgs {
     owner: Option<String>,
     #[arg(long)]
     session: Option<String>,
+    /// Concrete missing authority or external condition that blocks progress.
+    #[arg(long)]
+    reason: String,
     #[arg(long)]
     json: bool,
 }
@@ -923,7 +938,8 @@ pub enum InterfaceError {
 
 impl Cli {
     pub fn requests_json(&self) -> bool {
-        matches!(&self.command, Command::Audit(args) if audit_args_request_json(args))
+        matches!(&self.command, Command::Init(InitArgs { json: true }))
+            || matches!(&self.command, Command::Audit(args) if audit_args_request_json(args))
             || matches!(
                 &self.command,
                 Command::Task(TaskArgs {
@@ -960,6 +976,9 @@ impl InterfaceError {
             )) if result.code == "TASK_APPROVAL_REQUIRED" => 9,
             Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskFinishGate(_)) => 5,
             Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskNotFound(_)) => 5,
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskStoryNotFound(
+                _,
+            )) => 5,
             Self::Infrastructure(
                 crate::infrastructure::HarnessInfraError::TaskIdentityPairRequired
                 | crate::infrastructure::HarnessInfraError::InvalidTaskLeaseDuration,
@@ -1002,6 +1021,14 @@ impl InterfaceError {
                     ["Use task status with the canonical task id before retrying."],
                 )
                 .with_detail("task_id", id)
+            }
+            Self::Infrastructure(crate::infrastructure::HarnessInfraError::TaskStoryNotFound(id)) => {
+                StructuredErrorResult::new(
+                    "TASK_STORY_NOT_FOUND",
+                    self.to_string(),
+                    ["Project the tracked story with memory rebuild, or pass an existing story id."],
+                )
+                .with_detail("story_id", id)
             }
             Self::Infrastructure(
                 crate::infrastructure::HarnessInfraError::TaskOwnerConflict { .. }
@@ -1085,6 +1112,32 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
     let service = HarnessService::new(context);
 
     match cli.command {
+        Command::Init(args) => {
+            let result = service.init()?;
+            let (state, db_path, version) = match result {
+                InitResult::Created { db_path } => ("created", db_path, None),
+                InitResult::Existing { db_path, version } => {
+                    ("existing", db_path, Some(version))
+                }
+                InitResult::MigratedExisting { db_path } => ("migrated", db_path, None),
+            };
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "ok": true,
+                        "code": "DATABASE_READY",
+                        "state": state,
+                        "database": db_path,
+                        "version": version,
+                        "lifecycle_records_created": false,
+                    }))
+                    .expect("init result serializes")
+                );
+            } else {
+                println!("database: {state} ({})", db_path.display());
+            }
+        }
         Command::Doctor(args) => {
             let report = service.doctor()?;
             if args.json {
@@ -1360,7 +1413,7 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 let task = service.transition_task(TaskTransitionInput {
                     id: args.id,
                     status: "blocked".to_owned(),
-                    outcome: None,
+                    outcome: Some(args.reason),
                     owner: args.owner,
                     session_id: args.session,
                     lease_seconds: None,
@@ -1975,21 +2028,27 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             None => {
                 let result = service.audit()?;
                 if args.json {
-                    let code = if result.strict_passes() {
-                        "AUDIT_CLEAR"
+                    let (ok, code, message) = if result.finding_count() > 0 {
+                        (false, "AUDIT_DEBT", "Audit debt remains.")
+                    } else if !result.unknown_coverage.is_empty() {
+                        (
+                            !args.strict,
+                            "AUDIT_INSUFFICIENT_EVIDENCE",
+                            "No consistency debt was found, but evidence coverage is incomplete.",
+                        )
                     } else {
-                        "AUDIT_DEBT"
+                        (
+                            true,
+                            "AUDIT_CLEAR",
+                            "All implemented audit checks passed with no unknown coverage.",
+                        )
                     };
                     println!(
                         "{}",
                         serde_json::to_string(&serde_json::json!({
-                            "ok": result.strict_passes(),
+                            "ok": ok,
                             "code": code,
-                            "message": if result.strict_passes() {
-                                "All implemented audit checks passed with no unknown coverage."
-                            } else {
-                                "Audit debt or unknown coverage remains."
-                            },
+                            "message": message,
                             "audit": result,
                         }))
                         .expect("audit result serializes")
@@ -2399,6 +2458,27 @@ fn resolve_start_identity(
     }
 }
 
+fn required_proof_layers(
+    task: &crate::application::TaskStatusRecord,
+    lane_policy: &crate::infrastructure::WorkflowLane,
+) -> Vec<String> {
+    if task.story_id.is_none() {
+        lane_policy
+            .proof
+            .iter()
+            .map(|layer| {
+                if layer == "declared-story-plan" {
+                    "task-validation".to_owned()
+                } else {
+                    layer.clone()
+                }
+            })
+            .collect()
+    } else {
+        lane_policy.proof.clone()
+    }
+}
+
 fn task_start_contract_json(
     task: &crate::application::TaskStatusRecord,
     policy: &crate::infrastructure::WorkflowPolicy,
@@ -2412,6 +2492,7 @@ fn task_start_contract_json(
         "normal" => &policy.lanes.normal,
         _ => &policy.lanes.tiny,
     };
+    let proof_layers = required_proof_layers(task, lane_policy);
     let story_required = lane_policy.story == "required"
         || (lane_policy.story == "when_behavior_bearing" && behavior.value);
     let normalized_flags = task
@@ -2454,8 +2535,7 @@ fn task_start_contract_json(
         format!(
             "_harness/bin/harness-cli proof run --task {} --layer {} -- <COMMAND>",
             task.id,
-            lane_policy
-                .proof
+            proof_layers
                 .first()
                 .map(String::as_str)
                 .unwrap_or("required")
@@ -2510,7 +2590,7 @@ fn task_start_contract_json(
             "approval": {"required": !approval_gates.is_empty(), "gates": approval_gates},
         },
         "context": task.context_manifest,
-        "proof_gates": lane_policy.proof,
+        "proof_gates": proof_layers,
         "completion_gates": completion_gates,
         "policy_gates": policy_gates,
         "relevant_tools": [],
@@ -2551,6 +2631,7 @@ fn task_status_contract_json(
         "normal" => &policy.lanes.normal,
         _ => &policy.lanes.tiny,
     };
+    let required_proof_layers = required_proof_layers(task, lane_policy);
     let escaped_id = task.id.replace('\'', "''");
     let stories = query_table_objects(service.query_sql(&format!(
         "SELECT task_story.story_id AS id, task_story.role, story.status, story.title \
@@ -2571,6 +2652,16 @@ fn task_status_contract_json(
          FROM trace JOIN task ON task.intake_id=trace.intake_id \
          WHERE task.id='{escaped_id}' ORDER BY trace.id"
     ))?);
+    let blocker = if task.status == "blocked" {
+        query_table_objects(service.query_sql(&format!(
+            "SELECT outcome AS reason FROM task WHERE id='{escaped_id}'"
+        ))?)
+        .into_iter()
+        .next()
+        .and_then(|item| item.get("reason").cloned())
+    } else {
+        None
+    };
     let proofs = service.query_proofs(&task.id)?;
     let proof_layers = proofs
         .iter()
@@ -2649,19 +2740,16 @@ fn task_status_contract_json(
         .capsule_path
         .clone()
         .or_else(|| capsule_candidates.first().cloned());
-    let capsule_state = if task.status == "completed" && capsule_exists {
-        "final"
-    } else if !staged_capsules.is_empty() {
-        "staged"
-    } else if !capsule_candidates.is_empty() {
-        "orphaned"
-    } else if task.capsule_required {
-        "missing"
-    } else {
+    let capsule_state = if !task.capsule_required {
         "not_required"
+    } else if task.status == "completed" && capsule_exists {
+        "valid"
+    } else if !staged_capsules.is_empty() {
+        "invalid"
+    } else {
+        "pending"
     };
-    let capsule_satisfied =
-        !task.capsule_required || capsule_exists || capsule_candidates.len() == 1;
+    let capsule_satisfied = !task.capsule_required || capsule_exists;
     let qualifying_trace_ids = traces
         .iter()
         .filter_map(|trace| trace.get("id").and_then(serde_json::Value::as_str))
@@ -2734,8 +2822,7 @@ fn task_status_contract_json(
         "proof",
         true,
         proof_satisfied,
-        lane_policy
-            .proof
+        required_proof_layers
             .iter()
             .map(|layer| {
                 format!(
@@ -2759,9 +2846,13 @@ fn task_status_contract_json(
             .collect(),
     );
     let trace_commands = if qualifying_trace_ids.is_empty() {
+        let story_arg = task
+            .story_id
+            .as_deref()
+            .map(|story| format!(" --story {story}"))
+            .unwrap_or_default();
         vec![format!(
-            "_harness/bin/harness-cli task trace --summary '<SUMMARY>' --intake <INTAKE_ID> --story {} --agent {} --outcome completed --actions '<ACTIONS>' --read '<FILES>' --changed '<FILES>' --decisions '<DECISIONS>' --errors '<ERRORS>' --notes '<NOTES>'",
-            task.story_id.as_deref().unwrap_or("<STORY>"), owner
+            "_harness/bin/harness-cli task trace --summary '<SUMMARY>' --intake <INTAKE_ID>{story_arg} --agent {owner} --outcome completed --actions '<ACTIONS>' --read '<FILES>' --changed '<FILES>' --decisions '<DECISIONS>' --errors '<ERRORS>' --notes '<NOTES>'"
         )]
     } else {
         vec![format!(
@@ -2824,6 +2915,7 @@ fn task_status_contract_json(
         "ownership": {"owner": task.owner, "state": if task.owner.is_some() { "assigned" } else { "unowned" }},
         "session": {"id": task.session_id}, "worktree": task.worktree,
         "lease": {"expires_at": task.lease_expires_at, "state": task.lease_state},
+        "blocker": blocker,
         "transitions": task.allowed_next,
         "links": {
             "stories": stories, "decisions": [], "approvals": approvals,
@@ -2832,7 +2924,7 @@ fn task_status_contract_json(
         "friction": {"all": friction, "unresolved": unresolved_friction},
         "gates": gates,
         "proof": {
-            "runs": task.proof_runs, "required_layers": lane_policy.proof,
+            "runs": task.proof_runs, "required_layers": required_proof_layers,
             "latest_state": task.latest_proof_state, "layers": proof_layers,
             "freshness": proof_freshness,
         },
@@ -2842,8 +2934,7 @@ fn task_status_contract_json(
             "path": effective_capsule_path, "checksum": task.capsule_checksum,
             "omission_reason": task.capsule_omission_reason,
             "staged": staged_capsules, "candidates": capsule_candidates,
-            "orphaned": (task.capsule_path.is_some() && !capsule_exists)
-                || (task.capsule_path.is_none() && effective_capsule_path.is_some()),
+            "orphaned": !capsule_candidates.is_empty() && task.capsule_path.is_none(),
         },
         "remediation": remediation,
         "next_command": remediation.first(),
@@ -4922,6 +5013,7 @@ mod tests {
         let root_help = command.render_long_help().to_string();
         assert!(root_help.contains("Usage: _harness/bin/harness-cli <COMMAND>"));
         assert!(root_help.contains("--version"));
+        assert!(command.find_subcommand_mut("init").is_some());
 
         assert!(command.find_subcommand_mut("intake").is_none());
         assert!(command.find_subcommand_mut("trace").is_none());
@@ -4935,6 +5027,20 @@ mod tests {
             .to_string();
         assert!(task_start_help.contains("--session <SESSION>"));
         assert!(task_start_help.contains("--lease-seconds <LEASE_SECONDS>"));
+        assert!(task_start_help.contains("new-spec|spec-slice|change-request"));
+        assert!(task_start_help.contains("FLAG[,FLAG...]"));
+
+        let task_block_help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("block")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(task_block_help.contains("--reason <REASON>"));
+        assert!(
+            Cli::try_parse_from(["harness-cli", "task", "block", "--id", "TASK-000001"]).is_err()
+        );
 
         let task_trace_help = command
             .find_subcommand_mut("task")

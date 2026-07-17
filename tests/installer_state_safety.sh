@@ -31,6 +31,19 @@ run_install() {
 
 run_install >"$WORK/first.log"
 
+# The positional target is the shortest local-install form. A named source ref
+# overrides the legacy ref variable and must be persisted in the manifest.
+OVERRIDE_TARGET="$WORK/override-target"
+mkdir -p "$OVERRIDE_TARGET"
+PATH="$MOCK_BIN:$PATH" HARNESS_TEST_ARCHIVE="$ARCHIVE" \
+  HARNESS_LITE_TARGET_DIR="$WORK/ignored-target" \
+  HARNESS_LITE_OWNER="test" HARNESS_LITE_REPO="harness" \
+  HARNESS_LITE_REF="fixture" HARNESS_LITE_SOURCE_REF="feature-rework" \
+  bash "$ROOT/install.sh" "$OVERRIDE_TARGET" >"$WORK/override.log"
+test -f "$OVERRIDE_TARGET/_harness/.harness-manifest"
+test ! -e "$WORK/ignored-target"
+grep -qx 'ref = feature-rework' "$OVERRIDE_TARGET/_harness/.harness-manifest"
+
 test -f "$TARGET/.harness-id"
 test -f "$TARGET/AGENTS.md"
 test -f "$TARGET/_harness/.harness-manifest"

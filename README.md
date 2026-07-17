@@ -59,8 +59,17 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 From a local checkout, run the same installer:
 
 ```bash
-HARNESS_LITE_TARGET_DIR=/path/to/target ./install.sh
+./install.sh /path/to/target
 ```
+
+The installer defaults to `main`. To install a branch or tag explicitly, use
+`HARNESS_LITE_SOURCE_REF`:
+
+```bash
+HARNESS_LITE_SOURCE_REF=feature-rework ./install.sh /path/to/target
+```
+
+`HARNESS_LITE_REF` remains supported for existing scripts.
 
 The installer downloads the source archive from
 `haketienloc10/harness-engineering`, installs the shared scaffold files, updates

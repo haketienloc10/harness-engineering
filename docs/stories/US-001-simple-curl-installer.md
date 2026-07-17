@@ -17,9 +17,11 @@ curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/
 ```
 
 The installer follows the repo-harness lightweight install mechanism: it
-downloads the source archive from `haketienloc10/harness-engineering`, targets
-`$PWD` by default or `HARNESS_LITE_TARGET_DIR` when set, installs the shared
-scaffold whitelist, keeps existing target files outside `_harness/`, updates
+downloads the source archive from `haketienloc10/harness-engineering` at
+`main` by default, targets the first positional path, `$PWD` by default, or
+`HARNESS_LITE_TARGET_DIR` when set, and accepts `HARNESS_LITE_SOURCE_REF` to
+select a branch or tag (while preserving `HARNESS_LITE_REF` compatibility). It
+installs the shared scaffold whitelist, keeps existing target files outside `_harness/`, updates
 `_harness/`, embeds or refreshes the Harness block in target `AGENTS.md`, filters
 source-only artifacts, and writes `_harness/.harness-manifest`.
 
@@ -43,7 +45,8 @@ with Cargo and copies the release binary directly to `_harness/bin/harness-cli`.
 
 ## Design Notes
 
-- Commands: `HARNESS_LITE_TARGET_DIR=/path/to/target install.sh`;
+- Commands: `./install.sh /path/to/target`;
+  `HARNESS_LITE_SOURCE_REF=feature-rework ./install.sh /path/to/target`;
   `./install-harness-cli.sh`.
 - Queries: none.
 - API: none.
@@ -81,3 +84,6 @@ and removed the old Bash/PowerShell installer scripts from the Harness payload.
 - `_harness/bin/harness-cli --version` passed after direct binary install.
 - `cargo test` passed for the Harness CLI crate.
 - `git diff --check` passed.
+- 2026-07-17: `HARNESS_LITE_SOURCE_REF=feature-rework ./install.sh <temporary-target>`
+  installed the selected branch, copied all 20 payload files, and recorded
+  `ref = feature-rework` in `_harness/.harness-manifest`.

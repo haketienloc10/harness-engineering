@@ -3,8 +3,12 @@ set -Eeuo pipefail
 
 REPO_OWNER="${HARNESS_LITE_OWNER:-haketienloc10}"
 REPO_NAME="${HARNESS_LITE_REPO:-harness-engineering}"
-REF="${HARNESS_LITE_REF:-main}"
-TARGET_DIR="${HARNESS_LITE_TARGET_DIR:-$PWD}"
+# Giữ HARNESS_LITE_REF để tương thích các lệnh cũ. SOURCE_REF là tên rõ nghĩa
+# hơn cho việc chọn branch/tag của payload cài đặt.
+REF="${HARNESS_LITE_SOURCE_REF:-${HARNESS_LITE_REF:-main}}"
+# Ưu tiên đường dẫn đối số để cài nhanh vào một repo local; biến môi trường và
+# $PWD vẫn giữ nguyên hành vi cũ.
+TARGET_DIR="${1:-${HARNESS_LITE_TARGET_DIR:-$PWD}}"
 
 ARCHIVE_URL="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/${REF}"
 

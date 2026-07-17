@@ -59,8 +59,8 @@ public contract escalation by itself.
 
 Requirements:
 
-- Record the intake row before implementation; tiny work skips story packet
-  overhead, not durable task classification.
+- Start the task before implementation; tiny work skips story packet overhead,
+  not durable task classification.
 - Patch directly.
 - Keep affected docs current.
 - Run available quick checks.
@@ -76,12 +76,8 @@ Requirements:
 - Link relevant product docs.
 - Add or update validation expectations.
 - Implement the smallest vertical slice when implementation exists.
-- Record or update proof status with `_harness/bin/harness-cli story add`
-  and `_harness/bin/harness-cli story update`.
-- When a repeatable proof command exists, store it with `story add --verify`
-  or `story update --verify`, run `_harness/bin/harness-cli story verify <id>`,
-  and use `_harness/bin/harness-cli story verify-all` before merges, maturity
-  claims, release work, or benchmark work.
+- Link the story to its task, record repeatable validation with `proof run`,
+  and close only through `task finish`.
 
 ### High-Risk
 
@@ -90,8 +86,9 @@ roles/platforms.
 
 Requirements:
 
-- Create a story folder using `_harness/templates/high-risk-story/`.
-- Fill in `execplan.md`, `overview.md`, `design.md`, and `validation.md`.
+- Create or update one progressive story from `_harness/templates/story.md`.
+- Expand its scope, design, human-gate, validation, and rollback sections with
+  the high-risk evidence required for the change.
 - Ask for human confirmation before implementation only if direction is
   ambiguous.
 - Record a durable decision when behavior, architecture, authorization, data

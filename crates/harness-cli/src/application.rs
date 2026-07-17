@@ -1,12 +1,18 @@
+// The application layer retains compatibility operations exercised by the
+// repository's unit tests although the current CLI no longer exposes them.
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 
 use crate::domain::{
-    AuditResult, BacklogFilter, BacklogRecord, BoolFlag, ContextScoreResult, CsvList,
-    DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal, InputType, IntakeRecord,
-    InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult, StoryVerifyStatus,
-    ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
+    AuditDispositionRecord, AuditResult, BacklogFilter, BacklogRecord, BoolFlag,
+    ContextScoreResult, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
+    InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord, StoryVerifyAllResult,
+    StoryVerifyStatus, ToolArgSpec, ToolEntry, TraceRecord, TraceScoreResult,
 };
-use crate::infrastructure::{HarnessRepository, SqliteHarnessRepository, ToolCheckResult};
+use crate::infrastructure::{
+    DoctorReport, HarnessRepository, SqliteHarnessRepository, ToolCheckResult, WorkflowPolicy,
+};
 
 #[derive(Debug)]
 pub struct HarnessContext {
@@ -24,6 +30,222 @@ pub struct IntakeInput {
     pub affected_docs: CsvList,
     pub story_id: Option<String>,
     pub notes: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct FrictionAddInput {
+    pub task_id: Option<String>,
+    pub category: String,
+    pub severity: String,
+    pub summary: String,
+    pub disposition: String,
+    pub baseline: Option<String>,
+    pub predicted_metric: Option<String>,
+    pub observation_window: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct FrictionResolveInput {
+    pub fingerprint: String,
+    pub status: String,
+    pub actual_outcome: String,
+}
+
+#[derive(Debug)]
+pub struct AuditDispositionAddInput {
+    pub finding_key: String,
+    pub entity_id: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct AuditDispositionRevokeInput {
+    pub id: i64,
+    pub actor: String,
+    pub reason: String,
+}
+
+#[derive(Debug)]
+pub struct TaskStartInput {
+    pub input_type: InputType,
+    pub summary: String,
+    pub risk_lane: Option<RiskLane>,
+    pub lane_override_reason: Option<String>,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub lease_seconds: Option<i64>,
+    pub story_id: Option<String>,
+    pub behavior_bearing: bool,
+    pub risk_flags: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskStatusRecord {
+    pub id: String,
+    pub status: String,
+    pub risk_lane: String,
+    pub input_type: String,
+    pub summary: String,
+    pub risk_flags: Vec<String>,
+    pub behavior_bearing: bool,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub worktree: String,
+    pub lease_expires_at: Option<String>,
+    pub lease_state: String,
+    pub story_id: Option<String>,
+    pub allowed_next: Vec<String>,
+    pub context_required: usize,
+    pub context_acknowledged: usize,
+    pub context_acknowledged_paths: Vec<String>,
+    pub context_manifest: serde_json::Value,
+    pub approvals: usize,
+    pub capsule_required: bool,
+    pub capsule_path: Option<String>,
+    pub capsule_checksum: Option<String>,
+    pub capsule_omission_reason: Option<String>,
+    pub proof_runs: usize,
+    pub latest_proof_state: Option<String>,
+    pub latest_proof_head_fresh: Option<bool>,
+    pub latest_proof_branch_fresh: Option<bool>,
+    pub latest_proof_dirty_fresh: Option<bool>,
+    pub latest_proof_output_fresh: Option<bool>,
+    pub latest_proof_artifact_fresh: Option<bool>,
+}
+
+#[derive(Debug)]
+pub struct TaskTransitionInput {
+    pub id: String,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub lease_seconds: Option<i64>,
+}
+
+#[derive(Debug)]
+pub struct TaskHandoffInput {
+    pub id: String,
+    pub from_owner: String,
+    pub from_session: String,
+    pub to_owner: String,
+    pub to_session: String,
+    pub lease_seconds: Option<i64>,
+    pub source: String,
+    pub evidence: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskStoryLinkInput {
+    pub id: String,
+    pub story_id: String,
+    pub role: String,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskFinishInput {
+    pub id: String,
+    pub owner: Option<String>,
+    pub session_id: Option<String>,
+    pub trace_id: Option<i64>,
+    pub friction: String,
+    pub capsule_path: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskFinishRecord {
+    pub id: String,
+    pub status: String,
+    pub trace_id: i64,
+}
+
+#[derive(Debug)]
+pub struct TaskRefreshInput {
+    pub id: String,
+    pub accept: bool,
+}
+
+#[derive(Debug)]
+pub struct TaskRefreshRecord {
+    pub id: String,
+    pub changed: bool,
+    pub applied: bool,
+    pub previous_checksum: String,
+    pub current_checksum: String,
+    pub changed_paths: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskContextAcknowledgeInput {
+    pub id: String,
+    pub path: String,
+    pub actor: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct TaskApprovalInput {
+    pub id: String,
+    pub gate: String,
+    pub source: String,
+    pub evidence: String,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRunInput {
+    pub task_id: String,
+    pub story_id: Option<String>,
+    pub layer: String,
+    pub executable: String,
+    pub argv: Vec<String>,
+    pub artifact_path: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRunRecord {
+    pub task_id: String,
+    pub layer: String,
+    pub state: String,
+    pub exit_code: i32,
+    pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub stdout_path: String,
+    pub stdout_hash: String,
+    pub stderr_path: String,
+    pub stderr_hash: String,
+    pub artifact_path: Option<String>,
+    pub artifact_hash: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct ProofRecord {
+    pub story_id: Option<String>,
+    pub layer: String,
+    pub state: String,
+    pub executable: Option<String>,
+    pub argv_json: Option<String>,
+    pub exit_code: Option<i32>,
+    pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub dirty_fingerprint: Option<String>,
+    pub cli_version: Option<String>,
+    pub platform: Option<String>,
+    pub command_digest: Option<String>,
+    pub stdout_path: Option<String>,
+    pub stdout_hash: Option<String>,
+    pub stderr_path: Option<String>,
+    pub stderr_hash: Option<String>,
+    pub artifact_path: Option<String>,
+    pub artifact_hash: Option<String>,
+    pub summary: Option<String>,
 }
 
 #[derive(Debug)]
@@ -148,12 +370,83 @@ impl HarnessService {
         self.repository.migrate()
     }
 
+    pub fn doctor(&self) -> crate::infrastructure::Result<DoctorReport> {
+        self.preflight()
+    }
+
+    /// Shared, read-only health boundary for commands that are allowed to
+    /// operate on durable state. CL-11 wires this into safe ensure/migration;
+    /// doctor exposes the same result without changing state.
+    pub fn preflight(&self) -> crate::infrastructure::Result<DoctorReport> {
+        self.repository.doctor()
+    }
+
+    pub fn workflow_policy(&self) -> crate::infrastructure::Result<WorkflowPolicy> {
+        self.repository.workflow_policy()
+    }
+
     pub fn import_brownfield(&self) -> crate::infrastructure::Result<BrownfieldImportResult> {
         self.repository.import_brownfield()
     }
 
     pub fn record_intake(&self, input: IntakeInput) -> crate::infrastructure::Result<i64> {
         self.repository.record_intake(input)
+    }
+
+    pub fn start_task(&self, input: TaskStartInput) -> crate::infrastructure::Result<String> {
+        self.repository.start_task(input)
+    }
+
+    pub fn task_status(&self, id: &str) -> crate::infrastructure::Result<TaskStatusRecord> {
+        self.repository.task_status(id)
+    }
+
+    pub fn transition_task(
+        &self,
+        input: TaskTransitionInput,
+    ) -> crate::infrastructure::Result<TaskStatusRecord> {
+        self.repository.transition_task(input)
+    }
+
+    pub fn handoff_task(&self, input: TaskHandoffInput) -> crate::infrastructure::Result<()> {
+        self.repository.handoff_task(input)
+    }
+
+    pub fn link_task_story(&self, input: TaskStoryLinkInput) -> crate::infrastructure::Result<()> {
+        self.repository.link_task_story(input)
+    }
+
+    pub fn finish_task(
+        &self,
+        input: TaskFinishInput,
+    ) -> crate::infrastructure::Result<TaskFinishRecord> {
+        self.repository.finish_task(input)
+    }
+
+    pub fn refresh_task(
+        &self,
+        input: TaskRefreshInput,
+    ) -> crate::infrastructure::Result<TaskRefreshRecord> {
+        self.repository.refresh_task(input)
+    }
+
+    pub fn acknowledge_task_context(
+        &self,
+        input: TaskContextAcknowledgeInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.acknowledge_task_context(input)
+    }
+
+    pub fn approve_task(&self, input: TaskApprovalInput) -> crate::infrastructure::Result<()> {
+        self.repository.approve_task(input)
+    }
+
+    pub fn run_proof(&self, input: ProofRunInput) -> crate::infrastructure::Result<ProofRunRecord> {
+        self.repository.run_proof(input)
+    }
+
+    pub fn query_proofs(&self, task_id: &str) -> crate::infrastructure::Result<Vec<ProofRecord>> {
+        self.repository.query_proofs(task_id)
     }
 
     pub fn add_story(&self, input: StoryAddInput) -> crate::infrastructure::Result<()> {
@@ -256,6 +549,16 @@ impl HarnessService {
         self.repository.query_friction()
     }
 
+    pub fn add_friction(&self, input: FrictionAddInput) -> crate::infrastructure::Result<String> {
+        self.repository.add_friction(input)
+    }
+    pub fn resolve_friction(
+        &self,
+        input: FrictionResolveInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.resolve_friction(input)
+    }
+
     pub fn query_tools(
         &self,
         responsibility: Option<String>,
@@ -277,6 +580,26 @@ impl HarnessService {
 
     pub fn audit(&self) -> crate::infrastructure::Result<AuditResult> {
         self.repository.audit()
+    }
+
+    pub fn add_audit_disposition(
+        &self,
+        input: AuditDispositionAddInput,
+    ) -> crate::infrastructure::Result<i64> {
+        self.repository.add_audit_disposition(input)
+    }
+
+    pub fn list_audit_dispositions(
+        &self,
+    ) -> crate::infrastructure::Result<Vec<AuditDispositionRecord>> {
+        self.repository.list_audit_dispositions()
+    }
+
+    pub fn revoke_audit_disposition(
+        &self,
+        input: AuditDispositionRevokeInput,
+    ) -> crate::infrastructure::Result<()> {
+        self.repository.revoke_audit_disposition(input)
     }
 
     pub fn propose(&self, commit: bool) -> crate::infrastructure::Result<Vec<ImprovementProposal>> {

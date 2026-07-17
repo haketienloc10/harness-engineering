@@ -1,53 +1,48 @@
-# US-XXX Story Title
+# STORY-ID Story Title
 
 ## Status
 
-planned
+planned | in_progress | completed | blocked
 
-## Lane
+## Lane and Scope
 
-tiny | normal | high-risk
+- Lane: tiny | normal | high-risk
+- Risk flags:
+- In scope:
+- Out of scope:
 
 ## Product Contract
 
-Describe the behavior this story must make true.
-
-## Relevant Product Docs
-
-- `docs/product/...`
+Describe the behavior, affected roles and product-doc contract this story makes
+true. Link only the relevant product docs.
 
 ## Acceptance Criteria
 
-- Criterion 1.
-- Criterion 2.
-- Criterion 3.
+- Criterion.
 
-## Design Notes
+## Design and Decisions
 
-- Commands:
-- Queries:
-- API:
-- Tables:
-- Domain rules:
-- UI surfaces:
+For tiny work, record only the necessary implementation notes. For normal and
+high-risk work, progressively add domain rules, command/query/API contracts,
+data/migration ownership, UI/platform effects, observability and alternatives.
 
-## Validation
+## Human Gates
 
-When updating durable proof status, use numeric booleans:
-`_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0`.
+- Required approval gate/source/evidence, or `none`.
 
-| Layer       | Expected proof |
-| ----------- | -------------- |
-| Unit        |                |
-| Integration |                |
-| E2E         |                |
-| Platform    |                |
-| Release     |                |
+## Validation and Evidence
 
-## Harness Delta
+| Layer | Expected proof | Result |
+| --- | --- | --- |
+| Unit | | not run |
+| Integration | | not run |
+| E2E | | not run |
+| Platform | | not run |
+| Release | | not run |
 
-Document any harness updates made or proposed because of this story.
+Record repeatable proof with `proof run`. Record commands, artifacts and
+remaining gaps below; do not create a separate validation report.
 
-## Evidence
+## Rollback and Harness Delta
 
-Add commands, reports, screenshots, or links after validation exists.
+State rollback/safety notes and any harness change or friction discovered.

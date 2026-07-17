@@ -31,21 +31,16 @@ Required loop:
 
 ```text
 intent
-  -> intake
-  -> lane
-  -> story when needed
+  -> task start (intake and lane)
+  -> story link when needed
   -> implementation
   -> validation
-  -> trace
+  -> task trace
   -> friction or backlog
+  -> task finish
 ```
 
-Initialize local durable state after install:
-
-```bash
-_harness/bin/harness-cli init
-_harness/bin/harness-cli query matrix
-```
+`task start` initializes the task-rooted durable lifecycle when work begins.
 
 ## Install Commands
 
@@ -61,11 +56,30 @@ Install into another directory:
 curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | HARNESS_LITE_TARGET_DIR=/path/to/target bash
 ```
 
+Install a Git-root workspace that coordinates independent nested repositories:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/haketienloc10/harness-engineering/main/install.sh?$(date +%s)" | env HARNESS_INSTALL_MODE=coordination bash
+```
+
+`repository` is the default installation mode. `coordination` requires the
+target to be a Git root and allows `harness-cli` only from that root; nested
+repositories retain their own source, Git, build, test, and release flows.
+
 From a local checkout, run the same installer:
 
 ```bash
-HARNESS_LITE_TARGET_DIR=/path/to/target ./install.sh
+./install.sh /path/to/target
 ```
+
+The installer defaults to `main`. To install a branch or tag explicitly, use
+`HARNESS_LITE_SOURCE_REF`:
+
+```bash
+HARNESS_LITE_SOURCE_REF=feature-rework ./install.sh /path/to/target
+```
+
+`HARNESS_LITE_REF` remains supported for existing scripts.
 
 The installer downloads the source archive from
 `haketienloc10/harness-engineering`, installs the shared scaffold files, updates

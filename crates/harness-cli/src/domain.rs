@@ -1,7 +1,54 @@
+// Some domain values support retained compatibility operations that are
+// exercised only by unit tests; keep production linting focused on reachable
+// CLI paths until that compatibility surface is removed as a unit.
+#![allow(dead_code)]
+
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Serialize;
 use thiserror::Error;
+
+/// Stable error payload rendered by every CLI presentation mode.
+///
+/// Keeping this result below the interface layer prevents human and JSON
+/// output from growing separate gate/remediation rules.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StructuredErrorResult {
+    pub ok: bool,
+    pub code: String,
+    pub message: String,
+    pub details: BTreeMap<String, String>,
+    pub remediation: Vec<String>,
+}
+
+impl StructuredErrorResult {
+    pub fn new(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        remediation: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        Self {
+            ok: false,
+            code: code.into(),
+            message: message.into(),
+            details: BTreeMap::new(),
+            remediation: remediation.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn with_detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.details.insert(key.into(), value.into());
+        self
+    }
+}
+
+impl fmt::Display for StructuredErrorResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseHarnessValueError {
@@ -210,6 +257,25 @@ pub fn validate_tool_kind(value: &str) -> Result<String, ToolValidationError> {
         .find(|kind| **kind == normalized)
         .map(|kind| (*kind).to_owned())
         .ok_or_else(|| ToolValidationError::Kind(value.to_owned(), TOOL_KINDS.join(", ")))
+}
+
+/// Lifecycle transitions are validated in the application layer before SQL;
+/// the schema independently constrains the allowed stored values.
+#[allow(dead_code)] // CL-41 consumes this after task commands are exposed.
+pub fn task_transition_allowed(current: &str, next: &str) -> bool {
+    matches!(
+        (current, next),
+        ("open", "in_progress")
+            | ("in_progress", "blocked")
+            | ("blocked", "in_progress")
+            | ("open", "abandoned")
+            | ("in_progress", "abandoned")
+            | ("blocked", "abandoned")
+            | ("open", "failed")
+            | ("in_progress", "failed")
+            | ("in_progress", "closing")
+            | ("closing", "completed")
+    )
 }
 
 /// Capability is intentionally an open, format-validated vocabulary rather than
@@ -757,7 +823,12 @@ pub fn score_trace(source: TraceScoreSource) -> TraceScoreResult {
     }
 }
 
-pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
+pub fn score_context(
+    source: ContextScoreSource,
+    expected_must: &[(String, String)],
+    expected_should: &[(String, String)],
+    expected_skip: &[String],
+) -> ContextScoreResult {
     let lane = source
         .risk_lane
         .clone()
@@ -766,53 +837,25 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
     let read = jsonish_list(source.files_read.as_deref());
     let changed = jsonish_list(source.files_changed.as_deref());
 
-    let mut must = Vec::new();
-    let mut should = Vec::new();
-    let mut skipped = Vec::new();
-
-    add_base_context_rules(&lane, &phase, &mut must, &mut should, &mut skipped);
-    if changed
+    let must = expected_must
         .iter()
-        .any(|path| path.starts_with("_harness/scripts/schema/"))
-    {
-        must.push((
-            "SQLite durable layer decision",
-            "docs/decisions/0004-sqlite-durable-layer.md",
-        ));
-    }
-    if changed
-        .iter()
-        .any(|path| {
-            path.starts_with("crates/harness-cli/")
-                || path.starts_with("_harness/bin/")
-                || path.starts_with("install.sh")
-        })
-    {
-        must.push((
-            "Prebuilt CLI decision",
-            "docs/decisions/0005-prebuilt-rust-harness-cli.md",
-        ));
-    }
-
-    let must = must
-        .into_iter()
         .map(|(label, target)| ContextRequirementResult {
-            label: label.to_owned(),
-            target: target.to_owned(),
+            label: label.clone(),
+            target: target.clone(),
             met: path_read(&read, target, &changed),
         })
         .collect::<Vec<_>>();
-    let should = should
-        .into_iter()
+    let should = expected_should
+        .iter()
         .map(|(label, target)| ContextRequirementResult {
-            label: label.to_owned(),
-            target: target.to_owned(),
+            label: label.clone(),
+            target: target.clone(),
             met: path_read(&read, target, &changed),
         })
         .collect::<Vec<_>>();
     let over_read = read
         .into_iter()
-        .filter(|path| skipped.iter().any(|skip| path_matches(path, skip)))
+        .filter(|path| expected_skip.iter().any(|skip| path_matches(path, skip)))
         .collect::<Vec<_>>();
 
     ContextScoreResult {
@@ -825,74 +868,16 @@ pub fn score_context(source: ContextScoreSource) -> ContextScoreResult {
     }
 }
 
-fn infer_context_phase(source: &ContextScoreSource) -> String {
+pub fn infer_context_phase(source: &ContextScoreSource) -> String {
     let changed = source.files_changed.as_deref().unwrap_or("").trim();
     if source.outcome.as_deref() == Some("completed") {
-        "trace".to_owned()
+        "finish".to_owned()
     } else if source.story_id.is_some() && !changed.is_empty() && changed != "[]" {
-        "implementation".to_owned()
+        "work".to_owned()
     } else if source.risk_lane.is_some() {
         "planning".to_owned()
     } else {
         "intake".to_owned()
-    }
-}
-
-fn add_base_context_rules<'a>(
-    lane: &str,
-    phase: &str,
-    must: &mut Vec<(&'a str, &'a str)>,
-    should: &mut Vec<(&'a str, &'a str)>,
-    skipped: &mut Vec<&'a str>,
-) {
-    match phase {
-        "trace" => {
-            must.push(("Trace specification", "_harness/TRACE_SPEC.md"));
-            must.push(("Changed-file list", "git status --short"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            } else {
-                should.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            }
-        }
-        "implementation" => {
-            must.push(("Files being changed", "<changed-files>"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Relevant story packet", "docs/stories/"));
-                should.push(("Architecture rules", "_harness/ARCHITECTURE.md"));
-            }
-            if lane == "high_risk" {
-                must.push(("Architecture rules", "_harness/ARCHITECTURE.md"));
-                must.push((
-                    "High-risk story template",
-                    "_harness/templates/high-risk-story/",
-                ));
-            }
-        }
-        "planning" => {
-            must.push(("Files to edit", "<changed-files>"));
-            if lane == "normal" || lane == "high_risk" {
-                must.push(("Story template", "_harness/templates/story.md"));
-                must.push(("Test matrix", "_harness/TEST_MATRIX.md"));
-            }
-            if lane == "high_risk" {
-                must.push((
-                    "High-risk story template",
-                    "_harness/templates/high-risk-story/",
-                ));
-            }
-        }
-        _ => {
-            must.push(("Agent entrypoint", "AGENTS.md"));
-            must.push(("Feature intake", "_harness/FEATURE_INTAKE.md"));
-            must.push(("Durable matrix", "_harness/bin/harness-cli query matrix"));
-            if lane == "tiny" {
-                skipped.push("_harness/ARCHITECTURE.md");
-            } else {
-                must.push(("README", "README.md"));
-                must.push(("Harness operating model", "_harness/HARNESS.md"));
-            }
-        }
     }
 }
 
@@ -1021,6 +1006,7 @@ pub struct InterventionRecord {
 pub struct ContextScoreSource {
     pub id: i64,
     pub risk_lane: Option<String>,
+    pub risk_flags: Option<String>,
     pub story_id: Option<String>,
     pub files_read: Option<String>,
     pub files_changed: Option<String>,
@@ -1044,31 +1030,214 @@ pub struct ContextScoreResult {
     pub over_read: Vec<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct AuditFinding {
     pub id: String,
     pub title: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AuditDispositionRecord {
+    pub id: i64,
+    pub finding_key: String,
+    pub entity_id: String,
+    pub status: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub revoked_by: Option<String>,
+    pub revocation_reason: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct AcceptedAuditFinding {
+    pub disposition_id: i64,
+    pub finding_key: String,
+    pub entity_id: String,
+    pub title: String,
+    pub rationale: String,
+    pub provenance: String,
+    pub approval_task_id: String,
+    pub approval_source: String,
+    pub actor: String,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct ObservationCount {
+    pub observed: i64,
+    pub required: i64,
+}
+
+impl ObservationCount {
+    pub fn met(&self) -> bool {
+        self.observed >= self.required
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct MaturityReport {
+    pub basis: String,
+    pub evidence_backed_terminal_tasks: ObservationCount,
+    pub tiny_tasks: ObservationCount,
+    pub normal_tasks: ObservationCount,
+    pub high_risk_tasks: ObservationCount,
+    pub blocked_resumed_tasks: ObservationCount,
+    pub fresh_clone_rebuild_tasks: ObservationCount,
+    pub installer_upgrade_tasks: ObservationCount,
+    pub completed_expanded_tasks: i64,
+    pub completed_expanded_tasks_meeting_gates: i64,
+    pub measured_improvements: ObservationCount,
+    pub h5_status: String,
+    pub gaps: Vec<String>,
+}
+
+impl Default for MaturityReport {
+    fn default() -> Self {
+        Self {
+            basis: "observed task gates and measured improvement outcomes; command existence is excluded"
+                .to_owned(),
+            evidence_backed_terminal_tasks: ObservationCount {
+                observed: 0,
+                required: 10,
+            },
+            tiny_tasks: ObservationCount {
+                observed: 0,
+                required: 3,
+            },
+            normal_tasks: ObservationCount {
+                observed: 0,
+                required: 4,
+            },
+            high_risk_tasks: ObservationCount {
+                observed: 0,
+                required: 2,
+            },
+            blocked_resumed_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            fresh_clone_rebuild_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            installer_upgrade_tasks: ObservationCount {
+                observed: 0,
+                required: 1,
+            },
+            completed_expanded_tasks: 0,
+            completed_expanded_tasks_meeting_gates: 0,
+            measured_improvements: ObservationCount {
+                observed: 0,
+                required: 2,
+            },
+            h5_status: "not_achieved".to_owned(),
+            gaps: Vec::new(),
+        }
+    }
+}
+
+impl MaturityReport {
+    pub fn observation_window_met(&self) -> bool {
+        self.evidence_backed_terminal_tasks.met()
+            && self.tiny_tasks.met()
+            && self.normal_tasks.met()
+            && self.high_risk_tasks.met()
+            && self.blocked_resumed_tasks.met()
+            && self.fresh_clone_rebuild_tasks.met()
+            && self.installer_upgrade_tasks.met()
+    }
+
+    pub fn expanded_gates_met(&self) -> bool {
+        self.completed_expanded_tasks > 0
+            && self.completed_expanded_tasks == self.completed_expanded_tasks_meeting_gates
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Default, Serialize)]
 pub struct AuditResult {
+    pub health_scope: String,
+    pub accepted_findings: Vec<AcceptedAuditFinding>,
     pub orphaned_stories: Vec<AuditFinding>,
+    pub terminal_tasks_without_traces: Vec<AuditFinding>,
+    pub unrooted_traces: Vec<AuditFinding>,
+    pub completed_tasks_below_gates: Vec<AuditFinding>,
     pub unverified_stories: Vec<AuditFinding>,
     pub unverified_decisions: Vec<AuditFinding>,
     pub backlog_without_outcomes: Vec<AuditFinding>,
     pub stale_stories: Vec<AuditFinding>,
     pub broken_tools: Vec<AuditFinding>,
+    pub friction_without_outcomes: Vec<AuditFinding>,
+    pub coverage: Vec<String>,
+    pub unknown_coverage: Vec<String>,
+    pub coverage_checks: Vec<AuditCoverageCheck>,
+    pub maturity: MaturityReport,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct AuditCoverageCheck {
+    pub check_id: String,
+    pub version: i64,
+    pub required: bool,
+    pub state: String,
+    pub task_id: Option<String>,
+    pub proof_run_id: Option<i64>,
+    pub command: Option<String>,
+    pub output_path: Option<String>,
+    pub output_hash: Option<String>,
+    pub head_commit: Option<String>,
+    pub branch: Option<String>,
+    pub dirty_fingerprint: Option<String>,
+    pub freshness: AuditCoverageFreshness,
+    pub scope: Vec<String>,
+    pub measured_counts: BTreeMap<String, i64>,
+    pub remediation: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+pub struct AuditCoverageFreshness {
+    pub head: Option<bool>,
+    pub branch: Option<bool>,
+    pub dirty: Option<bool>,
+    pub output: Option<bool>,
 }
 
 impl AuditResult {
     pub fn entropy_score(&self) -> i64 {
         let raw = (self.orphaned_stories.len() as i64 * 10)
+            + (self.terminal_tasks_without_traces.len() as i64 * 10)
+            + (self.unrooted_traces.len() as i64 * 5)
+            + (self.completed_tasks_below_gates.len() as i64 * 10)
             + (self.unverified_stories.len() as i64 * 5)
             + (self.unverified_decisions.len() as i64 * 5)
             + (self.backlog_without_outcomes.len() as i64 * 2)
             + (self.stale_stories.len() as i64 * 3)
-            + (self.broken_tools.len() as i64 * 8);
+            + (self.broken_tools.len() as i64 * 8)
+            + (self.friction_without_outcomes.len() as i64 * 4);
         raw.min(100)
+    }
+
+    pub fn finding_count(&self) -> usize {
+        self.orphaned_stories.len()
+            + self.terminal_tasks_without_traces.len()
+            + self.unrooted_traces.len()
+            + self.completed_tasks_below_gates.len()
+            + self.unverified_stories.len()
+            + self.unverified_decisions.len()
+            + self.backlog_without_outcomes.len()
+            + self.stale_stories.len()
+            + self.broken_tools.len()
+            + self.friction_without_outcomes.len()
+    }
+
+    pub fn strict_passes(&self) -> bool {
+        self.finding_count() == 0 && self.unknown_coverage.is_empty()
     }
 }
 
@@ -1308,18 +1477,30 @@ mod tests {
 
     #[test]
     fn context_score_applies_lane_and_retrieval_triggers() {
-        let result = score_context(ContextScoreSource {
-            id: 42,
-            risk_lane: Some("normal".to_owned()),
-            story_id: Some("US-019".to_owned()),
-            files_read: Some(
-                "[\"docs/stories/epics/E03-phase-5-evolution-infrastructure/US-019-tool-registry.md\",\"docs/decisions/0005-prebuilt-rust-harness-cli.md\"]".to_owned(),
-            ),
-            files_changed: Some("[\"crates/harness-cli/src/interface.rs\"]".to_owned()),
-            outcome: None,
-        });
+        let result = score_context(
+            ContextScoreSource {
+                id: 42,
+                risk_lane: Some("normal".to_owned()),
+                risk_flags: Some("[\"public-contract\"]".to_owned()),
+                story_id: Some("US-019".to_owned()),
+                files_read: Some(
+                    "[\"docs/stories/epics/E03-phase-5-evolution-infrastructure/US-019-tool-registry.md\",\"docs/decisions/0005-prebuilt-rust-harness-cli.md\"]".to_owned(),
+                ),
+                files_changed: Some("[\"crates/harness-cli/src/interface.rs\"]".to_owned()),
+                outcome: None,
+            },
+            &[
+                ("work-story".to_owned(), "docs/stories/".to_owned()),
+                (
+                    "cli-distribution".to_owned(),
+                    "docs/decisions/0005-prebuilt-rust-harness-cli.md".to_owned(),
+                ),
+            ],
+            &[],
+            &[],
+        );
 
-        assert_eq!(result.phase, "implementation");
+        assert_eq!(result.phase, "work");
         assert!(result
             .must
             .iter()
@@ -1327,5 +1508,17 @@ mod tests {
         assert!(result.must.iter().any(|item| item.target
             == "docs/decisions/0005-prebuilt-rust-harness-cli.md"
             && item.met));
+    }
+
+    #[test]
+    fn task_lifecycle_allows_only_declared_transitions() {
+        assert!(task_transition_allowed("open", "in_progress"));
+        assert!(task_transition_allowed("in_progress", "blocked"));
+        assert!(task_transition_allowed("blocked", "in_progress"));
+        assert!(task_transition_allowed("in_progress", "closing"));
+        assert!(task_transition_allowed("closing", "completed"));
+        assert!(!task_transition_allowed("open", "completed"));
+        assert!(!task_transition_allowed("completed", "in_progress"));
+        assert!(!task_transition_allowed("blocked", "completed"));
     }
 }

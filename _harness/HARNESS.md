@@ -12,12 +12,11 @@ Every task follows this shape:
 
 ```text
 intent
-  -> intake
-  -> lane
-  -> story when needed
+  -> task start (intake + lane)
+  -> story link when needed
   -> implementation or documented blocker
   -> validation
-  -> trace
+  -> task trace
   -> friction fix or backlog
 ```
 
@@ -48,26 +47,18 @@ Use the repository-local CLI when it exists:
 _harness/bin/harness-cli <command>
 ```
 
-Initialize local state if needed:
-
-```bash
-_harness/bin/harness-cli init
-```
-
 Core commands:
 
 ```bash
-_harness/bin/harness-cli intake --type <type> --summary <text> --lane <lane>
-_harness/bin/harness-cli query matrix
-_harness/bin/harness-cli tool check
-_harness/bin/harness-cli story add --id <id> --title <text> --lane <lane> --verify "<command>"
-_harness/bin/harness-cli story update --id <id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands>"
-_harness/bin/harness-cli story verify <id>
-_harness/bin/harness-cli story verify-all
+_harness/bin/harness-cli task start --type <type> --summary <text> --owner <owner> --session <session>
+_harness/bin/harness-cli task next --json
+_harness/bin/harness-cli task context acknowledge --id <task-id> --read <path>
+_harness/bin/harness-cli task link-story --id <task-id> --story <story-id> --role primary
+_harness/bin/harness-cli proof run --task <task-id> --story <story-id> --layer unit -- <command>
 _harness/bin/harness-cli decision add --id <id> --title <text> --doc docs/decisions/<file>.md
-_harness/bin/harness-cli trace --summary <text> --agent <agent> --outcome completed
+_harness/bin/harness-cli task trace --summary <text> --intake <intake-id> --agent <agent> --outcome completed
+_harness/bin/harness-cli task finish --id <task-id> --outcome completed --friction none
 _harness/bin/harness-cli audit
-_harness/bin/harness-cli propose
 ```
 
 Operational data lives in ignored local `harness.db`; schema migrations live in
@@ -81,11 +72,11 @@ Parallel tool calls are only for independent commands.
 
 Do not combine dependent commands in one parallel batch:
 
-- `init` -> `query ...`
-- `story add/update/verify` -> `query matrix`
+- `task start` -> `task context acknowledge`
+- `task link-story` -> `proof run`
 - `tool check` -> `query tools`
 - file edits -> lint/test/typecheck
-- proof recording -> `trace`
+- proof recording -> `task trace` -> `task finish`
 
 If violated, rerun the dependent read or validation sequentially and use only
 the rerun result. Record friction only if the ordered rerun still fails.
@@ -144,13 +135,11 @@ Stories store proof in the durable layer. Run validation yourself, then record
 the result:
 
 ```bash
-_harness/bin/harness-cli story verify <story-id>
-_harness/bin/harness-cli story update --id <story-id> --unit 1 --integration 1 --e2e 0 --platform 0 --evidence "<commands run>"
-_harness/bin/harness-cli query matrix
+_harness/bin/harness-cli proof run --task <task-id> --story <story-id> --layer unit -- <command>
+_harness/bin/harness-cli task finish --id <task-id> --outcome completed --friction none
 ```
 
-Use numeric booleans: `1` means yes, `0` means no. Use
-`query matrix --numeric` when copying proof values back into `story update`.
+`query matrix` derives current layer results from append-only `proof run` rows.
 
 ## External Tools
 
@@ -202,7 +191,7 @@ Trace `--decisions` is evidence, not a durable decision record.
 
 ## Change Policy
 
-Agents may update routine story status, proof, traces, intake records, backlog,
+Agents may update routine task links, proof, task traces, backlog,
 validation notes, and small clarifications tied to the current task.
 
 Ask before changing architecture direction, removing validation requirements,
@@ -237,6 +226,6 @@ A task is done only when:
 - The requested change is completed or the blocker is documented.
 - Relevant docs, stories, proof, decisions, and templates remain current.
 - Available validation was run, or the exact gap is stated.
-- A trace was recorded when the CLI exists.
+- A task trace was recorded when the CLI exists.
 - Harness friction was fixed or recorded.
 - The final response says what changed and what was not attempted.

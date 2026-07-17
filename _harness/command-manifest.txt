@@ -1,0 +1,68 @@
+# Generated contract for the command-first workflow surface.
+doctor
+workflow
+workflow validate
+workflow explain
+workflow context
+workflow commands
+workflow parity
+task
+task start
+task block
+task resume
+task abandon
+task handoff
+task link-story
+task finish
+task trace
+task refresh
+task context
+task context acknowledge
+task approve
+task next
+task status
+proof
+proof run
+proof query
+friction
+friction add
+friction resolve
+friction query
+memory
+memory check
+memory rebuild
+memory capsule
+memory capsule render
+memory capsule check
+story
+story check
+decision
+decision add
+decision verify
+decision check
+backlog
+backlog add
+backlog close
+tool
+tool register
+tool check
+tool remove
+intervention
+intervention add
+audit
+audit disposition
+audit disposition add
+audit disposition list
+audit disposition revoke
+propose
+query
+query matrix
+query backlog
+query decisions
+query intakes
+query traces
+query friction
+query tools
+query interventions
+query stats
+query sql

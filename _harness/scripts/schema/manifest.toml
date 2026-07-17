@@ -1,0 +1,67 @@
+lineage = "main"
+checksum = "sha256-utf8-lf-no-bom"
+
+[[migration]]
+version = 1
+path = "001-init.sql"
+sha256 = "c7d3f13ae6849aacdcee7538b5f6a159f237ff5676d0df261855a874dabb96b3"
+
+[[migration]]
+version = 2
+path = "002-story-verify.sql"
+sha256 = "6e788f0a712e1280b196843b7e4e49a71f649e0c989913dc1b9d28e098df54de"
+
+[[migration]]
+version = 3
+path = "003-tool-registry.sql"
+sha256 = "acf9fa39f056e9f41a9499e84139b4d44dbb921ea228c08a2eeaff66267e4caa"
+
+[[migration]]
+version = 4
+path = "004-intervention.sql"
+sha256 = "e5b8c6879976c87e4663eb4b5849d29b5c4caa8a1fe54b1f122b11e429090197"
+
+[[migration]]
+version = 5
+path = "005-tool-extensions.sql"
+sha256 = "43394d8a3669a818b0fbbacc71650b4f37f4c2992ed8de0f9fb9b87e06d7982c"
+
+[[migration]]
+version = 6
+path = "006-command-first-foundation.sql"
+sha256 = "9067520c44bd7f4d5ab1c7d8d0268f8dd26645d45095218ed69b6ee07e1ed9e8"
+
+[[migration]]
+version = 7
+path = "007-artifact-index.sql"
+sha256 = "18dc0fdb04138f7a1a9c36a12587fcabf0cb13e2411aba9482c79c86f0c4b208"
+
+[[migration]]
+version = 8
+path = "008-task-closure.sql"
+sha256 = "ec01beabd3103204084aad19c53bcef4c4dd665fea664305508c8c1fe14f2cc8"
+
+[[migration]]
+version = 9
+path = "009-structured-friction.sql"
+sha256 = "c1cf74965c79024763de18945e4cc818b6e2c08551d3eabac6d7dc0b0ccab87c"
+
+[[migration]]
+version = 10
+path = "010-task-session-lease.sql"
+sha256 = "834026e7ba62d6c07ab6288ccf686c40d85853ef8d8749447f5d8a1246923a69"
+
+[[migration]]
+version = 11
+path = "011-proof-provenance.sql"
+sha256 = "457efcd3c958d52d94bc85e90ae4402ccbfc4ccd90476f129cda1589078ca2bd"
+
+[[migration]]
+version = 12
+path = "012-audit-disposition.sql"
+sha256 = "a5af5ab9060c71301b711d5ce133cf2c92c3d839e08889a421e1d39894ef5ecb"
+
+[[migration]]
+version = 13
+path = "013-portable-memory-projection.sql"
+sha256 = "1973983375eced517eeb61840489541776cfa11ad684bc3e0dd75f9bcf25ff33"

@@ -18,27 +18,28 @@ docs/stories/epics/E01-domain-name/US-001-short-story-title.md
 
 ## High-Risk Story
 
-Use `_harness/templates/high-risk-story/` when the feature intake
-classifies work as high-risk.
+Use the progressive `_harness/templates/story.md` when the feature intake
+classifies work as high-risk. Expand its scope, design, human-gate,
+validation, and rollback sections instead of creating a multi-file packet.
 
 Suggested path:
 
 ```text
-docs/stories/epics/E02-risky-domain/US-012-risky-story-title/
-  execplan.md
-  overview.md
-  design.md
-  validation.md
+docs/stories/epics/E02-risky-domain/US-012-risky-story-title.md
 ```
 
 ## Status Flow
 
+New command-first stories use the canonical template vocabulary:
+
 ```text
-planned -> in_progress -> implemented
-                  |
-                  v
-               changed
-                  |
-                  v
-               retired
+planned -> in_progress -> completed
+              |  ^
+              v  |
+            blocked
 ```
+
+Existing legacy stories with `implemented`, `changed` or `retired` remain
+read-compatible during the compatibility window, but new or updated stories
+must use `planned`, `in_progress`, `completed` or `blocked` from
+`_harness/templates/story.md`.

@@ -1,0 +1,78 @@
+schema_version = 1
+source_policy = "_harness/workflow.toml"
+
+[[classification_cases]]
+id = "no-flags"
+flags = []
+expected_lane = "tiny"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "two-flags"
+flags = ["public-contract", "weak-proof"]
+expected_lane = "normal"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "four-flags"
+flags = ["public-contract", "weak-proof", "cross-platform", "existing-behavior"]
+expected_lane = "high_risk"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "auth-hard-gate"
+flags = ["auth"]
+expected_lane = "high_risk"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "audit-spelling-alias"
+flags = ["audit/security"]
+expected_lane = "high_risk"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "external-systems-alias"
+flags = ["external systems"]
+expected_lane = "high_risk"
+comparison = "accepted"
+
+[[classification_cases]]
+id = "data-loss-alias"
+flags = ["data loss"]
+expected_lane = "high_risk"
+comparison = "accepted"
+
+[[context_cases]]
+id = "tiny-intake"
+lane = "tiny"
+phase = "intake"
+paths = []
+flags = []
+must_include = ["AGENTS.md", "_harness/bin/harness-cli query matrix"]
+skip_include = ["_harness/ARCHITECTURE.md"]
+
+[[context_cases]]
+id = "normal-cli-work"
+lane = "normal"
+phase = "work"
+paths = ["crates/harness-cli/src/interface.rs"]
+flags = []
+must_include = ["docs/stories/", "docs/decisions/0005-prebuilt-rust-harness-cli.md"]
+skip_include = []
+
+[[context_cases]]
+id = "high-risk-finish"
+lane = "high_risk"
+phase = "finish"
+paths = []
+flags = ["audit/security"]
+must_include = ["git status --short", "docs/decisions/"]
+skip_include = []
+
+[[intentional_deltas]]
+id = "one-flag-code-impact"
+current_markdown = "0-1 flags may be tiny or normal based on code impact"
+shadow_behavior = "classification remains tiny unless another flag or hard gate is supplied"
+disposition = "CL-22 must either add an explicit behavior/code-impact input or link an approving ADR before authority cutover"
+decision = "0017-explicit-code-impact-classification"

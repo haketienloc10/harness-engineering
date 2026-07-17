@@ -31,21 +31,15 @@ Required loop:
 
 ```text
 intent
-  -> intake
-  -> lane
-  -> story when needed
+  -> task start (intake and lane)
+  -> story link when needed
   -> implementation
   -> validation
-  -> trace
+  -> task trace
   -> friction or backlog
 ```
 
-Initialize local durable state after install:
-
-```bash
-_harness/bin/harness-cli init
-_harness/bin/harness-cli query matrix
-```
+`task start` initializes the task-rooted durable lifecycle when work begins.
 
 ## Install Commands
 

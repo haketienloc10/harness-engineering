@@ -11,20 +11,18 @@ use thiserror::Error;
 
 use crate::application::{
     AuditDispositionAddInput, AuditDispositionRevokeInput, BacklogAddInput, BacklogCloseInput,
-    BrownfieldImportResult, DecisionAddInput, FrictionAddInput, FrictionResolveInput,
-    HarnessContext, HarnessService, InitResult, IntakeInput, InterventionAddInput,
-    InterventionFilter, MigrateResult, ProofRecord, ProofRunInput, QueryTable, StoryAddInput,
-    StoryUpdateInput, TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput,
-    TaskHandoffInput, TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput,
+    DecisionAddInput, FrictionAddInput, FrictionResolveInput, HarnessContext, HarnessService,
+    InterventionAddInput, InterventionFilter, ProofRecord, ProofRunInput, QueryTable,
+    TaskApprovalInput, TaskContextAcknowledgeInput, TaskFinishInput, TaskHandoffInput,
+    TaskRefreshInput, TaskStartInput, TaskStoryLinkInput, TaskTransitionInput,
     ToolRegisterInput, TraceInput,
 };
 use crate::domain::{
     normalize_capability, normalize_token, parse_optional_integer, parse_tool_args, proof_display,
     validate_responsibility, validate_tool_kind, AuditDispositionRecord, BacklogFilter,
-    BacklogRecord, BoolFlag, ContextScoreResult, CsvList, DecisionRecord, FrictionRecord,
-    HarnessStats, ImprovementProposal, InputType, IntakeRecord, InterventionRecord, RiskLane,
-    StoryMatrixRecord, StoryVerifyAllResult, StructuredErrorResult, ToolEntry, TraceQualityTier,
-    TraceRecord, TraceScoreResult, RISK_LANE_HELP,
+    BacklogRecord, CsvList, DecisionRecord, FrictionRecord, HarnessStats, ImprovementProposal,
+    InputType, IntakeRecord, InterventionRecord, RiskLane, StoryMatrixRecord,
+    StructuredErrorResult, ToolEntry, TraceRecord, RISK_LANE_HELP,
 };
 use crate::infrastructure::ToolCheckResult;
 
@@ -44,14 +42,6 @@ enum Command {
     Doctor(DoctorArgs),
     /// Validate or explain the typed Harness workflow policy.
     Workflow(WorkflowArgs),
-    /// Create the harness database if it does not already exist.
-    Init,
-    /// Apply schema migrations.
-    Migrate,
-    /// Seed or refresh the database from existing markdown state.
-    Import(ImportArgs),
-    /// Record a feature intake classification.
-    Intake(IntakeArgs),
     /// Start or inspect command-first lifecycle tasks.
     Task(TaskArgs),
     /// Run a structured proof command for a lifecycle task.
@@ -70,12 +60,6 @@ enum Command {
     Tool(ToolArgs),
     /// Record a human, review, CI, or agent intervention.
     Intervention(InterventionArgs),
-    /// Record an agent execution trace.
-    Trace(TraceArgs),
-    /// Score a trace against the trace quality tiers.
-    ScoreTrace(ScoreTraceArgs),
-    /// Score trace context reads against CONTEXT_RULES.md.
-    ScoreContext { trace_id: String },
     /// Run drift audit and entropy score.
     Audit(AuditArgs),
     /// Generate improvement proposals from observed patterns.
@@ -289,25 +273,6 @@ pub fn compiled_command_manifest() -> Vec<String> {
 }
 
 #[derive(Args, Debug)]
-#[command(after_help = RISK_LANE_HELP)]
-struct IntakeArgs {
-    #[arg(long = "type")]
-    input_type: String,
-    #[arg(long)]
-    summary: String,
-    #[arg(long, value_name = "tiny|normal|high-risk")]
-    lane: String,
-    #[arg(long)]
-    flags: Option<String>,
-    #[arg(long)]
-    docs: Option<String>,
-    #[arg(long)]
-    story: Option<String>,
-    #[arg(long)]
-    notes: Option<String>,
-}
-
-#[derive(Args, Debug)]
 struct TaskArgs {
     #[command(subcommand)]
     action: TaskAction,
@@ -395,6 +360,8 @@ enum TaskAction {
     Handoff(TaskHandoffArgs),
     LinkStory(TaskLinkStoryArgs),
     Finish(TaskFinishArgs),
+    /// Record a task-rooted execution trace before terminal closure.
+    Trace(TaskTraceArgs),
     Refresh(TaskRefreshArgs),
     Context(TaskContextArgs),
     Approve(TaskApproveArgs),
@@ -553,6 +520,38 @@ struct TaskFinishArgs {
 }
 
 #[derive(Args, Debug)]
+struct TaskTraceArgs {
+    #[arg(long)]
+    summary: String,
+    #[arg(long)]
+    intake: Option<String>,
+    #[arg(long)]
+    story: Option<String>,
+    #[arg(long)]
+    agent: Option<String>,
+    #[arg(long)]
+    outcome: Option<String>,
+    #[arg(long)]
+    duration: Option<String>,
+    #[arg(long)]
+    tokens: Option<String>,
+    #[arg(long)]
+    friction: Option<String>,
+    #[arg(long)]
+    actions: Option<String>,
+    #[arg(long = "read")]
+    files_read: Option<String>,
+    #[arg(long = "changed")]
+    files_changed: Option<String>,
+    #[arg(long)]
+    decisions: Option<String>,
+    #[arg(long)]
+    errors: Option<String>,
+    #[arg(long)]
+    notes: Option<String>,
+}
+
+#[derive(Args, Debug)]
 struct TaskRefreshArgs {
     #[arg(long)]
     id: String,
@@ -579,18 +578,6 @@ struct TaskApproveArgs {
 }
 
 #[derive(Args, Debug)]
-struct ImportArgs {
-    #[command(subcommand)]
-    source: ImportSource,
-}
-
-#[derive(Subcommand, Debug)]
-enum ImportSource {
-    /// Import TEST_MATRIX, decisions, and backlog markdown.
-    Brownfield,
-}
-
-#[derive(Args, Debug)]
 struct StoryArgs {
     #[command(subcommand)]
     action: StoryAction,
@@ -598,59 +585,8 @@ struct StoryArgs {
 
 #[derive(Subcommand, Debug)]
 enum StoryAction {
-    #[command(after_help = RISK_LANE_HELP)]
-    Add(StoryAddArgs),
-    #[command(
-        after_help = "Proof flags use numeric booleans: --unit 1 --integration 1 --e2e 0 --platform 0. Do not use yes/no."
-    )]
-    Update(StoryUpdateArgs),
-    #[command(
-        after_help = "story verify only accepts the story id. Configure proof with story add/update --verify, then record proof flags with story update."
-    )]
-    Verify {
-        /// Story id to verify.
-        id: String,
-    },
-    /// Verify every story, skipping stories without verify_command.
-    VerifyAll,
     /// Validate a tracked legacy or v1 story artifact without writing state.
     Check(ArtifactCheckArgs),
-}
-
-#[derive(Args, Debug)]
-struct StoryAddArgs {
-    #[arg(long)]
-    id: String,
-    #[arg(long)]
-    title: String,
-    #[arg(long, value_name = "tiny|normal|high-risk")]
-    lane: String,
-    #[arg(long)]
-    contract: Option<String>,
-    #[arg(long)]
-    verify: Option<String>,
-    #[arg(long)]
-    notes: Option<String>,
-}
-
-#[derive(Args, Debug)]
-struct StoryUpdateArgs {
-    #[arg(long)]
-    id: String,
-    #[arg(long)]
-    status: Option<String>,
-    #[arg(long)]
-    evidence: Option<String>,
-    #[arg(long, value_name = "0|1")]
-    unit: Option<String>,
-    #[arg(long, value_name = "0|1")]
-    integration: Option<String>,
-    #[arg(long, value_name = "0|1")]
-    e2e: Option<String>,
-    #[arg(long, value_name = "0|1")]
-    platform: Option<String>,
-    #[arg(long)]
-    verify: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -876,45 +812,6 @@ struct InterventionAddArgs {
     source: String,
     #[arg(long)]
     impact: Option<String>,
-}
-
-#[derive(Args, Debug)]
-struct TraceArgs {
-    #[arg(long)]
-    summary: String,
-    #[arg(long)]
-    intake: Option<String>,
-    #[arg(long)]
-    story: Option<String>,
-    #[arg(long)]
-    agent: Option<String>,
-    #[arg(long)]
-    outcome: Option<String>,
-    #[arg(long)]
-    duration: Option<String>,
-    #[arg(long)]
-    tokens: Option<String>,
-    #[arg(long)]
-    friction: Option<String>,
-    #[arg(long)]
-    actions: Option<String>,
-    #[arg(long = "read")]
-    files_read: Option<String>,
-    #[arg(long = "changed")]
-    files_changed: Option<String>,
-    #[arg(long)]
-    decisions: Option<String>,
-    #[arg(long)]
-    errors: Option<String>,
-    #[arg(long)]
-    notes: Option<String>,
-}
-
-#[derive(Args, Debug)]
-struct ScoreTraceArgs {
-    /// Score a specific trace id. Defaults to the latest trace.
-    #[arg(long)]
-    id: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -1365,27 +1262,9 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 }
             }
         }
-        Command::Init => print_init_result(service.init()?),
-        Command::Migrate => print_migrate_result(service.migrate()?),
-        Command::Import(args) => match args.source {
-            ImportSource::Brownfield => {
-                print_brownfield_import_result(service.import_brownfield()?)
-            }
-        },
-        Command::Intake(args) => {
-            let id = service.record_intake(IntakeInput {
-                input_type: InputType::from_str(&args.input_type)?,
-                summary: args.summary,
-                risk_lane: RiskLane::from_str(&args.lane)?,
-                risk_flags: CsvList::from_optional(args.flags),
-                affected_docs: CsvList::from_optional(args.docs),
-                story_id: args.story,
-                notes: args.notes,
-            })?;
-            println!("Intake #{id} recorded.");
-        }
         Command::Task(args) => match args.action {
             TaskAction::Start(args) => {
+                service.init()?;
                 let input_type = InputType::from_str(&args.input_type)?;
                 let risk_flags = args
                     .flags
@@ -1555,6 +1434,25 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 } else {
                     println!("Task {} completed.", finished.id);
                 }
+            }
+            TaskAction::Trace(args) => {
+                let id = service.record_trace(TraceInput {
+                    task_summary: args.summary,
+                    intake_id: parse_optional_integer("task trace: --intake", args.intake)?,
+                    story_id: args.story,
+                    agent: args.agent,
+                    outcome: args.outcome,
+                    duration_seconds: parse_optional_integer("task trace: --duration", args.duration)?,
+                    token_estimate: parse_optional_integer("task trace: --tokens", args.tokens)?,
+                    friction: args.friction,
+                    notes: args.notes,
+                    actions: CsvList::from_optional(args.actions),
+                    files_read: CsvList::from_optional(args.files_read),
+                    files_changed: CsvList::from_optional(args.files_changed),
+                    decisions: CsvList::from_optional(args.decisions),
+                    errors: CsvList::from_optional(args.errors),
+                })?;
+                println!("Task trace #{id} recorded.");
             }
             TaskAction::Refresh(args) => {
                 let refresh = service.refresh_task(TaskRefreshInput {
@@ -1894,50 +1792,6 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
             },
         },
         Command::Story(args) => match args.action {
-            StoryAction::Add(args) => {
-                service.add_story(StoryAddInput {
-                    id: args.id.clone(),
-                    title: args.title,
-                    risk_lane: RiskLane::from_str(&args.lane)?,
-                    contract_doc: args.contract,
-                    verify_command: args.verify,
-                    notes: args.notes,
-                })?;
-                println!("Story {} added.", args.id);
-            }
-            StoryAction::Update(args) => {
-                service.update_story(StoryUpdateInput {
-                    id: args.id.clone(),
-                    status: args.status,
-                    evidence: args.evidence,
-                    unit: parse_optional_bool("story update: --unit", args.unit)?,
-                    integration: parse_optional_bool(
-                        "story update: --integration",
-                        args.integration,
-                    )?,
-                    e2e: parse_optional_bool("story update: --e2e", args.e2e)?,
-                    platform: parse_optional_bool("story update: --platform", args.platform)?,
-                    verify_command: args.verify,
-                })?;
-                println!("Story {} updated.", args.id);
-            }
-            StoryAction::Verify { id } => {
-                let result = service.verify_story(&id)?;
-                println!("Running: {}", result.command);
-                print!("{}", result.stdout);
-                print!("{}", result.stderr);
-                println!("Story {id} verification: {}", result.result);
-                if result.result == "fail" {
-                    std::process::exit(1);
-                }
-            }
-            StoryAction::VerifyAll => {
-                let result = service.verify_all_stories()?;
-                print_story_verify_all(&result);
-                if result.failed() > 0 {
-                    std::process::exit(1);
-                }
-            }
             StoryAction::Check(args) => {
                 print_artifact_check(
                     artifact_check(&repo_root, Some("story"), args.path),
@@ -2048,45 +1902,6 @@ pub fn run(cli: Cli) -> Result<(), InterfaceError> {
                 println!("Intervention #{id} recorded.");
             }
         },
-        Command::Trace(args) => {
-            let story_id = args.story.clone();
-            let id = service.record_trace(TraceInput {
-                task_summary: args.summary,
-                intake_id: parse_optional_integer("trace: --intake", args.intake)?,
-                story_id: args.story,
-                agent: args.agent,
-                outcome: args.outcome,
-                duration_seconds: parse_optional_integer("trace: --duration", args.duration)?,
-                token_estimate: parse_optional_integer("trace: --tokens", args.tokens)?,
-                friction: args.friction,
-                notes: args.notes,
-                actions: CsvList::from_optional(args.actions),
-                files_read: CsvList::from_optional(args.files_read),
-                files_changed: CsvList::from_optional(args.files_changed),
-                decisions: CsvList::from_optional(args.decisions),
-                errors: CsvList::from_optional(args.errors),
-            })?;
-            println!("Trace #{id} recorded.");
-            let result = service.score_trace(Some(id))?;
-            print_trace_score(&result, false);
-            println!("Reminder: Record any human corrections with: harness-cli intervention add");
-            if let Some(story_id) = story_id {
-                print_story_verify_warning(&service, &story_id)?;
-            }
-        }
-        Command::ScoreTrace(args) => {
-            let id = parse_optional_integer("score-trace: --id", args.id)?;
-            let result = service.score_trace(id)?;
-            print_trace_score(&result, id.is_none());
-            if !result.meets_requirement {
-                std::process::exit(1);
-            }
-        }
-        Command::ScoreContext { trace_id } => {
-            let id = parse_optional_integer("score-context: trace-id", Some(trace_id))?
-                .expect("value provided");
-            print_context_score(&service.score_context(id)?);
-        }
         Command::Audit(args) => match args.action {
             Some(AuditAction::Disposition(args)) => match args.action {
                 AuditDispositionAction::Add(args) => {
@@ -2263,113 +2078,6 @@ fn context_entries_json(values: &[crate::infrastructure::WorkflowContextEntry]) 
             .collect::<Vec<_>>()
             .join(",")
     )
-}
-
-fn print_trace_score(result: &TraceScoreResult, latest: bool) {
-    if latest {
-        println!("Trace #{} (latest):", result.trace_id);
-    } else {
-        println!("Trace #{}:", result.trace_id);
-    }
-    println!(
-        "  Tier achieved: {} ({}/3)",
-        result.achieved.label(),
-        result.achieved.score()
-    );
-
-    match (&result.risk_lane, result.required) {
-        (Some(lane), Some(required)) => {
-            println!(
-                "  Lane: {} -> required tier: {} ({}/3)",
-                lane,
-                required.label(),
-                required.score()
-            );
-            if result.meets_requirement {
-                println!("  MEETS REQUIREMENT");
-            } else {
-                println!("  BELOW REQUIREMENT");
-            }
-        }
-        _ => {
-            println!("  Lane: unknown (no linked intake)");
-        }
-    }
-
-    print_missing_fields(
-        "minimal",
-        TraceQualityTier::Minimal,
-        &result.missing_minimal,
-    );
-    print_missing_fields(
-        "standard",
-        TraceQualityTier::Standard,
-        &result.missing_standard,
-    );
-    print_missing_fields(
-        "detailed",
-        TraceQualityTier::Detailed,
-        &result.missing_detailed,
-    );
-}
-
-fn print_story_verify_all(result: &StoryVerifyAllResult) {
-    for item in &result.items {
-        match item.result.as_str() {
-            "skipped" => println!("Story {}: skipped (no verify_command)", item.id),
-            status => {
-                println!("Story {}: {status}", item.id);
-                if !item.stdout.is_empty() {
-                    print!("{}", item.stdout);
-                }
-                if !item.stderr.is_empty() {
-                    print!("{}", item.stderr);
-                }
-            }
-        }
-    }
-    println!(
-        "{} stories verified: {} passed, {} failed, {} skipped (no verify_command)",
-        result.items.len(),
-        result.passed(),
-        result.failed(),
-        result.skipped()
-    );
-}
-
-fn print_context_score(result: &ContextScoreResult) {
-    println!(
-        "Trace #{} | Lane: {} | Phase: {}",
-        result.trace_id, result.lane, result.phase
-    );
-    println!();
-    let must_met = result.must.iter().filter(|item| item.met).count();
-    println!("Must-read compliance: {must_met}/{}", result.must.len());
-    for item in &result.must {
-        println!(
-            "  {} {} ({})",
-            if item.met { "OK" } else { "MISSING" },
-            item.label,
-            item.target
-        );
-    }
-    let should_met = result.should.iter().filter(|item| item.met).count();
-    println!(
-        "Should-read compliance: {should_met}/{}",
-        result.should.len()
-    );
-    for item in &result.should {
-        println!(
-            "  {} {} ({})",
-            if item.met { "OK" } else { "MISSING" },
-            item.label,
-            item.target
-        );
-    }
-    println!("Over-reading: {} item(s)", result.over_read.len());
-    for item in &result.over_read {
-        println!("  - {item}");
-    }
 }
 
 fn print_audit(result: &crate::domain::AuditResult) {
@@ -2556,41 +2264,6 @@ fn print_proposals(proposals: &[ImprovementProposal]) {
     );
 }
 
-fn print_story_verify_warning(
-    service: &HarnessService,
-    story_id: &str,
-) -> Result<(), InterfaceError> {
-    let status = service.story_verify_status(story_id)?;
-    let has_command = status
-        .verify_command
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    if has_command && status.last_verified_result.as_deref() != Some("pass") {
-        println!();
-        println!(
-            "Warning: Story {} has verify_command but verification has not passed.",
-            status.id
-        );
-        println!("Run: harness-cli story verify {}", status.id);
-    }
-    Ok(())
-}
-
-fn print_missing_fields(label: &str, tier: TraceQualityTier, fields: &[String]) {
-    if fields.is_empty() {
-        return;
-    }
-    println!();
-    println!("  Missing for {label}:");
-    for field in fields {
-        println!("    - {field}");
-    }
-    if tier == TraceQualityTier::Detailed {
-        println!();
-    }
-}
-
 fn backlog_filter(args: &BacklogQueryArgs) -> BacklogFilter {
     if args.open {
         BacklogFilter::Open
@@ -2599,23 +2272,6 @@ fn backlog_filter(args: &BacklogQueryArgs) -> BacklogFilter {
     } else {
         BacklogFilter::All
     }
-}
-
-fn print_brownfield_import_result(result: BrownfieldImportResult) {
-    println!("Brownfield import complete.");
-    println!("Stories imported or updated: {}", result.stories);
-    println!("Decisions imported or updated: {}", result.decisions);
-    println!("Backlog items discovered: {}", result.backlog_items);
-}
-
-fn parse_optional_bool(
-    label: &str,
-    value: Option<String>,
-) -> Result<Option<BoolFlag>, InterfaceError> {
-    value
-        .map(|inner| BoolFlag::parse(label, &inner))
-        .transpose()
-        .map_err(InterfaceError::from)
 }
 
 #[derive(Debug)]
@@ -3086,7 +2742,7 @@ fn task_status_contract_json(
     );
     let trace_commands = if qualifying_trace_ids.is_empty() {
         vec![format!(
-            "_harness/bin/harness-cli trace --summary '<SUMMARY>' --intake <INTAKE_ID> --story {} --agent {} --outcome completed --actions '<ACTIONS>' --read '<FILES>' --changed '<FILES>' --decisions '<DECISIONS>' --errors '<ERRORS>' --notes '<NOTES>'",
+            "_harness/bin/harness-cli task trace --summary '<SUMMARY>' --intake <INTAKE_ID> --story {} --agent {} --outcome completed --actions '<ACTIONS>' --read '<FILES>' --changed '<FILES>' --decisions '<DECISIONS>' --errors '<ERRORS>' --notes '<NOTES>'",
             task.story_id.as_deref().unwrap_or("<STORY>"), owner
         )]
     } else {
@@ -3316,36 +2972,6 @@ fn print_task_transition(task: &crate::application::TaskStatusRecord, json: bool
         );
     } else {
         println!("Task {} is now {}.", task.id, task.status);
-    }
-}
-
-fn print_init_result(result: InitResult) {
-    match result {
-        InitResult::Created { db_path } => {
-            println!("Creating harness database at {}", db_path.display());
-            println!("Schema applied.");
-        }
-        InitResult::Existing { db_path, version } => {
-            println!("Database already exists at {}", db_path.display());
-            println!("Current schema version: {version}");
-        }
-        InitResult::MigratedExisting { db_path } => {
-            println!("Database already exists at {}", db_path.display());
-            println!("No schema version found. Applying schema.");
-            println!("Schema applied.");
-        }
-    }
-}
-
-fn print_migrate_result(result: MigrateResult) {
-    println!("Current schema version: {}", result.current_version);
-    if result.applied.is_empty() {
-        println!("Already up to date.");
-    } else {
-        for version in &result.applied {
-            println!("Applying migration {version}...");
-        }
-        println!("Applied {} migration(s).", result.applied.len());
     }
 }
 
@@ -5039,26 +4665,13 @@ mod tests {
     }
 
     #[test]
-    fn story_help_documents_proof_command_shape() {
+    fn story_help_exposes_only_read_only_artifact_validation() {
         let mut command = Cli::command();
         let story = command.find_subcommand_mut("story").unwrap();
-
-        let update_help = story
-            .find_subcommand_mut("update")
-            .unwrap()
-            .render_long_help()
-            .to_string();
-        assert!(update_help.contains("--unit <0|1>"));
-        assert!(update_help.contains("--integration <0|1>"));
-        assert!(update_help.contains("Proof flags use numeric booleans"));
-
-        let verify_help = story
-            .find_subcommand_mut("verify")
-            .unwrap()
-            .render_long_help()
-            .to_string();
-        assert!(verify_help.contains("story verify only accepts the story id"));
-        assert!(verify_help.contains("Configure proof with story add/update --verify"));
+        assert!(story.find_subcommand_mut("check").is_some());
+        assert!(story.find_subcommand_mut("add").is_none());
+        assert!(story.find_subcommand_mut("update").is_none());
+        assert!(story.find_subcommand_mut("verify").is_none());
     }
 
     #[test]
@@ -5068,22 +4681,8 @@ mod tests {
         assert!(root_help.contains("Usage: _harness/bin/harness-cli <COMMAND>"));
         assert!(root_help.contains("--version"));
 
-        let intake_help = command
-            .find_subcommand_mut("intake")
-            .unwrap()
-            .render_long_help()
-            .to_string();
-        assert!(intake_help.contains("--lane <tiny|normal|high-risk>"));
-        assert!(intake_help.contains("Use tiny instead of low"));
-
-        let story_add_help = command
-            .find_subcommand_mut("story")
-            .unwrap()
-            .find_subcommand_mut("add")
-            .unwrap()
-            .render_long_help()
-            .to_string();
-        assert!(story_add_help.contains("--lane <tiny|normal|high-risk>"));
+        assert!(command.find_subcommand_mut("intake").is_none());
+        assert!(command.find_subcommand_mut("trace").is_none());
 
         let task_start_help = command
             .find_subcommand_mut("task")
@@ -5094,6 +4693,15 @@ mod tests {
             .to_string();
         assert!(task_start_help.contains("--session <SESSION>"));
         assert!(task_start_help.contains("--lease-seconds <LEASE_SECONDS>"));
+
+        let task_trace_help = command
+            .find_subcommand_mut("task")
+            .unwrap()
+            .find_subcommand_mut("trace")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(task_trace_help.contains("--intake <INTAKE>"));
 
         let task_handoff_help = command
             .find_subcommand_mut("task")

@@ -142,7 +142,7 @@ docs confusing
 ### Good Trace (Detailed)
 
 ```bash
-_harness/bin/harness-cli trace \
+_harness/bin/harness-cli task trace \
   --summary "Completed high-risk auth role migration with audit proof" \
   --intake 51 \
   --story US-014 \
@@ -162,7 +162,7 @@ _harness/bin/harness-cli trace \
 ### Adequate Trace (Standard)
 
 ```bash
-_harness/bin/harness-cli trace \
+_harness/bin/harness-cli task trace \
   --summary "Added trace specification and Harness reference" \
   --intake 36 \
   --story US-003 \
@@ -177,7 +177,7 @@ _harness/bin/harness-cli trace \
 ### Insufficient Trace
 
 ```bash
-_harness/bin/harness-cli trace \
+_harness/bin/harness-cli task trace \
   --summary "did phase 2" \
   --outcome completed
 ```
@@ -194,10 +194,8 @@ Why this is insufficient for normal-lane work:
 Before the final response, check:
 
 - The trace tier matches the lane.
-- Review the score printed automatically by
-  `_harness/bin/harness-cli trace`. Use
-  `_harness/bin/harness-cli score-trace --id N` when re-checking a
-  specific historical trace.
+- Confirm through `task finish` that the task trace meets its lane's closure
+  requirement.
 - `files_changed` matches the actual changed-file set at a useful level.
 - `errors` names real blockers or is `none` for Detailed traces when the current
   CLI is used.

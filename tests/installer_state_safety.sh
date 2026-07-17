@@ -65,7 +65,7 @@ cmp "$ROOT/AGENTS.md" "$WORK/installed-shared-agents.md"
 grep -v '^#' "$TARGET/_harness/command-manifest.txt" | sed '/^[[:space:]]*$/d' >"$WORK/tracked-commands.txt"
 cmp "$WORK/tracked-commands.txt" "$WORK/installed-commands.txt"
 
-# A completely fresh target can initialize its local state and start/status a
+# A completely fresh target can start/status a
 # tiny task without any pre-created docs/ directories. Product records remain
 # lazy-created by the workflow that needs them.
 FRESH_TARGET="$WORK/fresh-target"
@@ -73,10 +73,6 @@ mkdir -p "$FRESH_TARGET"
 git init -q "$FRESH_TARGET"
 run_install "$FRESH_TARGET" >"$WORK/fresh.log"
 FRESH_CLI="$FRESH_TARGET/_harness/bin/harness-cli"
-(
-  cd "$FRESH_TARGET"
-  ./_harness/bin/harness-cli init
-) >"$WORK/fresh-init.log"
 START_JSON="$(cd "$FRESH_TARGET" && ./_harness/bin/harness-cli task start --type 'maintenance request' \
   --summary 'installer fresh-target smoke' --lane tiny \
   --lane-reason 'installer smoke test' --owner smoke --session fresh-target \
